@@ -34,7 +34,7 @@ Examples:
 - If release impact is not `none`, describe the user-visible change in release-note language.
 - Include validation commands and package smoke results.
 - State known boundaries directly, especially peer dependency or `skipLibCheck` requirements.
-- Do not assume npm publication. Release-please can create version/changelog/tag/GitHub release artifacts; npm publish is separate unless a workflow explicitly performs it.
+- Do not assume npm publication. Release-please creates version/changelog/tag/GitHub release artifacts; npm publish is a separate local manual step.
 
 ## Package Publish Rehearsal
 
@@ -54,7 +54,9 @@ Run `bun run publish:npm:dry-run`. It performs the full publish rehearsal:
 10. Typecheck that consumer with `moduleResolution: NodeNext`.
 11. Run a Node ESM import smoke for every public export path.
 
-For the actual npm publish, run `bun run publish:npm`. The script runs the same checks and smoke first, then calls `npm publish --access public` for each package. npm will prompt for a one-time password when account or organization 2FA requires it.
+For the actual npm publish, run `bun run publish:npm` locally from an interactive terminal. The script runs the same checks and smoke first, then calls `npm publish --access public` for each package. npm will prompt for a one-time password when account or organization 2FA requires it.
+
+`publish.ts` is local-only. Do not run `bun run publish:npm` or `bun run publish:npm:dry-run` in GitHub Actions or any other CI job. CI owns verification and release metadata only; local npm publish owns the irreversible registry write.
 
 Publish and release scripts in this repo must use Effect for orchestration. Keep subprocesses, filesystem writes, temp cleanup, tarball checks, and publish steps as `Effect` values with typed failures. Use `Effect.gen` for sequencing, `Effect.forEach` / `Effect.all` for ordered or parallel work, and `Effect.ensuring` for cleanup. Keep `Effect.runPromise` only at the top-level process boundary.
 
@@ -72,6 +74,7 @@ Expected package export paths:
 - If `0.0.1` already exists, the next patch release is `0.0.2`.
 - Prefer letting release-please create version and changelog changes after merge.
 - Do not hand-bump versions unless the user explicitly chooses a manual release path.
+- Do not add npm tokens or trusted publishing to this repo unless the release policy changes explicitly.
 
 ## Safety
 

@@ -50,6 +50,8 @@ Runs the release publish pipeline:
   4. npm pack
   5. clean Bun consumer smoke against packed tarballs
   6. npm publish with interactive 2FA prompt unless --dry-run is set
+
+This script is for local manual release work only. Do not run it in CI.
 `);
   process.exit(0);
 }
@@ -169,6 +171,28 @@ function assertPublishMetadata(
     },
     catch: (cause) =>
       fail("validate package metadata", "Package metadata is not publishable.", cause),
+  });
+}
+
+function assertLocalPublishScript(): Effect.Effect<void, PublishFailure> {
+  return Effect.gen(function* () {
+    if (process.env.CI !== undefined || process.env.GITHUB_ACTIONS !== undefined) {
+      return yield* Effect.fail(
+        fail(
+          "validate publish environment",
+          "publish.ts is local-only. Use CI for verification and release metadata, then publish manually from a local terminal."
+        )
+      );
+    }
+
+    if (!dryRun && process.stdin.isTTY !== true) {
+      return yield* Effect.fail(
+        fail(
+          "validate publish environment",
+          "npm publish requires an interactive terminal so npm can prompt for 2FA. Run bun run publish:npm locally from a TTY."
+        )
+      );
+    }
   });
 }
 
@@ -589,6 +613,8 @@ function publishToNpm(context: PublishContext): Effect.Effect<void, PublishFailu
 }
 
 const program = Effect.gen(function* () {
+  yield* assertLocalPublishScript();
+
   const context = yield* loadPublishContext();
 
   yield* workspaceChecks();

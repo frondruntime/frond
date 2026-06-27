@@ -47,8 +47,10 @@ This repository uses release-please-style release automation. Release notes and 
 - Prefer scopes when useful: `core`, `react`, `build`, `ci`, `docs`, `release`.
 - Make PR titles merge-ready Conventional Commit titles.
 - Put release-note context in the PR body when the change should appear in a GitHub release.
-- Release-please creates version/changelog/tag/GitHub-release artifacts; npm publication remains a separate explicit step unless a workflow says otherwise.
-- Before publishing, run a tarball smoke: build, pack, install the `.tgz` files in a clean Bun consumer, typecheck with NodeNext, and run an ESM import smoke.
+- Release-please creates version/changelog/tag/GitHub-release artifacts; npm publication remains a separate local manual step.
+- Never wire npm publish into CI without an explicit release-policy change. Do not add npm tokens or trusted publishing by default.
+- Before publishing, run `bun run publish:npm:dry-run` locally. It builds, packs, installs the `.tgz` files in a clean Bun consumer, typechecks with NodeNext, and runs an ESM import smoke.
+- Publish with `bun run publish:npm` locally from an interactive terminal so npm can prompt for 2FA.
 
 </release-flow>
 
