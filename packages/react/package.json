@@ -1,0 +1,78 @@
+{
+  "name": "@frondruntime/react",
+  "version": "0.0.1",
+  "description": "React adapter for the Effect-powered Frond runtime.",
+  "license": "MIT",
+  "private": false,
+  "type": "module",
+  "sideEffects": false,
+  "homepage": "https://frondruntime.dev",
+  "bugs": {
+    "url": "https://github.com/frondruntime/frond/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/frondruntime/frond.git",
+    "directory": "packages/react"
+  },
+  "keywords": [
+    "effect",
+    "frond",
+    "react",
+    "runtime",
+    "typescript"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "source": "./src/testing/index.ts",
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js",
+      "default": "./dist/testing/index.js"
+    }
+  },
+  "files": [
+    "CHANGELOG.md",
+    "dist",
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0",
+    "bun": ">=1"
+  },
+  "scripts": {
+    "build": "bun ./build.config.ts && tsc -p tsconfig.build.json",
+    "build:js": "bun ./build.config.ts",
+    "build:types": "tsc -p tsconfig.build.json",
+    "prepack": "bun run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun --conditions=source test"
+  },
+  "peerDependencies": {
+    "@frondruntime/core": "0.0.1",
+    "react": ">=18",
+    "effect": "^4.0.0-0",
+    "mobx": ">=6 <7",
+    "mobx-react-lite": ">=4 <5"
+  },
+  "devDependencies": {
+    "@frondruntime/core": "workspace:*",
+    "effect": "4.0.0-beta.50",
+    "@testing-library/react": "16.3.2",
+    "global-jsdom": "29.0.0"
+  },
+  "author": {
+    "name": "Roman Dubinin",
+    "url": "https://romanonthego.dev"
+  }
+}

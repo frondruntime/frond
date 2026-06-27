@@ -1,0 +1,6 @@
+engine biome(1.0)
+language js
+
+`new Promise($args)` as $m where {
+  register_diagnostic(span=$m, message="Frond runtime core: do not construct raw Promises in core runtime code. Use Effect.async, Deferred, Queue, or Effect.tryPromise at boundary adapters.", severity="error")
+}

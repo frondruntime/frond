@@ -1,0 +1,124 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.4.8/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "ignoreUnknown": false,
+    "includes": ["**", "!bun.lock", "!*.lock", "!node_modules", "!**/dist"]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100,
+    "lineEnding": "lf"
+  },
+  "assist": {
+    "enabled": true,
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "correctness": {
+        "noUndeclaredDependencies": "error"
+      },
+      "nursery": {
+        "noFloatingPromises": "error"
+      },
+      "style": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "patterns": [
+              {
+                "group": ["@frondruntime/*/src/**"],
+                "message": "Do not import package-private source paths. Use the package export surface."
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["packages/core/src/**/*.ts", "packages/core/src/**/*.tsx"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@frondruntime/react": "Runtime code must not import adapter packages.",
+                  "@frondruntime/react/testing": "Runtime code must not import adapter packages.",
+                  "mobx-react-lite": "Runtime code must not import React adapter packages.",
+                  "react": "Runtime code must not import React.",
+                  "react-dom": "Runtime code must not import React."
+                },
+                "patterns": [
+                  {
+                    "group": ["@frondruntime/react/**"],
+                    "message": "Runtime code must not import adapter packages."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "packages/**/*.ts",
+        "packages/**/*.tsx",
+        "!packages/**/test/**",
+        "!packages/**/*.test.ts",
+        "!packages/**/*.test.tsx",
+        "!packages/core/src/runtime/**",
+        "!packages/core/src/testing/**"
+      ],
+      "plugins": ["./.biome/plugins/no-raw-runtime-command-objects.grit"]
+    },
+    {
+      "includes": [
+        "packages/core/src/**/*.ts",
+        "packages/core/src/**/*.tsx",
+        "!packages/core/src/testing/**"
+      ],
+      "plugins": ["./.biome/plugins/no-new-promise-in-runtime-core.grit"]
+    }
+  ],
+  "plugins": [
+    "./.biome/plugins/no-effect-v3-catchall.grit",
+    "./.biome/plugins/no-effect-v3-catchall-defect.grit",
+    "./.biome/plugins/no-effect-v3-cause-interrupted.grit",
+    "./.biome/plugins/no-effect-v3-fork.grit",
+    "./.biome/plugins/no-effect-v3-gen-adapter.grit",
+    "./.biome/plugins/no-effect-v3-schema-import.grit",
+    "./.biome/plugins/no-effect-v3-schema-tagged-error.grit",
+    "./.biome/plugins/no-effect-v3-service-map.grit",
+    "./.biome/plugins/no-effect-v3-service-map-import.grit",
+    "./.biome/plugins/no-conditional-object-spread.grit",
+    "./.biome/plugins/no-runtime-readiness-private-calls.grit",
+    "./.biome/plugins/no-null-return-in-effect-gen.grit",
+    "./.biome/plugins/no-raw-clock-in-effect-driver.grit",
+    "./.biome/plugins/no-raw-timers-in-driver-live-resource.grit"
+  ],
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "es5"
+    }
+  }
+}

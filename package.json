@@ -1,0 +1,33 @@
+{
+  "name": "@frondruntime/monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.3.0",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "bun run --filter \"*\" build",
+    "typecheck": "bunx tsc -p packages/core/tsconfig.json --noEmit && bunx tsc -p packages/core/tsconfig.tests.json --noEmit && bunx tsc -p packages/core/tsconfig.type-contracts.json --noEmit && bunx tsc -p packages/react/tsconfig.json --noEmit && bunx tsc -p packages/react/tsconfig.tests.json --noEmit && bunx tsc -p packages/react/tsconfig.type-contracts.json --noEmit",
+    "effect:diagnostics": "bunx effect-language-service diagnostics --project packages/core/tsconfig.json",
+    "effect:ls:check": "bunx effect-language-service check",
+    "effect:ls:patch": "bunx effect-language-service patch",
+    "test": "bun --conditions=source test packages/core/test packages/react/test",
+    "format": "bunx biome format . --write",
+    "lint": "bunx biome check ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.8",
+    "@effect/language-service": "0.80.0",
+    "@testing-library/react": "16.3.2",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "global-jsdom": "29.0.0",
+    "jsdom": "29.1.1",
+    "mobx-react-lite": "4.1.1",
+    "react": "19.2.5",
+    "react-dom": "19.2.5",
+    "typescript": "6.0.3"
+  }
+}

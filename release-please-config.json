@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "node",
+  "initial-version": "0.0.1",
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": true,
+  "packages": {
+    "packages/core": {
+      "package-name": "@frondruntime/core",
+      "component": "core",
+      "release-type": "node"
+    },
+    "packages/react": {
+      "package-name": "@frondruntime/react",
+      "component": "react",
+      "release-type": "node"
+    }
+  },
+  "plugins": [
+    {
+      "type": "node-workspace",
+      "updatePeerDependencies": true
+    },
+    {
+      "type": "linked-versions",
+      "groupName": "frondruntime",
+      "components": ["core", "react"]
+    }
+  ]
+}

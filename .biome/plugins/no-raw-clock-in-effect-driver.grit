@@ -1,0 +1,14 @@
+engine biome(1.0)
+language js
+
+or {
+  `Frond.effectDriver($spec)`,
+  `effectDriver($spec)`
+} as $driver where {
+  $driver <: contains or {
+    `Date.now()`,
+    `new Date($args)`
+  } as $m where {
+    register_diagnostic(span=$m, message="Frond Effect driver: do not read wall-clock time directly inside Effect driver hooks. Use Clock.currentTimeMillis or an injected Effect clock so time is testable and interruption-aware.", severity="error")
+  }
+}

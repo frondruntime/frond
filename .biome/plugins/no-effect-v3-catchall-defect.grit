@@ -1,0 +1,6 @@
+engine biome(1.0)
+language js
+
+`Effect.catchAllDefect($args)` as $m where {
+  register_diagnostic(span=$m, message="Effect v4: Effect.catchAllDefect was renamed to Effect.catchDefect. Load skill: effect-v4.", severity="error")
+}

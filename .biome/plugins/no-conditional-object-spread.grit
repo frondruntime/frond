@@ -1,0 +1,6 @@
+engine biome(1.0)
+language js
+
+`...($condition ? { $body } : {})` as $m where {
+  register_diagnostic(span=$m, message="Frond object modeling: do not build domain objects with conditional object spreads. Normalize to a named value or return an explicit object variant.", severity="error")
+}

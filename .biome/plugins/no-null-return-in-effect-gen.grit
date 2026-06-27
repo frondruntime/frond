@@ -1,0 +1,8 @@
+engine biome(1.0)
+language js
+
+`Effect.gen($fn)` as $outer where {
+  $fn <: contains `return null` as $m where {
+    register_diagnostic(span=$m, message="Frond Effect modeling: avoid returning null from Effect.gen. Use Option.none, a tagged union, or Effect.fail depending on whether absence is data or failure.", severity="warning")
+  }
+}

@@ -1,0 +1,9 @@
+engine biome(1.0)
+language js
+
+or {
+  `ServiceMap.Service`,
+  `ServiceMap.Tag`
+} as $m where {
+  register_diagnostic(span=$m, message="Effect v4: ServiceMap was removed. Use Context.Service (class-style: `class Foo extends Context.Service<Foo, Shape>()(\"Foo\") {}`) from `effect`. Load skill: effect-services-layers.", severity="error")
+}

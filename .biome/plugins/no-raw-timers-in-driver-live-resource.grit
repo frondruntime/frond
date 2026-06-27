@@ -1,0 +1,20 @@
+engine biome(1.0)
+language js
+
+or {
+  `Frond.effectDriver($spec)`,
+  `effectDriver($spec)`,
+  `Frond.asyncDriver($spec)`,
+  `asyncDriver($spec)`,
+  `Frond.liveResource($spec)`,
+  `liveResource($spec)`
+} as $driver where {
+  $driver <: contains or {
+    `setTimeout($args)`,
+    `setInterval($args)`,
+    `window.setTimeout($args)`,
+    `window.setInterval($args)`
+  } as $m where {
+    register_diagnostic(span=$m, message="Frond driver lifecycle: do not allocate raw timers inside drivers or live resources. Use Effect.sleep/fibers or cancellation-aware host APIs tied to the live resource lifecycle.", severity="error")
+  }
+}

@@ -1,0 +1,18 @@
+engine biome(1.0)
+language js
+
+or {
+  `$runtime.submit({ _tag: "GraphEnsureNode", $fields })`,
+  `$runtime.submit({ _tag: "GraphEnsureReadyNode", $fields })`,
+  `$runtime.submit({ _tag: "GraphRunAction", $fields })`,
+  `$runtime.submit({ _tag: "GraphRefreshNode", $fields })`,
+  `$runtime.submit({ _tag: "GraphUpdateNodeArgs", $fields })`,
+  `$runtime.submit({ _tag: "GraphUnsafeUpdateNode", $fields })`,
+  `$runtime.submit({ _tag: "GraphReleaseNode", $fields })`,
+  `$runtime.submit({ _tag: "GraphEvictSubgraph", $fields })`,
+  `$runtime.submit({ _tag: "GraphAcquireNodeLiveLease", $fields })`,
+  `$runtime.submit({ _tag: "GraphReleaseNodeLiveLease", $fields })`,
+  `$runtime.control({ _tag: "SetInputIngestion", $fields })`
+} as $m where {
+  register_diagnostic(span=$m, message="Frond runtime boundary: do not submit raw graph/control command objects from product code. Use RuntimeClient node handles, devtools probes, or runtime-owned command builders.", severity="error")
+}

@@ -1,0 +1,9 @@
+engine biome(1.0)
+language js
+
+or {
+  `_hydrateRuntime($args)`,
+  `_clearRuntimeReadiness($args)`
+} as $m where {
+  register_diagnostic(span=$m, message="Frond runtime ownership: runtime hydration/readiness is graph-owned lifecycle work. Do not call private readiness hooks from adapters, tests, or driver bridges.", severity="error")
+}

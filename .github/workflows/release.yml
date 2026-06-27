@@ -1,0 +1,71 @@
+name: Release Metadata
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      - name: Read release PR branch
+        id: release-pr
+        if: ${{ steps.release.outputs.prs_created == 'true' }}
+        env:
+          RELEASE_PLEASE_PRS: ${{ steps.release.outputs.prs }}
+        run: |
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const prs = JSON.parse(process.env.RELEASE_PLEASE_PRS || "[]");
+          if (prs.length !== 1) {
+            throw new Error(`Expected one release PR, received ${prs.length}`);
+          }
+          console.log(`head_branch=${prs[0].headBranchName}`);
+          NODE
+
+      - name: Checkout release PR branch
+        if: ${{ steps.release.outputs.prs_created == 'true' }}
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.release-pr.outputs.head_branch }}
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+
+      - name: Setup Bun
+        if: ${{ steps.release.outputs.prs_created == 'true' }}
+        uses: oven-sh/setup-bun@v2
+
+      - name: Update Bun lockfile
+        if: ${{ steps.release.outputs.prs_created == 'true' }}
+        run: bun install
+
+      - name: Commit Bun lockfile update
+        if: ${{ steps.release.outputs.prs_created == 'true' }}
+        run: |
+          if git diff --quiet -- bun.lock; then
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bun.lock
+          git commit -m "chore: update Bun lockfile for release"
+          git push origin HEAD:${{ steps.release-pr.outputs.head_branch }}

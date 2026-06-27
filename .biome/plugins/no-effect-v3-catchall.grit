@@ -1,0 +1,6 @@
+engine biome(1.0)
+language js
+
+`Effect.catchAll($args)` as $m where {
+  register_diagnostic(span=$m, message="Effect v4: Effect.catchAll was renamed to Effect.catch. Use Effect.catch for all typed errors, Effect.catchTag/Effect.catchTags for specific tags, or Effect.catchCause for cause-level handling. Load skill: effect-v4.", severity="error")
+}

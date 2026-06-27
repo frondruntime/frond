@@ -1,0 +1,6 @@
+engine biome(1.0)
+language js
+
+`Effect.fork($args)` as $m where {
+  register_diagnostic(span=$m, message="Effect v4: Effect.fork was removed. Use Effect.forkDetach (detached), Effect.forkChild (supervised), or Effect.forkScoped (tied to Scope). Load skill: effect-concurrency-lifecycle.", severity="error")
+}
