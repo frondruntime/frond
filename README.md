@@ -1,5 +1,10 @@
 # Frond
 
+[![CI](https://github.com/frondruntime/frond/actions/workflows/ci.yml/badge.svg)](https://github.com/frondruntime/frond/actions/workflows/ci.yml)
+[![core npm](https://badgen.net/npm/v/@frondruntime/core)](https://www.npmjs.com/package/@frondruntime/core)
+[![react npm](https://badgen.net/npm/v/@frondruntime/react)](https://www.npmjs.com/package/@frondruntime/react)
+[![license](https://badgen.net/npm/license/@frondruntime/core)](./LICENSE)
+
 Effect-powered frontend runtime for React and MobX-facing application state.
 
 Frond gives frontend code an explicit runtime graph: keyed node identity, dependency readiness, serialized operations, cancellation, cleanup, eviction, diagnostics, and React Suspense integration.
