@@ -8,7 +8,9 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "bun run --filter \"*\" build",
+    "build": "bun build.ts",
+    "publish:npm": "bun publish.ts",
+    "publish:npm:dry-run": "bun publish.ts --dry-run",
     "typecheck": "bunx tsc -p packages/core/tsconfig.json --noEmit && bunx tsc -p packages/core/tsconfig.tests.json --noEmit && bunx tsc -p packages/core/tsconfig.type-contracts.json --noEmit && bunx tsc -p packages/react/tsconfig.json --noEmit && bunx tsc -p packages/react/tsconfig.tests.json --noEmit && bunx tsc -p packages/react/tsconfig.type-contracts.json --noEmit",
     "effect:diagnostics": "bunx effect-language-service diagnostics --project packages/core/tsconfig.json",
     "effect:ls:check": "bunx effect-language-service check",
@@ -20,9 +22,11 @@
   "devDependencies": {
     "@biomejs/biome": "2.4.8",
     "@effect/language-service": "0.80.0",
+    "@microsoft/api-extractor": "7.58.9",
     "@testing-library/react": "16.3.2",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
+    "effect": "4.0.0-beta.90",
     "global-jsdom": "29.0.0",
     "jsdom": "29.1.1",
     "mobx-react-lite": "4.1.1",

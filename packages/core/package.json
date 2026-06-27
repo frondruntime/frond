@@ -51,9 +51,7 @@
     "bun": ">=1"
   },
   "scripts": {
-    "build": "bun ./build.config.ts && tsc -p tsconfig.build.json",
-    "build:js": "bun ./build.config.ts",
-    "build:types": "tsc -p tsconfig.build.json",
+    "build": "bun ../../build.ts core",
     "prepack": "bun run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bun --conditions=source test"

@@ -56,6 +56,7 @@ Use this skill for Bun runtime and workspace operations.
   - `bun:sqlite` for SQLite.
 - Normalize Bun API failures at the boundary; do not leak raw foreign errors through domain code.
 - Keep browser-safe packages free of Bun-only APIs.
+- For repo-internal Bun scripts, use Effect for orchestration when the script performs more than trivial IO. This repo is Effect-native and has Effect installed at the root; compose subprocesses, filesystem operations, temp cleanup, and validation as `Effect` values, not raw top-level `await` chains.
 
 ## Verification
 

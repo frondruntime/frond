@@ -34,6 +34,24 @@
 
 </workflow>
 
+<release-flow>
+
+## Release Flow
+
+This repository uses release-please-style release automation. Release notes and version bumps are inferred from Conventional Commit messages in merged history, usually the squash merge title.
+
+- Use `fix:` for patch releases.
+- Use `feat:` for minor releases.
+- Use `type!:` or a `BREAKING CHANGE:` footer for major releases.
+- Use `docs:`, `test:`, `chore:`, `refactor:`, `build:`, or `ci:` only when no package release should be produced.
+- Prefer scopes when useful: `core`, `react`, `build`, `ci`, `docs`, `release`.
+- Make PR titles merge-ready Conventional Commit titles.
+- Put release-note context in the PR body when the change should appear in a GitHub release.
+- Release-please creates version/changelog/tag/GitHub-release artifacts; npm publication remains a separate explicit step unless a workflow says otherwise.
+- Before publishing, run a tarball smoke: build, pack, install the `.tgz` files in a clean Bun consumer, typecheck with NodeNext, and run an ESM import smoke.
+
+</release-flow>
+
 <commands>
 
 ## Commands
@@ -115,6 +133,7 @@ Likely skills:
 - biome-tooling
 - biome-grit-rules
 - monorepo-maintenance
+- release-flow
 - code-review
 - agent-self-check
 
