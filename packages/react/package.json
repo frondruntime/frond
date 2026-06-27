@@ -51,9 +51,7 @@
     "bun": ">=1"
   },
   "scripts": {
-    "build": "bun ./build.config.ts && tsc -p tsconfig.build.json",
-    "build:js": "bun ./build.config.ts",
-    "build:types": "tsc -p tsconfig.build.json",
+    "build": "bun ../../build.ts core react",
     "prepack": "bun run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bun --conditions=source test"
@@ -67,8 +65,8 @@
   },
   "devDependencies": {
     "@frondruntime/core": "workspace:*",
-    "effect": "4.0.0-beta.90",
     "@testing-library/react": "16.3.2",
+    "effect": "4.0.0-beta.90",
     "global-jsdom": "29.0.0"
   },
   "author": {
