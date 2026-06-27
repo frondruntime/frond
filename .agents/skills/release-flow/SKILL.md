@@ -40,15 +40,23 @@ Examples:
 
 Before a public npm publish or release PR merge that changes package output:
 
-1. Run `bun run build`.
+Run `bun run publish:npm:dry-run`. It performs the full publish rehearsal:
+
+1. Run `bun install --frozen-lockfile`.
 2. Run `bun run lint`.
 3. Run `bun run typecheck`.
-4. Run relevant tests, usually `bun run test` for package-output changes.
-5. Run `npm publish --dry-run --access public` from each publishable package.
-6. Run `npm pack` for each package into a temporary directory.
-7. Create a clean temporary Bun consumer that installs the packed `.tgz` files using `file:` dependencies.
-8. Typecheck that consumer with `moduleResolution: NodeNext`.
-9. Run a Node ESM import smoke for every public export path.
+4. Run `bun run effect:diagnostics`.
+5. Run `bun run test`.
+6. Run `bun run build`.
+7. Check whether each exact package version already exists on npm. If it does and this is only a rehearsal, skip `npm publish --dry-run` for that already-published version and continue to tarball smoke. If the version does not exist, run `npm publish --dry-run --access public`.
+8. Run `npm pack` for each package into a temporary directory.
+9. Create a clean temporary Bun consumer that installs the packed `.tgz` files using `file:` dependencies.
+10. Typecheck that consumer with `moduleResolution: NodeNext`.
+11. Run a Node ESM import smoke for every public export path.
+
+For the actual npm publish, run `bun run publish:npm`. The script runs the same checks and smoke first, then calls `npm publish --access public` for each package. npm will prompt for a one-time password when account or organization 2FA requires it.
+
+Publish and release scripts in this repo must use Effect for orchestration. Keep subprocesses, filesystem writes, temp cleanup, tarball checks, and publish steps as `Effect` values with typed failures. Use `Effect.gen` for sequencing, `Effect.forEach` / `Effect.all` for ordered or parallel work, and `Effect.ensuring` for cleanup. Keep `Effect.runPromise` only at the top-level process boundary.
 
 Expected package export paths:
 
@@ -60,6 +68,7 @@ Expected package export paths:
 ## Versioning
 
 - Do not republish an existing npm version. npm rejects it and package versions are immutable.
+- `npm publish --dry-run` still consults the registry and fails for an already-published exact version. That is expected after a version has shipped; use the tarball smoke result as the rehearsal signal until release-please bumps the next version.
 - If `0.0.1` already exists, the next patch release is `0.0.2`.
 - Prefer letting release-please create version and changelog changes after merge.
 - Do not hand-bump versions unless the user explicitly chooses a manual release path.

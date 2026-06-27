@@ -9,6 +9,8 @@
   ],
   "scripts": {
     "build": "bun build.ts",
+    "publish:npm": "bun publish.ts",
+    "publish:npm:dry-run": "bun publish.ts --dry-run",
     "typecheck": "bunx tsc -p packages/core/tsconfig.json --noEmit && bunx tsc -p packages/core/tsconfig.tests.json --noEmit && bunx tsc -p packages/core/tsconfig.type-contracts.json --noEmit && bunx tsc -p packages/react/tsconfig.json --noEmit && bunx tsc -p packages/react/tsconfig.tests.json --noEmit && bunx tsc -p packages/react/tsconfig.type-contracts.json --noEmit",
     "effect:diagnostics": "bunx effect-language-service diagnostics --project packages/core/tsconfig.json",
     "effect:ls:check": "bunx effect-language-service check",
