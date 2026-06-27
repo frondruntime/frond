@@ -67,7 +67,7 @@
   },
   "devDependencies": {
     "@frondruntime/core": "workspace:*",
-    "effect": "4.0.0-beta.50",
+    "effect": "4.0.0-beta.90",
     "@testing-library/react": "16.3.2",
     "global-jsdom": "29.0.0"
   },
