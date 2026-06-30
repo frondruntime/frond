@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.3](https://github.com/frondruntime/frond/compare/core-v0.0.2...core-v0.0.3) (2026-06-30)
+
+
+### Bug Fixes
+
+* emit production JSX for published React dist ([#6](https://github.com/frondruntime/frond/issues/6)) ([af62ac4](https://github.com/frondruntime/frond/commit/af62ac4857c22231b4603765ad16a3535d484f51))
+
 ## [0.0.2](https://github.com/frondruntime/frond/compare/core-v0.0.1...core-v0.0.2) (2026-06-27)
 
 

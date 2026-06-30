@@ -1,6 +1,6 @@
 {
   "name": "@frondruntime/react",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "React adapter for the Effect-powered Frond runtime.",
   "license": "MIT",
   "private": false,
@@ -57,7 +57,7 @@
     "test": "bun --conditions=source test"
   },
   "peerDependencies": {
-    "@frondruntime/core": "0.0.2",
+    "@frondruntime/core": "0.0.3",
     "react": ">=18",
     "effect": "^4.0.0-0",
     "mobx": ">=6 <7",

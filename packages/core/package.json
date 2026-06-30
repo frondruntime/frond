@@ -1,6 +1,6 @@
 {
   "name": "@frondruntime/core",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Effect-powered Frond runtime core with MobX-facing node state.",
   "license": "MIT",
   "private": false,

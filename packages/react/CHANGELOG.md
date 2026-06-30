@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.0.3](https://github.com/frondruntime/frond/compare/react-v0.0.2...react-v0.0.3) (2026-06-30)
+
+
+### Bug Fixes
+
+* emit production JSX for published React dist ([#6](https://github.com/frondruntime/frond/issues/6)) ([af62ac4](https://github.com/frondruntime/frond/commit/af62ac4857c22231b4603765ad16a3535d484f51))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @frondruntime/core bumped to 0.0.3
+  * peerDependencies
+    * @frondruntime/core bumped from 0.0.2 to 0.0.3
+
 ## [0.0.2](https://github.com/frondruntime/frond/compare/react-v0.0.1...react-v0.0.2) (2026-06-27)
 
 
