@@ -136,6 +136,9 @@ function buildJavaScript(input: PackageBuildInput): Effect.Effect<void, BuildFai
     const result = yield* Effect.tryPromise({
       try: () =>
         Bun.build({
+          // Published dist must emit production JSX (jsx, not jsxDEV), so production
+          // consumers do not crash on the missing dev runtime.
+          define: { "process.env.NODE_ENV": JSON.stringify("production") },
           entrypoints: input.entrypoints.map((entrypoint) => join(input.packageDir, entrypoint)),
           format: "esm",
           keepNames: input.keepNames,
