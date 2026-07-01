@@ -93,3 +93,13 @@ bun run lint
 ## Status
 
 Pre-1.0. APIs may change while the runtime model is hardened.
+
+## AI use
+
+Frond is AI-assisted.
+
+- Library code: most of it written with coding agents (mainly Claude and Codex). Not a single one-shot prompt - loops of iterative design and review. The architecture and decisions are human-driven (for better or worse).
+- Website: mostly written with Claude help. Design and style are hand-made.
+- Docs: AI-assisted, human-reviewed.
+
+Not one-shot generation. The source and tests are here to judge directly. More detail: https://frondruntime.dev/ai-use
