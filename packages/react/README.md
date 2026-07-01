@@ -64,3 +64,7 @@ The testing subpath exports `TestFrondProvider` for React tests that need an iso
 - React provider: https://frondruntime.dev/docs/react/provider
 - useNode: https://frondruntime.dev/docs/react/use-node
 - Suspense and errors: https://frondruntime.dev/docs/react/suspense-and-errors
+
+## AI use
+
+Frond is AI-assisted (mainly Claude and Codex), iterated over months rather than one-shot generated. Full note: https://frondruntime.dev/ai-use

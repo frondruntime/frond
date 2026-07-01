@@ -1,0 +1,66 @@
+{
+  "name": "@frondruntime/rootstock",
+  "version": "0.0.0",
+  "description": "Experimental Effect-first backend contract companion for Frond.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "homepage": "https://frondruntime.dev",
+  "bugs": {
+    "url": "https://github.com/frondruntime/frond/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/frondruntime/frond.git",
+    "directory": "packages/rootstock"
+  },
+  "keywords": [
+    "effect",
+    "frond",
+    "rootstock",
+    "runtime",
+    "typescript"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "source": "./src/testing/index.ts",
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js",
+      "default": "./dist/testing/index.js"
+    }
+  },
+  "files": [
+    "CHANGELOG.md",
+    "dist",
+    "src"
+  ],
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0",
+    "bun": ">=1"
+  },
+  "scripts": {
+    "build": "bun ../../build.ts rootstock",
+    "prepack": "bun run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun --conditions=source test"
+  },
+  "peerDependencies": {
+    "effect": "^4.0.0-0"
+  },
+  "devDependencies": {
+    "effect": "4.0.0-beta.90"
+  },
+  "author": {
+    "name": "Roman Dubinin",
+    "url": "https://romanonthego.dev"
+  }
+}

@@ -74,3 +74,7 @@ The testing subpath includes runtime harnesses, deferred drivers, and spec helpe
 Release notes for this package are generated from Conventional Commits.
 Squash-merged PR titles provide the release-note subject for this package.
 Release smoke tests verify GitHub release metadata before npm publishing.
+
+## AI use
+
+Frond is AI-assisted (mainly Claude and Codex), iterated over months rather than one-shot generated. Full note: https://frondruntime.dev/ai-use
