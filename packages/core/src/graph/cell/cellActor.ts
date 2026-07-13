@@ -2,8 +2,14 @@ import { Deferred, Effect, Exit, Fiber, Ref, Scope, Semaphore } from "effect";
 import type { RuntimeCancellationReason } from "../../cancellation";
 
 export interface GraphCellActor {
-  readonly submit: <A>(operation: GraphCellOperation<A>) => Effect.Effect<GraphCellTask<A>>;
+  readonly submit: <A>(
+    operation: GraphCellOperation<A>,
+    options?: GraphCellSubmitOptions | undefined
+  ) => Effect.Effect<GraphCellTask<A>>;
   readonly run: <A>(operation: GraphCellOperation<A>) => Effect.Effect<A>;
+  readonly close: (reason?: RuntimeCancellationReason | undefined) => Effect.Effect<void>;
+  readonly runExclusive: <A>(effect: Effect.Effect<A>) => Effect.Effect<A>;
+  readonly runExclusiveFork: <A>(effect: Effect.Effect<A>) => Effect.Effect<Fiber.Fiber<A>>;
   readonly shutdown: <A>(options?: {
     readonly reason?: RuntimeCancellationReason | undefined;
     readonly cleanup?: Effect.Effect<A> | undefined;
@@ -22,88 +28,141 @@ export interface GraphCellOperation<A> {
   ) => Effect.Effect<void>;
 }
 
-interface ActiveGraphCellOperation {
-  readonly fiber: Fiber.Fiber<void>;
-  readonly interrupt: (reason?: RuntimeCancellationReason | undefined) => Effect.Effect<void>;
+export interface GraphCellSubmitOptions {
+  /**
+   * Runs synchronously when this submission claims its reply, before awaiters are resumed.
+   * It is intentionally not an Effect: admission cleanup must not park the cell permit.
+   */
+  readonly onComplete?: (() => void) | undefined;
+}
+
+interface AcceptedGraphCellSubmission {
+  readonly settled: Ref.Ref<boolean>;
+  fiber: Fiber.Fiber<void> | undefined;
+  readonly interruptOnce: (
+    reason?: RuntimeCancellationReason | undefined,
+    interruptFiber?: boolean | undefined
+  ) => Effect.Effect<void>;
 }
 
 export function makeGraphCellActor(): Effect.Effect<GraphCellActor> {
   return Effect.gen(function* () {
     const semaphore = Semaphore.makeUnsafe(1);
     const scope = yield* Scope.make("sequential");
-    const activeOperation = yield* Ref.make<ActiveGraphCellOperation | undefined>(undefined);
     const closed = yield* Ref.make(false);
+    const submissions = new Set<AcceptedGraphCellSubmission>();
 
-    const submit = <A>(operation: GraphCellOperation<A>): Effect.Effect<GraphCellTask<A>> =>
+    const submit = <A>(
+      operation: GraphCellOperation<A>,
+      options?: GraphCellSubmitOptions | undefined
+    ): Effect.Effect<GraphCellTask<A>> =>
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          const reply = yield* Deferred.make<A>();
+          const settled = yield* Ref.make(false);
+          const onComplete = Effect.sync(() => {
+            options?.onComplete?.();
+          }).pipe(Effect.catchCause(() => Effect.void));
+
+          const submission: AcceptedGraphCellSubmission = {
+            settled,
+            fiber: undefined,
+            interruptOnce: (reason, interruptFiber = true) =>
+              claimReply(settled).pipe(
+                Effect.flatMap((alreadySettled) =>
+                  alreadySettled
+                    ? Effect.void
+                    : operation.interrupt(reply, reason).pipe(
+                        Effect.flatMap(() => onComplete),
+                        Effect.flatMap(() =>
+                          interruptFiber && submission.fiber !== undefined
+                            ? Fiber.interrupt(submission.fiber)
+                            : Effect.void
+                        ),
+                        Effect.asVoid
+                      )
+                )
+              ),
+          };
+          submissions.add(submission);
+
+          // Contract: each graph cell serializes driver work, lifecycle mutation,
+          // and interruption handling. Callers may enqueue, but only one operation
+          // may own the ready state at a time.
+          const workerEffect = Semaphore.withPermit(
+            semaphore,
+            Effect.gen(function* () {
+              // Hazard: close can interrupt an accepted submission while this
+              // worker waits for the permit. `settled`/`interruptOnce` are the
+              // single reply latch; after the permit is held there is no
+              // suspension point between this closed check and operation start.
+              if (yield* Ref.get(closed)) {
+                yield* submission.interruptOnce(
+                  {
+                    _tag: "Released",
+                    detail: "graph cell is closed",
+                  },
+                  false
+                );
+                return;
+              }
+
+              yield* completeReply(reply, operation.effect, settled, onComplete);
+            })
+          ).pipe(
+            Effect.ensuring(
+              Effect.gen(function* () {
+                const wasSettled = yield* Ref.get(settled);
+
+                if (!wasSettled) {
+                  yield* submission.interruptOnce(
+                    {
+                      _tag: "Released",
+                      detail: "graph cell operation exited before settling reply",
+                    },
+                    false
+                  );
+                }
+
+                submissions.delete(submission);
+              })
+            )
+          );
+
+          submission.fiber = yield* workerEffect.pipe(
+            Effect.forkIn(scope, { startImmediately: true })
+          );
+          return { await: Deferred.await(reply) };
+        })
+      );
+
+    const close = (reason?: RuntimeCancellationReason | undefined): Effect.Effect<void> =>
       Effect.gen(function* () {
-        const reply = yield* Deferred.make<A>();
-        // Contract: each graph cell serializes driver work, lifecycle mutation,
-        // and interruption handling. Callers may enqueue, but only one operation
-        // may own the ready state at a time.
-        const waitEffect = Semaphore.withPermit(
-          semaphore,
-          Effect.gen(function* () {
-            const alreadyClosed = yield* Ref.get(closed);
-
-            if (alreadyClosed) {
-              yield* operation.interrupt(reply, {
-                _tag: "Released",
-                detail: "graph cell is closed",
-              });
-              return yield* Deferred.await(reply);
-            }
-
-            const start = yield* Deferred.make<void>();
-            const worker = yield* Deferred.await(start).pipe(
-              Effect.flatMap(() => completeReply(reply, operation.effect)),
-              Effect.ensuring(Ref.set(activeOperation, undefined)),
-              Effect.forkIn(scope, { startImmediately: true })
-            );
-            const interrupt = (reason?: RuntimeCancellationReason | undefined) =>
-              operation.interrupt(reply, reason).pipe(
-                Effect.flatMap(() => Fiber.interrupt(worker)),
-                Effect.asVoid
-              );
-
-            yield* Ref.set(activeOperation, { fiber: worker, interrupt });
-
-            const closedBeforeStart = yield* Ref.get(closed);
-
-            // Hazard: shutdown may win after the worker fiber is registered but
-            // before start is released. Interrupt here to avoid a closed actor
-            // starting fresh driver work.
-            if (closedBeforeStart) {
-              yield* interrupt({
-                _tag: "Released",
-                detail: "graph cell is closed",
-              });
-            } else {
-              yield* Deferred.succeed(start, undefined).pipe(Effect.asVoid);
-            }
-
-            yield* Fiber.await(worker);
-            return yield* Deferred.await(reply);
-          })
-        );
-
-        return { await: waitEffect };
+        yield* Ref.set(closed, true);
+        const accepted = [...submissions];
+        yield* Effect.forEach(accepted, (submission) => submission.interruptOnce(reason), {
+          concurrency: "unbounded",
+          discard: true,
+        });
       });
+
+    const runExclusive = <A>(effect: Effect.Effect<A>): Effect.Effect<A> =>
+      Semaphore.withPermit(semaphore, effect);
+
+    const runExclusiveFork = <A>(effect: Effect.Effect<A>): Effect.Effect<Fiber.Fiber<A>> =>
+      runExclusive(effect).pipe(Effect.forkIn(scope, { startImmediately: true }));
 
     return {
       submit,
       run: (operation) => submit(operation).pipe(Effect.flatMap((task) => task.await)),
+      close,
+      runExclusive,
+      runExclusiveFork,
       shutdown: (options) =>
         Effect.gen(function* () {
-          yield* Ref.set(closed, true);
-          const running = yield* Ref.get(activeOperation);
-
-          if (running !== undefined) {
-            yield* running.interrupt(options?.reason);
-          }
-
+          yield* close(options?.reason);
           const cleanup = options?.cleanup;
-          const result =
-            cleanup === undefined ? undefined : yield* Semaphore.withPermit(semaphore, cleanup);
+          const result = cleanup === undefined ? undefined : yield* runExclusive(cleanup);
           yield* Scope.close(scope, Exit.succeed(undefined));
           return result;
         }),
@@ -126,11 +185,36 @@ export function interruptCellOperation<A>(
 
 function completeReply<A>(
   reply: Deferred.Deferred<A>,
-  effect: Effect.Effect<A>
+  effect: Effect.Effect<A>,
+  settled: Ref.Ref<boolean>,
+  onComplete: Effect.Effect<void>
 ): Effect.Effect<void> {
   return effect.pipe(
-    Effect.flatMap((value) => Deferred.succeed(reply, value)),
-    Effect.catchCause((cause) => Deferred.failCause(reply, cause)),
+    Effect.matchCauseEffect({
+      onFailure: (cause) => settleReply(settled, onComplete, Deferred.failCause(reply, cause)),
+      onSuccess: (value) => settleReply(settled, onComplete, Deferred.succeed(reply, value)),
+    }),
     Effect.asVoid
   );
+}
+
+function settleReply<A>(
+  settled: Ref.Ref<boolean>,
+  onComplete: Effect.Effect<void>,
+  settle: Effect.Effect<A>
+): Effect.Effect<void> {
+  return claimReply(settled).pipe(
+    Effect.flatMap((alreadySettled) =>
+      alreadySettled
+        ? Effect.void
+        : settle.pipe(
+            Effect.flatMap(() => onComplete),
+            Effect.asVoid
+          )
+    )
+  );
+}
+
+function claimReply(settled: Ref.Ref<boolean>): Effect.Effect<boolean> {
+  return Ref.modify(settled, (alreadySettled) => [alreadySettled, true] as const);
 }

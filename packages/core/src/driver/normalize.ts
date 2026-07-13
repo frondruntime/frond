@@ -29,6 +29,7 @@ export function buildNormalizedDriver<
 >(input: {
   readonly mode: DriverMode;
   readonly resultValidity?: ResultValidityPolicy | undefined;
+  readonly resultPatch?: import("./types").ResultPatchOptions | undefined;
   readonly acquire: (
     ctx: NormalizedAcquireDriverContext<TArgs, TDeps, TResult>
   ) => Effect.Effect<TResult | ResultCommit<TResult>, unknown>;
@@ -49,6 +50,7 @@ export function buildNormalizedDriver<
     _tag: "NormalizedDriver",
     mode: input.mode,
     resultValidity: input.resultValidity,
+    resultPatch: input.resultPatch,
     acquire: input.acquire,
     release: normalizeDriverHook(input.release, input.normalizeRelease),
     refresh: normalizeDriverHook(input.refresh, input.normalizeRefresh),

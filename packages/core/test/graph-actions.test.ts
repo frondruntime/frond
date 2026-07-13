@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Fiber } from "effect";
 import {
   type ActionContract,
   ActionFailed,
@@ -88,6 +89,10 @@ describe("graph actions", () => {
     await expect(node.actions.updateTimezone({ timezone: "CET" })).resolves.toEqual({
       timezone: "CET",
     });
+    const snapshot = await Effect.runPromise(graph.snapshot());
+    const profile = snapshot.nodes.find((entry) => entry.tag === "resources/action-profile");
+
+    expect(profile?.result).toEqual({ name: "transport", timezone: "CET" });
   });
 
   test("action failure returns failure without changing ready node state", async () => {
@@ -402,7 +407,7 @@ describe("graph actions", () => {
       readonly deps: Record<string, never>;
       readonly result: { value: string };
       readonly actions: {
-        readonly setValue: ActionContract<{ readonly value: string }, string>;
+        readonly setValue: ActionContract<{ readonly value: string }, { readonly value: string }>;
       };
     }>;
 
@@ -429,7 +434,7 @@ describe("graph actions", () => {
                   current.value = input.value;
                 });
                 activeActions -= 1;
-                return input.value;
+                return { value: input.value };
               })
             ),
           },
@@ -527,6 +532,134 @@ describe("graph actions", () => {
     expect(readyNode?.operation).toEqual({ _tag: "Idle" });
     expect(readyNode?.operationFailure).toBeUndefined();
     expect(readyNode?.result).toEqual({ value: "fresh" });
+  });
+
+  test("shutdown racing an action emits one action completion", async () => {
+    const actionStarted = await Effect.runPromise(Deferred.make<void>());
+    const actionGate = await Effect.runPromise(Deferred.make<void>());
+    type StopActionSpec = NodeSpec<{
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: { readonly value: string };
+      readonly actions: {
+        readonly hang: ActionContract<void, string>;
+      };
+    }>;
+
+    class StopActionNode extends NodeBase<StopActionSpec> {
+      static readonly spec = resourceSpec<StopActionSpec>({
+        tag: "resources/stop-action-once",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        driver: Driver.Effect<StopActionSpec>({
+          acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
+          actions: {
+            hang: Driver.Action(() =>
+              Effect.gen(function* () {
+                yield* Deferred.succeed(actionStarted, undefined);
+                yield* Deferred.await(actionGate);
+                return "done";
+              })
+            ),
+          },
+        }),
+      });
+    }
+    const graph = makeInMemoryGraphSystem();
+    const completions: Array<unknown> = [];
+
+    await Effect.runPromise(
+      graph.observeActionCompletions((completion) => {
+        completions.push(completion);
+      })
+    );
+    await Effect.runPromise(graph.ensureReadyNode({ spec: StopActionNode, args: {} }));
+    const action = Effect.runPromise(
+      graph.runAction({
+        target: {
+          _tag: "NodeRequest",
+          request: { spec: StopActionNode, args: {} },
+        },
+        action: "hang",
+        input: undefined,
+      })
+    );
+
+    await Effect.runPromise(Deferred.await(actionStarted));
+    await Effect.runPromise(graph.stop());
+    await Effect.runPromise(Deferred.succeed(actionGate, undefined));
+    const result = await action;
+
+    expect(result._tag).toBe("Failure");
+    expect(completions).toHaveLength(1);
+  });
+
+  test("interrupted action caller clears join admission after worker completion", async () => {
+    const actionStarted = await Effect.runPromise(Deferred.make<void>());
+    const actionGate = await Effect.runPromise(Deferred.make<void>());
+    let actionRuns = 0;
+    type JoinActionAdmissionSpec = NodeSpec<{
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: { readonly value: string };
+      readonly actions: {
+        readonly join: ActionContract<{ readonly id: string }, string>;
+      };
+    }>;
+
+    class JoinActionAdmissionNode extends NodeBase<JoinActionAdmissionSpec> {
+      static readonly spec = resourceSpec<JoinActionAdmissionSpec>({
+        tag: "resources/interrupted-action-admission",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        driver: Driver.Effect<JoinActionAdmissionSpec>({
+          acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
+          actions: {
+            join: Driver.Action(
+              (_ctx, input) =>
+                Effect.gen(function* () {
+                  actionRuns += 1;
+                  if (actionRuns === 1) {
+                    yield* Deferred.succeed(actionStarted, undefined);
+                    yield* Deferred.await(actionGate);
+                  }
+                  return `${input.id}:${actionRuns}`;
+                }),
+              {
+                admission: "join",
+                admissionKey: (input) => input.id,
+              }
+            ),
+          },
+        }),
+      });
+    }
+    const graph = makeInMemoryGraphSystem();
+    const request = {
+      target: {
+        _tag: "NodeRequest" as const,
+        request: { spec: JoinActionAdmissionNode, args: {} },
+      },
+      action: "join",
+      input: { id: "same" },
+    };
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* graph.ensureReadyNode({ spec: JoinActionAdmissionNode, args: {} });
+        const first = yield* graph.runAction(request).pipe(Effect.forkDetach);
+
+        yield* Deferred.await(actionStarted);
+        yield* Fiber.interrupt(first);
+        yield* Deferred.succeed(actionGate, undefined);
+        const second = yield* graph.runAction(request).pipe(Effect.timeout("200 millis"));
+
+        expect(second).toMatchObject({ _tag: "Success", value: "same:2" });
+        expect(actionRuns).toBe(2);
+      })
+    );
   });
 
   test("actions on different node identities can overlap", async () => {

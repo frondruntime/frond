@@ -1,6 +1,5 @@
 import type { Effect } from "effect";
 import type {
-  GraphActionCompleted,
   GraphActionCompletionObserver,
   GraphCleanupFailureObserver,
   GraphLiveDemandObserver,
@@ -8,11 +7,9 @@ import type {
   GraphNodeChangeObserver,
   GraphObserverFailure,
   GraphObserverFailureObserver,
-  GraphOperationStarted,
   GraphOperationStartObserver,
   GraphResultValidityObserver,
   GraphSubscription,
-  NodeId,
 } from "../types";
 import { makeObserverChannel } from "./observerChannel";
 
@@ -51,10 +48,16 @@ export interface GraphSystemObservers {
 }
 
 export function makeGraphSystemObservers(): GraphSystemObservers {
-  const observerFailures = makeObserverChannel<GraphObserverFailureObserver>();
+  const observerFailures = makeObserverChannel<
+    GraphObserverFailureObserver,
+    Parameters<GraphObserverFailureObserver>
+  >();
   const reportObserverFailure = (failure: GraphObserverFailure) =>
-    observerFailures.notifyAll(failure, (observedFailure, observer) => observer(observedFailure));
-  const nodeChange = makeObserverChannel<GraphNodeChangeObserver, NodeId>({
+    observerFailures.notifyAll(failure);
+  const nodeChange = makeObserverChannel<
+    GraphNodeChangeObserver,
+    Parameters<GraphNodeChangeObserver>
+  >({
     channel: "node-change",
     reportFailure: reportObserverFailure,
   });
@@ -67,36 +70,35 @@ export function makeGraphSystemObservers(): GraphSystemObservers {
   });
   const liveDemandChanges = makeObserverChannel<
     GraphLiveDemandObserver,
-    { readonly nodeId: NodeId; readonly liveDemand: Parameters<GraphLiveDemandObserver>[1] }
+    Parameters<GraphLiveDemandObserver>
   >({
     channel: "live-demand",
     reportFailure: reportObserverFailure,
   });
   const liveFailures = makeObserverChannel<
     GraphLiveFailureObserver,
-    { readonly nodeId: NodeId; readonly failures: Parameters<GraphLiveFailureObserver>[1] }
+    Parameters<GraphLiveFailureObserver>
   >({
     channel: "live-failure",
     reportFailure: reportObserverFailure,
   });
   const cleanupFailures = makeObserverChannel<
     GraphCleanupFailureObserver,
-    {
-      readonly nodeId: NodeId;
-      readonly reason: Parameters<GraphCleanupFailureObserver>[1];
-      readonly failures: Parameters<GraphCleanupFailureObserver>[2];
-    }
+    Parameters<GraphCleanupFailureObserver>
   >({
     channel: "cleanup-failure",
     reportFailure: reportObserverFailure,
   });
-  const operationStarts = makeObserverChannel<GraphOperationStartObserver, GraphOperationStarted>({
+  const operationStarts = makeObserverChannel<
+    GraphOperationStartObserver,
+    Parameters<GraphOperationStartObserver>
+  >({
     channel: "operation-start",
     reportFailure: reportObserverFailure,
   });
   const actionCompletions = makeObserverChannel<
     GraphActionCompletionObserver,
-    GraphActionCompleted
+    Parameters<GraphActionCompletionObserver>
   >({
     channel: "action-completion",
     reportFailure: reportObserverFailure,
@@ -111,35 +113,12 @@ export function makeGraphSystemObservers(): GraphSystemObservers {
     observeOperationStarts: operationStarts.subscribe,
     observeActionCompletions: actionCompletions.subscribe,
     observeObserverFailures: observerFailures.subscribe,
-    notifyNodeChanged: (nodeId) =>
-      nodeChange.notifyAll(nodeId, (observedNodeId, observer) => observer(observedNodeId)),
-    notifyResultValidityChanged: (...args) =>
-      resultValidity.notifyAll(args, (observedArgs, observer) => observer(...observedArgs)),
-    notifyLiveDemandChanged: (nodeId, liveDemand) =>
-      liveDemandChanges.notifyAll(
-        { nodeId, liveDemand },
-        ({ nodeId: observedNodeId, liveDemand: observedDemand }, observer) =>
-          observer(observedNodeId, observedDemand)
-      ),
-    notifyLiveFailures: (nodeId: NodeId, failures) =>
-      liveFailures.notifyAll(
-        { nodeId, failures },
-        ({ nodeId: observedNodeId, failures: observedFailures }, observer) =>
-          observer(observedNodeId, observedFailures)
-      ),
-    notifyCleanupFailures: (nodeId: NodeId, reason, failures) =>
-      cleanupFailures.notifyAll(
-        { nodeId, reason, failures },
-        (
-          { nodeId: observedNodeId, reason: observedReason, failures: observedFailures },
-          observer
-        ) => observer(observedNodeId, observedReason, observedFailures)
-      ),
-    notifyOperationStarted: (started) =>
-      operationStarts.notifyAll(started, (observedStarted, observer) => observer(observedStarted)),
-    notifyActionCompleted: (completed) =>
-      actionCompletions.notifyAll(completed, (observedCompleted, observer) =>
-        observer(observedCompleted)
-      ),
+    notifyNodeChanged: nodeChange.notifyAll,
+    notifyResultValidityChanged: resultValidity.notifyAll,
+    notifyLiveDemandChanged: liveDemandChanges.notifyAll,
+    notifyLiveFailures: liveFailures.notifyAll,
+    notifyCleanupFailures: cleanupFailures.notifyAll,
+    notifyOperationStarted: operationStarts.notifyAll,
+    notifyActionCompleted: actionCompletions.notifyAll,
   };
 }

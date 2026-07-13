@@ -9,7 +9,6 @@ import type {
 } from "../signals";
 import type { RuntimeSignalBusService } from "../signals/busContext";
 import type { RuntimeEventBus } from "./eventBus";
-import { RuntimeEvents } from "./events";
 import { optionalNonNegativeInteger } from "./limits";
 import { signalSpanAttributes, withRuntimeSpan } from "./observability";
 import type { RuntimeSignalPolicyRegistry } from "./options";
@@ -77,12 +76,13 @@ export function makeRuntimeSignalBus(input: {
           Effect.gen(function* () {
             const at = yield* Clock.currentTimeMillis;
             yield* input.eventBus.emit(
-              RuntimeEvents.runtimeSignalSubscriberFailureObserved(
-                subscriber.name,
-                record,
-                effectBoundaryFailed("runtime-signal-subscriber", cause),
-                at
-              ),
+              {
+                _tag: "RuntimeSignalSubscriberFailureObserved",
+                subscriber: subscriber.name,
+                signal: record,
+                cause: effectBoundaryFailed("runtime-signal-subscriber", cause),
+                at,
+              },
               work
             );
           })
@@ -97,6 +97,9 @@ export function makeRuntimeSignalBus(input: {
       })
     );
 
+  const read = (query?: RuntimeSignalQuery | undefined) =>
+    Effect.sync(() => queryRecords(recordsByChannel, query));
+
   return {
     publish: (signal, work) =>
       withRuntimeSpan(
@@ -109,10 +112,15 @@ export function makeRuntimeSignalBus(input: {
             recordedAt,
             signal,
           };
+          const policy = signalPolicy(input.policies, record.signal.channel);
 
           store(record);
           yield* input.eventBus.emit(
-            RuntimeEvents.runtimeSignalPublished(record, recordedAt),
+            {
+              _tag: "RuntimeSignalPublished",
+              record: signalEventRecord(record, policy),
+              at: recordedAt,
+            },
             work
           );
           yield* deliver(record, work);
@@ -120,7 +128,7 @@ export function makeRuntimeSignalBus(input: {
         "frond.runtime.signal.publish",
         signalSpanAttributes({ runtimeId: input.runtimeId, signal, work })
       ),
-    readRetained: (query) => Effect.succeed(queryRecords(recordsByChannel, query)),
+    readRetained: read,
     subscribe: (subscriber) =>
       Effect.sync(() => {
         subscribers.add(subscriber);
@@ -133,8 +141,8 @@ export function makeRuntimeSignalBus(input: {
           },
         } satisfies RuntimeSignalSubscription;
       }),
-    records: (query) => Effect.succeed(queryRecords(recordsByChannel, query)),
-    subscribers: () => Effect.succeed([...subscribers].map((subscriber) => subscriber.name)),
+    records: read,
+    subscribers: () => Effect.sync(() => [...subscribers].map((subscriber) => subscriber.name)),
   };
 }
 
@@ -145,6 +153,23 @@ function signalPolicy(
   const policy = policies.byChannel[channel];
 
   return policy === undefined ? policies.defaultPolicy : policy;
+}
+
+function signalEventRecord(
+  record: RuntimeSignalRecord,
+  policy: RuntimeSignalPolicyRegistry["defaultPolicy"]
+): RuntimeSignalRecord {
+  if (policy.retention !== "none") {
+    return record;
+  }
+
+  return {
+    ...record,
+    signal: {
+      ...record.signal,
+      payload: undefined,
+    },
+  };
 }
 
 function acceptsSignal(subscriber: RuntimeSignalSubscriber, signal: RuntimeSignal): boolean {

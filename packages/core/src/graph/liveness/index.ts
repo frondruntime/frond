@@ -1,5 +1,6 @@
 import { Clock, Effect } from "effect";
 import type { GraphNodeCellLookup } from "../cell/cellLookup";
+import type { GraphNodeCell, GraphPlanState } from "../cell/cellModel";
 import {
   activeLiveDemand,
   type CellLiveLease,
@@ -14,7 +15,6 @@ import { makeLiveContext, makeLiveStopContext } from "../driverExecution/driverC
 import { runTimedDriverOperation } from "../driverExecution/driverOperationRunner";
 import { interruptedCancellation } from "../lifecycle/operationDisposers";
 import { canonicalKey } from "../planning/canonicalKey";
-import type { GraphNodeCell, GraphPlanState } from "../planning/plan";
 import type {
   AcquireNodeLiveLeaseRequest,
   ActiveNodeLiveDemandSnapshot,
@@ -24,6 +24,7 @@ import type {
   LiveResourceStopReason,
   NodeLiveDemandSnapshot,
   NodeLiveFailure,
+  NodeLiveLeaseId,
   NodeLiveLeaseResult,
   NodeLiveScopeKey,
   ReleaseNodeLiveLeaseRequest,
@@ -37,36 +38,35 @@ export function acquireNodeLiveLease(
   state: Pick<GraphPlanState, "nextLiveLeaseId">,
   cellLookup: GraphNodeCellLookup,
   request: AcquireNodeLiveLeaseRequest,
-  liveTimeout: DriverOperationTimeoutMs
+  liveTimeout: DriverOperationTimeoutMs,
+  liveInterrupt?: LiveDeliveryInterrupt | undefined,
+  onLeasePrepared?: ((leaseId: NodeLiveLeaseId) => void) | undefined
 ): Effect.Effect<NodeLiveLeaseResult> {
   return Effect.gen(function* () {
     if (cellLookup._tag === "Missing") {
-      const leaseId = state.nextLiveLeaseId();
       return {
+        _tag: "NodeMissing",
         nodeId: request.nodeId,
-        leaseId,
         liveDemand: projectLiveDemand([]),
-        changed: false,
-        failures: [],
       };
     }
 
     const { cell } = cellLookup;
-    const leaseId = state.nextLiveLeaseId();
     const scopeKeyResult = liveScopeKey(cell, request.scope);
 
     if ("failure" in scopeKeyResult) {
       const current = yield* cell.state.get;
       return {
+        _tag: "Failed",
         nodeId: request.nodeId,
-        leaseId,
         liveDemand: projectLiveDemand(phaseLiveLeases(current.phase)),
-        changed: false,
         failures: [scopeKeyResult.failure],
       };
     }
 
+    const leaseId = state.nextLiveLeaseId();
     const scopeKey = scopeKeyResult.scopeKey;
+    onLeasePrepared?.(leaseId);
     const { changed, liveDemand } = yield* cell.state.transition((latest) => {
       const latestLiveLeases = phaseLiveLeases(latest.phase);
       const liveLeases = [
@@ -89,13 +89,16 @@ export function acquireNodeLiveLease(
       ] as const;
     });
 
-    const failures = changed ? yield* deliverLiveDemand(cell, liveDemand, liveTimeout) : [];
+    const failures = changed
+      ? yield* deliverLiveDemand(cell, liveDemand, liveTimeout, liveInterrupt)
+      : [];
 
     if (changed) {
       yield* cell.notifyChanged(cell.nodeId);
     }
 
     return {
+      _tag: "Held",
       nodeId: request.nodeId,
       leaseId,
       liveDemand,
@@ -105,19 +108,68 @@ export function acquireNodeLiveLease(
   });
 }
 
+export function rollbackNodeLiveLease(
+  state: Pick<GraphPlanState, "notifyLiveDemandChanged" | "notifyLiveFailures">,
+  cell: GraphNodeCell,
+  leaseId: NodeLiveLeaseId,
+  liveTimeout: DriverOperationTimeoutMs
+): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    type RollbackResult =
+      | { readonly _tag: "Missing" }
+      | {
+          readonly _tag: "Removed";
+          readonly changed: boolean;
+          readonly liveDemand: NodeLiveDemandSnapshot;
+        };
+    const rollback = yield* cell.state.transition<RollbackResult>((latest) => {
+      const latestLiveLeases = phaseLiveLeases(latest.phase);
+      const liveLeases = latestLiveLeases.filter((lease) => lease.leaseId !== leaseId);
+
+      if (liveLeases.length === latestLiveLeases.length) {
+        return [{ _tag: "Missing" } as const, latest] as const;
+      }
+
+      const liveDemand = projectLiveDemand(liveLeases);
+      return [
+        {
+          _tag: "Removed",
+          changed: !sameLiveLeasesDemand(latestLiveLeases, liveLeases),
+          liveDemand,
+        } as const,
+        {
+          ...latest,
+          phase: mapPhaseBase(latest.phase, (base) => ({ ...base, liveLeases })),
+        },
+      ] as const;
+    });
+
+    if (rollback._tag === "Missing" || !rollback.changed) {
+      return;
+    }
+
+    const failures = yield* deliverLiveDemand(cell, rollback.liveDemand, liveTimeout);
+    yield* cell.notifyChanged(cell.nodeId);
+    yield* state.notifyLiveDemandChanged(cell.nodeId, rollback.liveDemand);
+
+    if (failures.length > 0) {
+      yield* state.notifyLiveFailures(cell.nodeId, failures);
+    }
+  });
+}
+
 export function releaseNodeLiveLease(
   cellLookup: GraphNodeCellLookup,
   request: ReleaseNodeLiveLeaseRequest,
-  liveTimeout: DriverOperationTimeoutMs
+  liveTimeout: DriverOperationTimeoutMs,
+  liveInterrupt?: LiveDeliveryInterrupt | undefined
 ): Effect.Effect<NodeLiveLeaseResult> {
   return Effect.gen(function* () {
     if (cellLookup._tag === "Missing") {
       return {
+        _tag: "NodeMissing",
         nodeId: request.nodeId,
-        leaseId: request.leaseId,
         liveDemand: projectLiveDemand([]),
-        changed: false,
-        failures: [],
       };
     }
 
@@ -138,13 +190,16 @@ export function releaseNodeLiveLease(
       ] as const;
     });
 
-    const failures = changed ? yield* deliverLiveDemand(cell, liveDemand, liveTimeout) : [];
+    const failures = changed
+      ? yield* deliverLiveDemand(cell, liveDemand, liveTimeout, liveInterrupt)
+      : [];
 
     if (changed) {
       yield* cell.notifyChanged(cell.nodeId);
     }
 
     return {
+      _tag: "Held",
       nodeId: request.nodeId,
       leaseId: request.leaseId,
       liveDemand,
@@ -157,7 +212,8 @@ export function releaseNodeLiveLease(
 export function deliverLiveDemand(
   cell: GraphNodeCell,
   nextDemand: NodeLiveDemandSnapshot,
-  liveTimeout: DriverOperationTimeoutMs
+  liveTimeout: DriverOperationTimeoutMs,
+  liveInterrupt?: LiveDeliveryInterrupt | undefined
 ): Effect.Effect<ReadonlyArray<GraphFailure>> {
   const { live } = cell.descriptor.driver;
 
@@ -178,15 +234,28 @@ export function deliverLiveDemand(
     // Contract: driver live hooks see only active demand. Inactive demand is a
     // graph-owned transition that stops the current resource, if any.
     if (active._tag === "Inactive") {
-      return yield* stopCurrentLiveResource(cell, ready.ready.liveResource, liveTimeout, {
-        _tag: "DemandInactive",
-      });
+      return yield* stopCurrentLiveResource(
+        cell,
+        ready.ready.liveResource,
+        liveTimeout,
+        {
+          _tag: "DemandInactive",
+        },
+        liveInterrupt
+      );
     }
 
     const currentLive = ready.ready.liveResource;
 
     if (currentLive._tag === "Inactive") {
-      return yield* startLiveResource(cell, ready.ready.node, active.demand, liveTimeout, []);
+      return yield* startLiveResource(
+        cell,
+        ready.ready.node,
+        active.demand,
+        liveTimeout,
+        [],
+        liveInterrupt
+      );
     }
 
     if (sameLiveDemand(currentLive.demand, active.demand)) {
@@ -203,14 +272,16 @@ export function deliverLiveDemand(
         liveTimeout,
         {
           _tag: "DemandChanged",
-        }
+        },
+        liveInterrupt
       );
       return yield* startLiveResource(
         cell,
         ready.ready.node,
         active.demand,
         liveTimeout,
-        stopFailures
+        stopFailures,
+        liveInterrupt
       );
     }
 
@@ -219,7 +290,8 @@ export function deliverLiveDemand(
       ready.ready.node,
       currentLive,
       active.demand,
-      liveTimeout
+      liveTimeout,
+      liveInterrupt
     );
   });
 }
@@ -228,7 +300,8 @@ export function stopCurrentLiveResource(
   cell: GraphNodeCell,
   liveResource: LiveResourceState,
   liveTimeout: DriverOperationTimeoutMs,
-  reason: LiveResourceStopReason
+  reason: LiveResourceStopReason,
+  liveInterrupt?: LiveDeliveryInterrupt | undefined
 ): Effect.Effect<ReadonlyArray<GraphFailure>> {
   if (liveResource._tag === "Inactive") {
     return setLiveResourceState(cell, { _tag: "Inactive" }).pipe(Effect.as([]));
@@ -242,7 +315,14 @@ export function stopCurrentLiveResource(
       return [];
     }
 
-    return yield* stopLiveResource(cell, ready.ready.node, liveResource, liveTimeout, reason);
+    return yield* stopLiveResource(
+      cell,
+      ready.ready.node,
+      liveResource,
+      liveTimeout,
+      reason,
+      liveInterrupt
+    );
   });
 }
 
@@ -251,7 +331,8 @@ function updateLiveResource(
   node: object,
   currentLive: Extract<LiveResourceState, { readonly _tag: "Active" }>,
   demand: ActiveNodeLiveDemandSnapshot,
-  liveTimeout: DriverOperationTimeoutMs
+  liveTimeout: DriverOperationTimeoutMs,
+  liveInterrupt?: LiveDeliveryInterrupt | undefined
 ): Effect.Effect<ReadonlyArray<GraphFailure>> {
   const { live } = cell.descriptor.driver;
 
@@ -262,7 +343,7 @@ function updateLiveResource(
   const abortController = new AbortController();
   const ctx = makeLiveContext({ node, abortController });
 
-  return runTimedDriverOperation({
+  const runUpdate = runTimedDriverOperation({
     cell,
     operation: "live.update",
     boundary: "driver-live",
@@ -271,7 +352,9 @@ function updateLiveResource(
     spanName: "frond.graph.live.update",
     spanAttributes: liveSpanAttributes(cell, "update"),
     run: () => live.run.update?.(ctx, currentLive.resource, demand),
-  }).pipe(
+  });
+
+  return trackLiveInterrupt(liveInterrupt, abortController, runUpdate).pipe(
     Effect.matchEffect({
       onFailure: (cause) =>
         Effect.gen(function* () {
@@ -279,13 +362,24 @@ function updateLiveResource(
           // stop the old resource once, then make one bounded restart attempt
           // for the latest active demand. Do not loop here.
           const updateFailure = liveDeliveryFailed(cell, "update", cause);
-          const stopFailures = yield* stopLiveResource(cell, node, currentLive, liveTimeout, {
-            _tag: "UpdateFailed",
-          });
-          return yield* startLiveResource(cell, node, demand, liveTimeout, [
-            updateFailure,
-            ...stopFailures,
-          ]);
+          const stopFailures = yield* stopLiveResource(
+            cell,
+            node,
+            currentLive,
+            liveTimeout,
+            {
+              _tag: "UpdateFailed",
+            },
+            liveInterrupt
+          );
+          return yield* startLiveResource(
+            cell,
+            node,
+            demand,
+            liveTimeout,
+            [updateFailure, ...stopFailures],
+            liveInterrupt
+          );
         }),
       onSuccess: () =>
         setLiveResourceState(cell, {
@@ -294,7 +388,12 @@ function updateLiveResource(
           demand,
           resource: currentLive.resource,
         }).pipe(Effect.as([])),
-    })
+    }),
+    Effect.onInterrupt(() =>
+      Effect.sync(() => {
+        abortController.abort(interruptedCancellation());
+      })
+    )
   );
 }
 
@@ -303,7 +402,8 @@ function startLiveResource(
   node: object,
   demand: ActiveNodeLiveDemandSnapshot,
   liveTimeout: DriverOperationTimeoutMs,
-  previousFailures: ReadonlyArray<GraphFailure>
+  previousFailures: ReadonlyArray<GraphFailure>,
+  liveInterrupt?: LiveDeliveryInterrupt | undefined
 ): Effect.Effect<ReadonlyArray<GraphFailure>> {
   const { live } = cell.descriptor.driver;
 
@@ -319,7 +419,7 @@ function startLiveResource(
     const abortController = new AbortController();
     const ctx = makeLiveContext({ node, abortController });
 
-    return yield* runTimedDriverOperation({
+    const runStart = runTimedDriverOperation({
       cell,
       operation: "live.start",
       boundary: "driver-live",
@@ -328,7 +428,9 @@ function startLiveResource(
       spanName: "frond.graph.live.start",
       spanAttributes: liveSpanAttributes(cell, "start"),
       run: () => live.run.start(ctx, demand),
-    }).pipe(
+    });
+
+    return yield* trackLiveInterrupt(liveInterrupt, abortController, runStart).pipe(
       Effect.matchEffect({
         onFailure: (cause) =>
           Effect.gen(function* () {
@@ -371,7 +473,8 @@ function stopLiveResource(
   node: object,
   currentLive: Extract<LiveResourceState, { readonly _tag: "Active" }>,
   liveTimeout: DriverOperationTimeoutMs,
-  reason: LiveResourceStopReason
+  reason: LiveResourceStopReason,
+  liveInterrupt?: LiveDeliveryInterrupt | undefined
 ): Effect.Effect<ReadonlyArray<GraphFailure>> {
   const { live } = cell.descriptor.driver;
 
@@ -382,7 +485,7 @@ function stopLiveResource(
   const abortController = new AbortController();
   const ctx = makeLiveStopContext({ node, abortController, reason });
 
-  return runTimedDriverOperation({
+  const runStop = runTimedDriverOperation({
     cell,
     operation: "live.stop",
     boundary: "driver-live",
@@ -390,16 +493,62 @@ function stopLiveResource(
     abortController,
     spanName: "frond.graph.live.stop",
     spanAttributes: liveSpanAttributes(cell, "stop"),
-    run: () => live.run.stop(ctx, currentLive.resource, reason),
-  }).pipe(
+    run: () => live.run.stop(ctx, currentLive.resource),
+  });
+
+  return trackLiveInterrupt(liveInterrupt, abortController, runStop).pipe(
     Effect.matchEffect({
       onFailure: (cause) => {
         const failures = [liveDeliveryFailed(cell, "stop", cause)];
         return setLiveResourceState(cell, { _tag: "Inactive" }, failures).pipe(Effect.as(failures));
       },
       onSuccess: () => setLiveResourceState(cell, { _tag: "Inactive" }).pipe(Effect.as([])),
-    })
+    }),
+    Effect.onInterrupt(() =>
+      Effect.sync(() => {
+        abortController.abort(interruptedCancellation());
+      })
+    )
   );
+}
+
+export interface LiveDeliveryInterrupt {
+  readonly track: <A, E, R>(
+    abortController: AbortController,
+    effect: Effect.Effect<A, E, R>
+  ) => Effect.Effect<A, E, R>;
+  readonly abort: () => void;
+}
+
+export function makeLiveDeliveryInterrupt(): LiveDeliveryInterrupt {
+  const abortControllers = new Set<AbortController>();
+
+  return {
+    track: (abortController, effect) =>
+      Effect.sync(() => {
+        abortControllers.add(abortController);
+      }).pipe(
+        Effect.flatMap(() => effect),
+        Effect.ensuring(
+          Effect.sync(() => {
+            abortControllers.delete(abortController);
+          })
+        )
+      ),
+    abort: () => {
+      for (const abortController of abortControllers) {
+        abortController.abort(interruptedCancellation());
+      }
+    },
+  };
+}
+
+function trackLiveInterrupt<A, E, R>(
+  liveInterrupt: LiveDeliveryInterrupt | undefined,
+  abortController: AbortController,
+  effect: Effect.Effect<A, E, R>
+): Effect.Effect<A, E, R> {
+  return liveInterrupt === undefined ? effect : liveInterrupt.track(abortController, effect);
 }
 
 function setLiveResourceState(

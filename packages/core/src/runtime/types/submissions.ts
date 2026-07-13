@@ -1,4 +1,4 @@
-import type { NodeLiveDemandSnapshot, NodeLiveLeaseId } from "../../graph/types/liveness";
+import type { NodeLiveLeaseResult } from "../../graph/types/liveness";
 import type {
   ActionResult,
   EvictResult,
@@ -49,13 +49,9 @@ export type RuntimeSubmission =
     }
   | {
       readonly _tag: "GraphNodeLiveLeaseAcquired";
-      readonly nodeId: NodeRead["nodeId"];
-      readonly leaseId: NodeLiveLeaseId;
-      readonly liveDemand: NodeLiveDemandSnapshot;
+      readonly result: NodeLiveLeaseResult;
     }
   | {
       readonly _tag: "GraphNodeLiveLeaseReleased";
-      readonly nodeId: NodeRead["nodeId"];
-      readonly leaseId: NodeLiveLeaseId;
-      readonly liveDemand: NodeLiveDemandSnapshot;
+      readonly result: NodeLiveLeaseResult;
     };

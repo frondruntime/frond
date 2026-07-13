@@ -30,3 +30,19 @@ export class KeyUnsupportedJsonValueError extends FrondKeyErrorBase<
 > {}
 
 export type KeyError = KeyNonFiniteNumberError | KeyTooLongError | KeyUnsupportedJsonValueError;
+
+const keyErrorTags = {
+  KeyNonFiniteNumberError: true,
+  KeyTooLongError: true,
+  KeyUnsupportedJsonValueError: true,
+} satisfies Record<KeyErrorTag, true>;
+
+export function isKeyError(value: unknown): value is KeyError {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "_tag" in value &&
+    typeof value._tag === "string" &&
+    value._tag in keyErrorTags
+  );
+}

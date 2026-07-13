@@ -1,13 +1,6 @@
 import { Clock, Effect } from "effect";
-import { phaseArgs, phaseReadyData } from "../cell/cellPhase";
-import { makeDriverContext } from "../driverExecution/driverContext";
-import {
-  recoverDriverOperationFailure,
-  runTimedDriverOperation,
-} from "../driverExecution/driverOperationRunner";
-import { interruptDriverOperation, makeOperationDisposers } from "../lifecycle/operationDisposers";
-import type { GraphNodeCell } from "../planning/plan";
-import type { ResultState } from "../resultValidity";
+import type { GraphNodeCell } from "../cell/cellModel";
+import { phaseReadyData } from "../cell/cellPhase";
 import {
   type ActionRequest,
   type ActionResult,
@@ -15,12 +8,8 @@ import {
   type NodeRead,
   type RunningActionOperation,
 } from "../types";
-import {
-  collectDependencyValues,
-  type GraphOperationEnvironment,
-  refreshDependencyValue,
-} from "./dependencies";
-import { appendOperationDisposers, commitReadyOperationResult } from "./operationCommit";
+import type { GraphOperationEnvironment } from "./dependencies";
+import { runReadyDriverOperation } from "./driverOperationSkeleton";
 import { makeActionFailure } from "./operationFailures";
 import { runBackgroundOperation } from "./operationState";
 
@@ -101,104 +90,46 @@ function runActionDriver(
       );
     }
     const readyData = ready.ready;
-    const readyNode = readyData.node;
 
-    const depsResult = yield* collectDependencyValues(env, cell).pipe(
-      Effect.match({
-        onFailure: (cause) => ({ _tag: "Failure", cause }) as const,
-        onSuccess: (deps) => ({ _tag: "Success", deps }) as const,
-      })
-    );
-
-    if (depsResult._tag === "Failure") {
-      return makeActionFailure(cell, request, depsResult.cause);
-    }
-
-    const abortController = new AbortController();
-    const actionDisposers = makeOperationDisposers(cell, env.state.notifyCleanupFailures);
-    const clock = yield* Clock.Clock;
-    let currentResultState: ResultState = {
-      result: readyData.result,
-      resultLoadedAt: readyData.resultLoadedAt,
-      resultValidity: readyData.resultValidity,
-      resultValidityCommit: "default",
-    };
-
-    const ctx = makeDriverContext({
+    return yield* runReadyDriverOperation<unknown, ActionResult>({
+      env,
       cell,
-      node: readyNode,
-      args: phaseArgs(current.phase),
-      deps: depsResult.deps,
-      abortController,
-      disposers: actionDisposers,
-      signals: env.signals,
-      refreshDep: (dependencyName) => refreshDependencyValue(env, cell, dependencyName),
-      now: () => clock.currentTimeMillisUnsafe(),
-      getCurrentResultState: () => currentResultState,
-      setCurrentResultState: (next) => {
-        currentResultState = next;
+      phase: current.phase,
+      readyData,
+      operation: `action:${request.action}`,
+      boundary: "driver-action",
+      timeout: env.driverTimeouts.action,
+      disposerReason: "action",
+      spanName: "frond.graph.action.driver",
+      spanAttributes: {
+        ...env.runtimeSpanAttributes,
+        "frond.node.id": cell.nodeId,
+        "frond.node.tag": cell.tag,
+        "frond.action": request.action,
+        "frond.driver.mode": cell.descriptor.driver.mode,
       },
       setResultDefaultValidity: "preserve",
-      cloneResultOnPatch: true,
+      commitInput: ({ currentResultState, now }) => {
+        const commitNow = now();
+
+        return {
+          context: cell,
+          returned: undefined,
+          staged: currentResultState,
+          defaultLoadedAt: commitNow,
+          defaultValidity: "preserve",
+        };
+      },
+      previousValidity: readyData.resultValidity,
+      validityReason: "manual",
+      run: (ctx) => action.run(ctx, request.input),
+      makeFailure: (cause) => makeActionFailure(cell, request, cause),
+      makeSuccess: ({ value }) =>
+        ({
+          _tag: "Success",
+          nodeId: cell.nodeId,
+          value,
+        }) satisfies ActionResult,
     });
-
-    return yield* recoverDriverOperationFailure(
-      runTimedDriverOperation({
-        cell,
-        operation: `action:${request.action}`,
-        boundary: "driver-action",
-        timeout: env.driverTimeouts.action,
-        abortController,
-        spanName: "frond.graph.action.driver",
-        spanAttributes: {
-          ...env.runtimeSpanAttributes,
-          "frond.node.id": cell.nodeId,
-          "frond.node.tag": cell.tag,
-          "frond.action": request.action,
-          "frond.driver.mode": cell.descriptor.driver.mode,
-        },
-        run: () => action.run(ctx, request.input),
-      }).pipe(
-        Effect.matchEffect({
-          onFailure: (cause) =>
-            Effect.gen(function* () {
-              yield* appendOperationDisposers(cell, actionDisposers.take("action"));
-              return makeActionFailure(cell, request, cause);
-            }),
-          onSuccess: (value) =>
-            Effect.gen(function* () {
-              yield* commitReadyOperationResult({
-                cell,
-                node: readyNode,
-                deps: depsResult.deps,
-                resultState: currentResultState,
-                previousValidity: readyData.resultValidity,
-                validityReason: "manual",
-                operationDisposers: actionDisposers.take("action"),
-              });
-
-              return {
-                _tag: "Success",
-                nodeId: cell.nodeId,
-                value,
-              } satisfies ActionResult;
-            }),
-        }),
-        Effect.onInterrupt(() =>
-          interruptDriverOperation({
-            cell,
-            abortController,
-            disposers: actionDisposers,
-            notifyCleanupFailures: env.state.notifyCleanupFailures,
-          })
-        )
-      ),
-      "driver-action",
-      (cause) =>
-        Effect.gen(function* () {
-          yield* appendOperationDisposers(cell, actionDisposers.take("action"));
-          return makeActionFailure(cell, request, cause);
-        })
-    );
   });
 }

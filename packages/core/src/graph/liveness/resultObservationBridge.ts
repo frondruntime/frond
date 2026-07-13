@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Cause, Effect, Exit } from "effect";
 import { canonicalKey } from "../planning/canonicalKey";
 import type { GraphFailure, NodeId, NodeLiveScopeKey, ObservedResultLease } from "../types";
 import { GraphInvariantViolation } from "../types";
@@ -27,7 +27,17 @@ export function bridgeObservedResultLease(
   // Boundary: MobX/node observation callbacks are synchronous, while graph live
   // lease acquisition is Effect-native. This named bridge keeps that escape
   // local to result observation.
-  return Effect.runPromise(effect);
+  return Effect.runPromiseExit(effect).then((exit) => {
+    if (Exit.isSuccess(exit)) {
+      return exit.value;
+    }
+
+    if (Cause.hasInterruptsOnly(exit.cause)) {
+      return { _tag: "Missing" } as const;
+    }
+
+    throw Cause.squash(exit.cause);
+  });
 }
 
 export function makeResultObservedReporter(

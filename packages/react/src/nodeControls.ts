@@ -186,12 +186,18 @@ function dispatchArgsUpdate<TArgs>(input: {
   readonly getCurrent: () => NodeArgsFingerprint | undefined;
   readonly setCurrent: (fingerprint: NodeArgsFingerprint) => void;
 }): void {
-  input.setCurrent(input.next);
-  void input.handle.updateArgs(input.args, ReactRuntimeMetadata.argsUpdate()).then((result) => {
-    if (result._tag === "Failure" && input.getCurrent() === input.next) {
+  const rollbackFingerprint = () => {
+    if (input.getCurrent() === input.next) {
       input.setCurrent(input.previous);
     }
-  });
+  };
+
+  input.setCurrent(input.next);
+  void input.handle.updateArgs(input.args, ReactRuntimeMetadata.argsUpdate()).then((result) => {
+    if (result._tag === "Failure") {
+      rollbackFingerprint();
+    }
+  }, rollbackFingerprint);
 }
 
 interface ReactNodeControlEntry {

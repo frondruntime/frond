@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
+import type { GraphNodeCell } from "../src/graph/cell/cellModel";
 import { makeOperationDisposers } from "../src/graph/lifecycle/operationDisposers";
-import type { GraphNodeCell } from "../src/graph/planning/plan";
 import { DisposerFailed, type NodeId } from "../src/graph/types";
 
 function makeBag() {

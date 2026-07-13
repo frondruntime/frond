@@ -46,4 +46,5 @@ export type {
   EffectDriver,
   EffectDriverActionMap,
   ResultCommit,
+  ResultPatchOptions,
 } from "./types";

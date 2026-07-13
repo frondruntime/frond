@@ -1,7 +1,8 @@
-import { Cause, Effect } from "effect";
+import { Effect } from "effect";
 import type { RuntimeCancellationReason } from "../../cancellation";
 import { AsyncDriverHookFailed } from "../../driver/asyncDefinition";
-import type { GraphNodeCell } from "../planning/plan";
+import type { GraphNodeCell } from "../cell/cellModel";
+import { interruptedCancellation } from "../lifecycle/operationDisposers";
 import {
   DriverOperationTimedOut,
   type DriverOperationTimeoutMs,
@@ -10,20 +11,6 @@ import {
 } from "../types";
 import type { EffectBoundary } from "./effectBoundary";
 import { normalizeEffectBoundaryCause } from "./effectBoundary";
-
-export function runDriverOperation<TValue>(input: {
-  readonly cell: GraphNodeCell;
-  readonly operation: string;
-  readonly boundary: EffectBoundary;
-  readonly spanName: string;
-  readonly spanAttributes: Record<string, unknown>;
-  readonly run: () => Effect.Effect<TValue | ResultCommit<TValue>, unknown> | undefined;
-}): Effect.Effect<TValue | ResultCommit<TValue>, unknown> {
-  return runRawDriverOperation(input.cell, input.operation, input.run).pipe(
-    Effect.withSpan(input.spanName, { attributes: input.spanAttributes }),
-    Effect.catchCause((cause) => Effect.fail(normalizeEffectBoundaryCause(input.boundary, cause)))
-  );
-}
 
 export function runTimedDriverOperation<TValue>(input: {
   readonly cell: GraphNodeCell;
@@ -36,22 +23,26 @@ export function runTimedDriverOperation<TValue>(input: {
   readonly run: () => Effect.Effect<TValue | ResultCommit<TValue>, unknown> | undefined;
 }): Effect.Effect<TValue | ResultCommit<TValue>, unknown> {
   return runRawDriverOperation(input.cell, input.operation, input.run).pipe(
-    Effect.timeout(input.timeout),
-    Effect.catch((cause) => {
-      if (Cause.isTimeoutError(cause)) {
-        input.abortController.abort(cause);
-        return Effect.fail(
-          new DriverOperationTimedOut({
+    Effect.onInterrupt(() =>
+      Effect.sync(() => {
+        input.abortController.abort(interruptedCancellation());
+      })
+    ),
+    Effect.timeoutOrElse({
+      duration: input.timeout,
+      orElse: () =>
+        Effect.sync(() => {
+          const failure = new DriverOperationTimedOut({
             nodeId: input.cell.nodeId,
             tag: input.cell.tag,
             operation: input.operation,
             timeout: input.timeout,
             cancellation: timeoutCancellation(input.timeout),
-          })
-        );
-      }
+          });
 
-      return Effect.fail(cause);
+          input.abortController.abort(failure);
+          return failure;
+        }).pipe(Effect.flatMap((failure) => Effect.fail(failure))),
     }),
     Effect.withSpan(input.spanName, { attributes: input.spanAttributes }),
     Effect.catchCause((cause) => Effect.fail(normalizeEffectBoundaryCause(input.boundary, cause)))

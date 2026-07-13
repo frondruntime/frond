@@ -1,4 +1,4 @@
-import type { GraphNodeCell } from "../planning/plan";
+import type { GraphNodeCell } from "../cell/cellModel";
 import {
   ActionFailed,
   type ActionRequest,
@@ -21,34 +21,32 @@ export function makeActionFailure(
   request: ActionRequest,
   cause: unknown
 ): Extract<ActionResult, { readonly _tag: "Failure" }> {
-  return {
-    _tag: "Failure",
-    nodeId: cell.nodeId,
-    error: new ActionFailed({
+  return operationFailure(
+    cell.nodeId,
+    new ActionFailed({
       nodeId: cell.nodeId,
       tag: cell.tag,
       action: request.action,
       input: request.input,
       cause,
-    }),
-  };
+    })
+  );
 }
 
 export function makeMissingNodeActionFailure(
   nodeId: NodeRead["nodeId"],
   request: ActionRequest
 ): Extract<ActionResult, { readonly _tag: "Failure" }> {
-  return {
-    _tag: "Failure",
+  return operationFailure(
     nodeId,
-    error: new ActionFailed({
+    new ActionFailed({
       nodeId,
       tag: "unknown",
       action: request.action,
       input: request.input,
       cause: missingNodeCellInvariant(nodeId),
-    }),
-  };
+    })
+  );
 }
 
 export function makeRefreshFailure(
@@ -56,30 +54,28 @@ export function makeRefreshFailure(
   _request: RefreshRequest,
   cause: unknown
 ): Extract<RefreshResult, { readonly _tag: "Failure" }> {
-  return {
-    _tag: "Failure",
-    nodeId: cell.nodeId,
-    error: new RefreshFailed({
+  return operationFailure(
+    cell.nodeId,
+    new RefreshFailed({
       nodeId: cell.nodeId,
       tag: cell.tag,
       cause,
-    }),
-  };
+    })
+  );
 }
 
 export function makeMissingNodeRefreshFailure(
   nodeId: NodeRead["nodeId"],
   _request: RefreshRequest
 ): Extract<RefreshResult, { readonly _tag: "Failure" }> {
-  return {
-    _tag: "Failure",
+  return operationFailure(
     nodeId,
-    error: new RefreshFailed({
+    new RefreshFailed({
       nodeId,
       tag: "unknown",
       cause: missingNodeCellInvariant(nodeId),
-    }),
-  };
+    })
+  );
 }
 
 export function makeUpdateArgsFailure(
@@ -87,15 +83,14 @@ export function makeUpdateArgsFailure(
   _request: UpdateNodeArgsRequest,
   cause: unknown
 ): Extract<UpdateNodeArgsResult, { readonly _tag: "Failure" }> {
-  return {
-    _tag: "Failure",
-    nodeId: cell.nodeId,
-    error: new UpdateNodeArgsFailed({
+  return operationFailure(
+    cell.nodeId,
+    new UpdateNodeArgsFailed({
       nodeId: cell.nodeId,
       tag: cell.tag,
       cause,
-    }),
-  };
+    })
+  );
 }
 
 export function makeMissingNodeUpdateArgsFailure(
@@ -103,15 +98,14 @@ export function makeMissingNodeUpdateArgsFailure(
   _request: UpdateNodeArgsRequest,
   cause: unknown = missingNodeCellInvariant(nodeId)
 ): Extract<UpdateNodeArgsResult, { readonly _tag: "Failure" }> {
-  return {
-    _tag: "Failure",
+  return operationFailure(
     nodeId,
-    error: new UpdateNodeArgsFailed({
+    new UpdateNodeArgsFailed({
       nodeId,
       tag: "unknown",
       cause,
-    }),
-  };
+    })
+  );
 }
 
 export function makeUnsafeUpdateNodeFailure(
@@ -119,16 +113,15 @@ export function makeUnsafeUpdateNodeFailure(
   request: UnsafeUpdateNodeRequest,
   cause: unknown
 ): UnsafeUpdateNodeResult {
-  return {
-    _tag: "Failure",
-    nodeId: cell.nodeId,
-    error: new UnsafeUpdateNodeFailed({
+  return operationFailure(
+    cell.nodeId,
+    new UnsafeUpdateNodeFailed({
       nodeId: cell.nodeId,
       tag: cell.tag,
       label: request.label,
       cause,
-    }),
-  };
+    })
+  );
 }
 
 export function makeMissingUnsafeUpdateNodeFailure(
@@ -136,16 +129,22 @@ export function makeMissingUnsafeUpdateNodeFailure(
   request: UnsafeUpdateNodeRequest,
   cause: unknown = missingNodeCellInvariant(nodeId)
 ): UnsafeUpdateNodeResult {
-  return {
-    _tag: "Failure",
+  return operationFailure(
     nodeId,
-    error: new UnsafeUpdateNodeFailed({
+    new UnsafeUpdateNodeFailed({
       nodeId,
       tag: "unknown",
       label: request.label,
       cause,
-    }),
-  };
+    })
+  );
+}
+
+function operationFailure<TError>(
+  nodeId: NodeRead["nodeId"],
+  error: TError
+): { readonly _tag: "Failure"; readonly nodeId: NodeRead["nodeId"]; readonly error: TError } {
+  return { _tag: "Failure", nodeId, error };
 }
 
 function missingNodeCellInvariant(nodeId: NodeRead["nodeId"]): GraphInvariantViolation {

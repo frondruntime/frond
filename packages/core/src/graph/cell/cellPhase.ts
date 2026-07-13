@@ -136,7 +136,6 @@ export type CellPhase =
       readonly _tag: "Operating";
       readonly ready: ReadyData;
       readonly operation: ActiveCellOperation;
-      readonly previous?: ReadyData | undefined;
     }
   | {
       readonly _tag: "Releasing";
@@ -208,12 +207,8 @@ export function readyCell(
   return { _tag: "Ready", ready, operationFailure };
 }
 
-export function operatingCell(
-  ready: ReadyData,
-  operation: ActiveCellOperation,
-  previous?: ReadyData | undefined
-): CellPhase {
-  return { _tag: "Operating", ready, operation, previous };
+export function operatingCell(ready: ReadyData, operation: ActiveCellOperation): CellPhase {
+  return { _tag: "Operating", ready, operation };
 }
 
 export function releasingCell(base: CellBase, cleanupFailure?: unknown | undefined): CellPhase {
@@ -328,12 +323,8 @@ export function mapPhaseBase(phase: CellPhase, map: (base: CellBase) => CellBase
     Match.tag("Ready", ({ ready, operationFailure }) =>
       readyCell(mapReadyBase(ready, map), operationFailure)
     ),
-    Match.tag("Operating", ({ ready, operation, previous }) =>
-      operatingCell(
-        mapReadyBase(ready, map),
-        operation,
-        previous === undefined ? undefined : mapReadyBase(previous, map)
-      )
+    Match.tag("Operating", ({ ready, operation }) =>
+      operatingCell(mapReadyBase(ready, map), operation)
     ),
     Match.tag("Releasing", ({ base, cleanupFailure }) => releasingCell(map(base), cleanupFailure)),
     Match.tag("Invalid", ({ base, error }) =>
@@ -347,9 +338,7 @@ export function mapPhaseBase(phase: CellPhase, map: (base: CellBase) => CellBase
 export function mapPhaseReady(phase: CellPhase, map: (ready: ReadyData) => ReadyData): CellPhase {
   return Match.value(phase).pipe(
     Match.tag("Ready", ({ ready, operationFailure }) => readyCell(map(ready), operationFailure)),
-    Match.tag("Operating", ({ ready, operation, previous }) =>
-      operatingCell(map(ready), operation, previous === undefined ? undefined : map(previous))
-    ),
+    Match.tag("Operating", ({ ready, operation }) => operatingCell(map(ready), operation)),
     Match.orElse(() => phase)
   );
 }

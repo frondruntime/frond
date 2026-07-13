@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { Deferred, Fiber } from "effect";
 import type { ActiveNodeLiveDemandSnapshot, NodeId, NodeLiveDemandSnapshot } from "../src/graph";
-import { makeResultObservedReporter } from "../src/graph/liveness/resultObservationBridge";
+import {
+  bridgeObservedResultLease,
+  makeResultObservedReporter,
+} from "../src/graph/liveness/resultObservationBridge";
+import type { NodeLiveLeaseHeldResult, NodeLiveLeaseResult } from "../src/graph/types/liveness";
 import {
   type ActionContract,
   Driver,
@@ -17,6 +22,16 @@ import {
   ProfileNode,
   resourceSpec,
 } from "./graphTestFixtures";
+
+function expectHeldLiveLease(result: NodeLiveLeaseResult): NodeLiveLeaseHeldResult {
+  expect(result._tag).toBe("Held");
+
+  if (result._tag !== "Held") {
+    throw new Error("Expected live lease to be held.");
+  }
+
+  return result;
+}
 
 describe("graph liveness", () => {
   test("result observation bridge reports rejected work and keeps the queue alive", async () => {
@@ -89,6 +104,38 @@ describe("graph liveness", () => {
     }
 
     expect(observedScopes).toEqual(["first", "second"]);
+  });
+
+  test("result observation bridge treats pure interruption as cancellation", async () => {
+    const nodeId = "node:result-observation-interrupt" as NodeId;
+    const observedScopes: Array<unknown> = [];
+    const failures: Array<unknown> = [];
+    const reporter = makeResultObservedReporter(
+      {
+        reportResultObserved: (_nodeId, scope) => {
+          observedScopes.push(scope);
+
+          return scope === "first"
+            ? bridgeObservedResultLease(Effect.interrupt)
+            : Promise.resolve({ _tag: "Missing" } as const);
+        },
+        notifyLiveFailures: (_nodeId, graphFailures) =>
+          Effect.sync(() => {
+            failures.push(...graphFailures);
+          }),
+      },
+      { nodeId, tag: "graph/resources/result-observation-interrupt" }
+    );
+
+    reporter("first", true);
+    reporter("second", true);
+
+    for (let attempt = 0; attempt < 10 && observedScopes.length < 2; attempt += 1) {
+      await Promise.resolve();
+    }
+
+    expect(observedScopes).toEqual(["first", "second"]);
+    expect(failures).toEqual([]);
   });
 
   test("graph observers unsubscribe independently and remain best-effort", async () => {
@@ -204,12 +251,14 @@ describe("graph liveness", () => {
 
     expect(counts.validity).toBe(1);
 
-    const lease = await Effect.runPromise(
-      graph.acquireNodeLiveLease({
-        nodeId: handle.nodeId,
-        source: "manual",
-        scope: { pair: "BTC/USD" },
-      })
+    const lease = expectHeldLiveLease(
+      await Effect.runPromise(
+        graph.acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "BTC/USD" },
+        })
+      )
     );
 
     expect(counts.liveDemand).toBe(1);
@@ -291,19 +340,23 @@ describe("graph liveness", () => {
   test("live leases are reference counted by lease identity", async () => {
     const graph = makeInMemoryGraphSystem();
     const handle = await Effect.runPromise(graph.ensureNode({ spec: ProfileNode, args: {} }));
-    const first = await Effect.runPromise(
-      graph.acquireNodeLiveLease({
-        nodeId: handle.nodeId,
-        source: "manual",
-        scope: { pair: "BTC/USD" },
-      })
+    const first = expectHeldLiveLease(
+      await Effect.runPromise(
+        graph.acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "BTC/USD" },
+        })
+      )
     );
-    const second = await Effect.runPromise(
-      graph.acquireNodeLiveLease({
-        nodeId: handle.nodeId,
-        source: "manual",
-        scope: { pair: "BTC/USD" },
-      })
+    const second = expectHeldLiveLease(
+      await Effect.runPromise(
+        graph.acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "BTC/USD" },
+        })
+      )
     );
 
     const afterFirstRelease = await Effect.runPromise(
@@ -325,6 +378,18 @@ describe("graph liveness", () => {
       })
     );
 
+    expect(afterFirstRelease._tag).toBe("Held");
+    expect(afterSecondRelease._tag).toBe("Held");
+    expect(secondReleaseAgain._tag).toBe("Held");
+
+    if (
+      afterFirstRelease._tag !== "Held" ||
+      afterSecondRelease._tag !== "Held" ||
+      secondReleaseAgain._tag !== "Held"
+    ) {
+      throw new Error("Expected releases for an existing node to return Held.");
+    }
+
     expect(afterFirstRelease.liveDemand).toEqual({
       isLive: true,
       sources: ["manual"],
@@ -338,6 +403,29 @@ describe("graph liveness", () => {
     });
     expect(afterSecondRelease.changed).toBe(true);
     expect(secondReleaseAgain.changed).toBe(false);
+  });
+
+  test("acquiring a live lease for a missing node returns an explicit missing result", async () => {
+    const graph = makeInMemoryGraphSystem();
+    const missingNodeId = 'missing/live:v1:"singleton"' as NodeId;
+
+    const result = await Effect.runPromise(
+      graph.acquireNodeLiveLease({
+        nodeId: missingNodeId,
+        source: "manual",
+        scope: { pair: "BTC/USD" },
+      })
+    );
+
+    expect(result).toMatchObject({
+      _tag: "NodeMissing",
+      nodeId: missingNodeId,
+      liveDemand: {
+        isLive: false,
+        sources: [],
+        scopes: [],
+      },
+    });
   });
 
   test("live demand acquired before readiness is delivered once after readiness", async () => {
@@ -374,12 +462,14 @@ describe("graph liveness", () => {
     const graph = makeInMemoryGraphSystem();
     const handle = await Effect.runPromise(graph.ensureNode({ spec: PreReadyLiveNode, args: {} }));
 
-    const lease = await Effect.runPromise(
-      graph.acquireNodeLiveLease({
-        nodeId: handle.nodeId,
-        source: "manual",
-        scope: { pair: "BTC/USD" },
-      })
+    const lease = expectHeldLiveLease(
+      await Effect.runPromise(
+        graph.acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "BTC/USD" },
+        })
+      )
     );
 
     expect(lease.liveDemand).toEqual({
@@ -509,19 +599,23 @@ describe("graph liveness", () => {
       graph.ensureReadyNode({ spec: StableLiveNode, args: {} })
     );
 
-    const first = await Effect.runPromise(
-      graph.acquireNodeLiveLease({
-        nodeId: handle.nodeId,
-        source: "manual",
-        scope: { pair: "BTC/USD" },
-      })
+    const first = expectHeldLiveLease(
+      await Effect.runPromise(
+        graph.acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "BTC/USD" },
+        })
+      )
     );
-    const second = await Effect.runPromise(
-      graph.acquireNodeLiveLease({
-        nodeId: handle.nodeId,
-        source: "manual",
-        scope: { pair: "BTC/USD" },
-      })
+    const second = expectHeldLiveLease(
+      await Effect.runPromise(
+        graph.acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "BTC/USD" },
+        })
+      )
     );
 
     expect(first.changed).toBe(true);
@@ -589,19 +683,23 @@ describe("graph liveness", () => {
       graph.ensureReadyNode({ spec: RestartingLiveNode, args: {} })
     );
 
-    const btc = await Effect.runPromise(
-      graph.acquireNodeLiveLease({
-        nodeId: handle.nodeId,
-        source: "manual",
-        scope: { pair: "BTC/USD" },
-      })
+    const btc = expectHeldLiveLease(
+      await Effect.runPromise(
+        graph.acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "BTC/USD" },
+        })
+      )
     );
-    const eth = await Effect.runPromise(
-      graph.acquireNodeLiveLease({
-        nodeId: handle.nodeId,
-        source: "manual",
-        scope: { pair: "ETH/USD" },
-      })
+    const eth = expectHeldLiveLease(
+      await Effect.runPromise(
+        graph.acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "ETH/USD" },
+        })
+      )
     );
 
     expect(deliveries).toEqual([
@@ -725,19 +823,23 @@ describe("graph liveness", () => {
       graph.ensureReadyNode({ spec: UpdatingLiveNode, args: {} })
     );
 
-    const btc = await Effect.runPromise(
-      graph.acquireNodeLiveLease({
-        nodeId: handle.nodeId,
-        source: "manual",
-        scope: { pair: "BTC/USD" },
-      })
+    const btc = expectHeldLiveLease(
+      await Effect.runPromise(
+        graph.acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "BTC/USD" },
+        })
+      )
     );
-    const eth = await Effect.runPromise(
-      graph.acquireNodeLiveLease({
-        nodeId: handle.nodeId,
-        source: "manual",
-        scope: { pair: "ETH/USD" },
-      })
+    const eth = expectHeldLiveLease(
+      await Effect.runPromise(
+        graph.acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "ETH/USD" },
+        })
+      )
     );
 
     expect(starts).toEqual([
@@ -847,19 +949,23 @@ describe("graph liveness", () => {
       graph.ensureReadyNode({ spec: UpdatingFailureNode, args: {} })
     );
 
-    const first = await Effect.runPromise(
-      graph.acquireNodeLiveLease({
-        nodeId: handle.nodeId,
-        source: "manual",
-        scope: { pair: "BTC/USD" },
-      })
+    const first = expectHeldLiveLease(
+      await Effect.runPromise(
+        graph.acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "BTC/USD" },
+        })
+      )
     );
-    const second = await Effect.runPromise(
-      graph.acquireNodeLiveLease({
-        nodeId: handle.nodeId,
-        source: "manual",
-        scope: { pair: "ETH/USD" },
-      })
+    const second = expectHeldLiveLease(
+      await Effect.runPromise(
+        graph.acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "ETH/USD" },
+        })
+      )
     );
 
     expect(first.failures).toEqual([]);
@@ -933,14 +1039,16 @@ describe("graph liveness", () => {
     const startHandle = await Effect.runPromise(
       startGraph.ensureReadyNode({ spec: StartTimeoutNode, args: {} })
     );
-    const startLease = await Effect.runPromise(
-      startGraph
-        .acquireNodeLiveLease({
-          nodeId: startHandle.nodeId,
-          source: "manual",
-          scope: { pair: "BTC/USD" },
-        })
-        .pipe(Effect.timeout("200 millis"))
+    const startLease = expectHeldLiveLease(
+      await Effect.runPromise(
+        startGraph
+          .acquireNodeLiveLease({
+            nodeId: startHandle.nodeId,
+            source: "manual",
+            scope: { pair: "BTC/USD" },
+          })
+          .pipe(Effect.timeout("200 millis"))
+      )
     );
     const startFailure = startLease.failures[0];
 
@@ -1000,14 +1108,16 @@ describe("graph liveness", () => {
         scope: { pair: "BTC/USD" },
       })
     );
-    const updateLease = await Effect.runPromise(
-      updateGraph
-        .acquireNodeLiveLease({
-          nodeId: updateHandle.nodeId,
-          source: "manual",
-          scope: { pair: "ETH/USD" },
-        })
-        .pipe(Effect.timeout("200 millis"))
+    const updateLease = expectHeldLiveLease(
+      await Effect.runPromise(
+        updateGraph
+          .acquireNodeLiveLease({
+            nodeId: updateHandle.nodeId,
+            source: "manual",
+            scope: { pair: "ETH/USD" },
+          })
+          .pipe(Effect.timeout("200 millis"))
+      )
     );
     const updateFailure = updateLease.failures[0];
 
@@ -1052,12 +1162,14 @@ describe("graph liveness", () => {
     const stopHandle = await Effect.runPromise(
       stopGraph.ensureReadyNode({ spec: StopTimeoutNode, args: {} })
     );
-    const stopLease = await Effect.runPromise(
-      stopGraph.acquireNodeLiveLease({
-        nodeId: stopHandle.nodeId,
-        source: "manual",
-        scope: { pair: "BTC/USD" },
-      })
+    const stopLease = expectHeldLiveLease(
+      await Effect.runPromise(
+        stopGraph.acquireNodeLiveLease({
+          nodeId: stopHandle.nodeId,
+          source: "manual",
+          scope: { pair: "BTC/USD" },
+        })
+      )
     );
     const stopResult = await Effect.runPromise(
       stopGraph
@@ -1085,6 +1197,7 @@ describe("graph liveness", () => {
   test("unsupported live lease scopes are returned as typed failures", async () => {
     const graph = makeInMemoryGraphSystem();
     const handle = await Effect.runPromise(graph.ensureNode({ spec: ProfileNode, args: {} }));
+    const beforeSnapshot = await Effect.runPromise(graph.readNodeSnapshot(handle.nodeId));
 
     const result = await Effect.runPromise(
       graph.acquireNodeLiveLease({
@@ -1093,8 +1206,9 @@ describe("graph liveness", () => {
         scope: () => "not-json",
       })
     );
+    const afterFailedSnapshot = await Effect.runPromise(graph.readNodeSnapshot(handle.nodeId));
 
-    expect(result.changed).toBe(false);
+    expect(result._tag).toBe("Failed");
     expect(result.liveDemand).toEqual({
       isLive: false,
       sources: [],
@@ -1103,6 +1217,28 @@ describe("graph liveness", () => {
     expect(result.failures[0]).toBeInstanceOf(GraphInvariantViolation);
     expect(result.failures[0]).toMatchObject({
       invariant: "live lease scope must be a JSON-shaped key value",
+    });
+    if (beforeSnapshot._tag !== "Found" || afterFailedSnapshot._tag !== "Found") {
+      throw new Error("Expected snapshots for failed live lease acquisition.");
+    }
+
+    expect(afterFailedSnapshot.snapshot.liveDemand).toEqual(beforeSnapshot.snapshot.liveDemand);
+
+    const valid = expectHeldLiveLease(
+      await Effect.runPromise(
+        graph.acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "BTC/USD" },
+        })
+      )
+    );
+
+    expect(valid.leaseId).toBe("live-lease:1");
+    expect(valid.liveDemand).toEqual({
+      isLive: true,
+      sources: ["manual"],
+      scopes: [{ pair: "BTC/USD" }],
     });
   });
 
@@ -1141,12 +1277,14 @@ describe("graph liveness", () => {
 
     const graph = makeInMemoryGraphSystem();
     const handle = await Effect.runPromise(graph.ensureReadyNode({ spec: LiveNode, args: {} }));
-    const lease = await Effect.runPromise(
-      graph.acquireNodeLiveLease({
-        nodeId: handle.nodeId,
-        source: "manual",
-        scope: { pair: "BTC/USD" },
-      })
+    const lease = expectHeldLiveLease(
+      await Effect.runPromise(
+        graph.acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "BTC/USD" },
+        })
+      )
     );
 
     await Effect.runPromise(
@@ -1273,12 +1411,14 @@ describe("graph liveness", () => {
     const handle = await Effect.runPromise(
       graph.ensureReadyNode({ spec: AsyncLiveNode, args: {} })
     );
-    const lease = await Effect.runPromise(
-      graph.acquireNodeLiveLease({
-        nodeId: handle.nodeId,
-        source: "manual",
-        scope: { pair: "BTC/USD" },
-      })
+    const lease = expectHeldLiveLease(
+      await Effect.runPromise(
+        graph.acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "BTC/USD" },
+        })
+      )
     );
 
     await Effect.runPromise(
@@ -1325,12 +1465,14 @@ describe("graph liveness", () => {
     const failingHandle = await Effect.runPromise(
       failingGraph.ensureReadyNode({ spec: AsyncFailingLiveNode, args: {} })
     );
-    const failingLease = await Effect.runPromise(
-      failingGraph.acquireNodeLiveLease({
-        nodeId: failingHandle.nodeId,
-        source: "manual",
-        scope: { pair: "BTC/USD" },
-      })
+    const failingLease = expectHeldLiveLease(
+      await Effect.runPromise(
+        failingGraph.acquireNodeLiveLease({
+          nodeId: failingHandle.nodeId,
+          source: "manual",
+          scope: { pair: "BTC/USD" },
+        })
+      )
     );
 
     expect(failingLease.failures[0]).toBeInstanceOf(LiveDeliveryFailed);
@@ -1361,6 +1503,135 @@ describe("graph liveness", () => {
     expect(clearedNode?.liveFailure).toBeUndefined();
   });
 
+  test("async live update observes abort signal when interrupted by graph stop", async () => {
+    const updateStarted = await Effect.runPromise(Deferred.make<void>());
+    const updateAborted = await Effect.runPromise(Deferred.make<void>());
+    type AbortableUpdateSpec = NodeSpec<{
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: string;
+    }>;
+
+    class AbortableUpdateNode extends NodeBase<AbortableUpdateSpec> {
+      static readonly spec = resourceSpec<AbortableUpdateSpec>({
+        tag: "graph/resources/abortable-live-update",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        driver: Driver.Async<AbortableUpdateSpec>({
+          acquire: Driver.Acquire(async () => "ready"),
+          live: Driver.Live({
+            start: async () => "live",
+            update: async (ctx) => {
+              await Effect.runPromise(Deferred.succeed(updateStarted, undefined));
+              await new Promise<void>((resolve) => {
+                const markAborted = () => {
+                  void Effect.runPromise(Deferred.succeed(updateAborted, undefined));
+                  resolve();
+                };
+
+                if (ctx.signal.aborted) {
+                  markAborted();
+                  return;
+                }
+
+                ctx.signal.addEventListener("abort", markAborted, { once: true });
+              });
+            },
+            stop: async () => undefined,
+          }),
+        }),
+      });
+    }
+    const graph = makeInMemoryGraphSystem();
+    const handle = await Effect.runPromise(
+      graph.ensureReadyNode({ spec: AbortableUpdateNode, args: {} })
+    );
+    await Effect.runPromise(
+      graph.acquireNodeLiveLease({
+        nodeId: handle.nodeId,
+        source: "manual",
+        scope: { pair: "BTC/USD" },
+      })
+    );
+
+    const updateFiber = await Effect.runPromise(
+      graph
+        .acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "ETH/USD" },
+        })
+        .pipe(Effect.forkDetach)
+    );
+    await Effect.runPromise(Deferred.await(updateStarted));
+    await Effect.runPromise(graph.stop().pipe(Effect.timeout("200 millis")));
+
+    await Effect.runPromise(Deferred.await(updateAborted).pipe(Effect.timeout("200 millis")));
+    await Effect.runPromise(Fiber.interrupt(updateFiber));
+  });
+
+  test("async live stop observes abort signal when interrupted in graph cleanup", async () => {
+    const stopStarted = await Effect.runPromise(Deferred.make<void>());
+    const stopAborted = await Effect.runPromise(Deferred.make<void>());
+    type AbortableStopSpec = NodeSpec<{
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: string;
+    }>;
+
+    class AbortableStopNode extends NodeBase<AbortableStopSpec> {
+      static readonly spec = resourceSpec<AbortableStopSpec>({
+        tag: "graph/resources/abortable-live-stop",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        driver: Driver.Async<AbortableStopSpec>({
+          acquire: Driver.Acquire(async () => "ready"),
+          live: Driver.Live({
+            start: async () => "live",
+            stop: async (ctx) => {
+              await Effect.runPromise(Deferred.succeed(stopStarted, undefined));
+              await new Promise<void>((resolve) => {
+                const markAborted = () => {
+                  void Effect.runPromise(Deferred.succeed(stopAborted, undefined));
+                  resolve();
+                };
+
+                if (ctx.signal.aborted) {
+                  markAborted();
+                  return;
+                }
+
+                ctx.signal.addEventListener("abort", markAborted, { once: true });
+              });
+            },
+          }),
+        }),
+      });
+    }
+    const graph = makeInMemoryGraphSystem();
+    const handle = await Effect.runPromise(
+      graph.ensureReadyNode({ spec: AbortableStopNode, args: {} })
+    );
+    const lease = expectHeldLiveLease(
+      await Effect.runPromise(
+        graph.acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "BTC/USD" },
+        })
+      )
+    );
+    void lease;
+    const stopFiber = await Effect.runPromise(graph.stop().pipe(Effect.forkDetach));
+
+    await Effect.runPromise(Deferred.await(stopStarted));
+    await Effect.runPromise(Fiber.interrupt(stopFiber));
+
+    await Effect.runPromise(Deferred.await(stopAborted).pipe(Effect.timeout("200 millis")));
+  });
+
   test("live startup failure is stored and clears after later non-live cleanup", async () => {
     const cause = new Error("socket refused");
     type FailingLiveSpec = NodeSpec<{
@@ -1389,25 +1660,33 @@ describe("graph liveness", () => {
     const handle = await Effect.runPromise(
       graph.ensureReadyNode({ spec: FailingLiveNode, args: {} })
     );
-    const lease = await Effect.runPromise(
-      graph.acquireNodeLiveLease({
-        nodeId: handle.nodeId,
-        source: "manual",
-        scope: { pair: "BTC/USD" },
-      })
+    const lease = expectHeldLiveLease(
+      await Effect.runPromise(
+        graph.acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "BTC/USD" },
+        })
+      )
     );
     const failedSnapshot = await Effect.runPromise(graph.snapshot());
     const failedNode = failedSnapshot.nodes.find((entry) => entry.nodeId === handle.nodeId);
 
     expect(lease.failures).toHaveLength(1);
     expect(lease.failures[0]).toBeInstanceOf(LiveDeliveryFailed);
+    expect(lease.liveDemand).toEqual({
+      isLive: true,
+      sources: ["manual"],
+      scopes: [{ pair: "BTC/USD" }],
+    });
+    expect(failedNode?.liveDemand).toEqual(lease.liveDemand);
     expect(failedNode?.liveFailure?.failures[0]).toMatchObject({
       _tag: "LiveDeliveryFailed",
       stage: "start",
       cause,
     });
 
-    await Effect.runPromise(
+    const release = await Effect.runPromise(
       graph.releaseNodeLiveLease({
         nodeId: handle.nodeId,
         leaseId: lease.leaseId,
@@ -1416,6 +1695,10 @@ describe("graph liveness", () => {
     const clearedSnapshot = await Effect.runPromise(graph.snapshot());
     const clearedNode = clearedSnapshot.nodes.find((entry) => entry.nodeId === handle.nodeId);
 
+    expect(release).toMatchObject({
+      _tag: "Held",
+      liveDemand: { isLive: false, sources: [], scopes: [] },
+    });
     expect(clearedNode?.liveFailure).toBeUndefined();
   });
 
@@ -1447,12 +1730,14 @@ describe("graph liveness", () => {
     const handle = await Effect.runPromise(
       graph.ensureReadyNode({ spec: DefectLiveNode, args: {} })
     );
-    const lease = await Effect.runPromise(
-      graph.acquireNodeLiveLease({
-        nodeId: handle.nodeId,
-        source: "manual",
-        scope: { pair: "BTC/USD" },
-      })
+    const lease = expectHeldLiveLease(
+      await Effect.runPromise(
+        graph.acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "BTC/USD" },
+        })
+      )
     );
     const failure = lease.failures[0];
     const boundary = failure instanceof LiveDeliveryFailed ? failure.cause : undefined;
@@ -1491,12 +1776,14 @@ describe("graph liveness", () => {
     const handle = await Effect.runPromise(
       graph.ensureReadyNode({ spec: LiveDisposeFailureNode, args: {} })
     );
-    const lease = await Effect.runPromise(
-      graph.acquireNodeLiveLease({
-        nodeId: handle.nodeId,
-        source: "manual",
-        scope: { pair: "BTC/USD" },
-      })
+    const lease = expectHeldLiveLease(
+      await Effect.runPromise(
+        graph.acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "BTC/USD" },
+        })
+      )
     );
     const release = await Effect.runPromise(
       graph.releaseNodeLiveLease({
@@ -1545,12 +1832,14 @@ describe("graph liveness", () => {
 
     await Effect.runPromise(graph.observeLiveFailures(() => Effect.fail(new Error("observer"))));
 
-    const lease = await Effect.runPromise(
-      graph.acquireNodeLiveLease({
-        nodeId: handle.nodeId,
-        source: "manual",
-        scope: { pair: "BTC/USD" },
-      })
+    const lease = expectHeldLiveLease(
+      await Effect.runPromise(
+        graph.acquireNodeLiveLease({
+          nodeId: handle.nodeId,
+          source: "manual",
+          scope: { pair: "BTC/USD" },
+        })
+      )
     );
 
     expect(lease.failures[0]).toBeInstanceOf(LiveDeliveryFailed);

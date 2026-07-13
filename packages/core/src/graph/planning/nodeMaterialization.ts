@@ -1,5 +1,5 @@
-import type { RuntimeReadyNodeConstruction } from "../../node";
-import { withReadyNodeConstruction } from "../../node";
+import type { RuntimeReadyNodeConstruction } from "../../node/runtime";
+import { withReadyNodeConstruction } from "../../node/runtime";
 import type { NodeId, NodeRequest } from "../types";
 import { GraphInvariantViolation, NodeConstructionFailed } from "../types";
 import { type GraphOutcome, graphFailure, graphSuccess } from "./outcome";

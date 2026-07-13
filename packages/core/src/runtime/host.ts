@@ -3,9 +3,9 @@ import type { NodeId } from "../graph";
 import { withGraphSignalAccess } from "../graph/config";
 import { makeInMemoryGraphSystemFromConfig } from "../graph/system";
 import type { EvictSubgraphRequest } from "../graph/types/operations";
+import { canonicalArgs } from "../keys";
 import { FrondRuntimeClosed } from "./errors";
 import { makeRuntimeEventBus } from "./eventBus";
-import { RuntimeEvents } from "./events";
 import { type RuntimeGraphCommand, runRuntimeGraphCommand } from "./graphCommands";
 import { runtimeCommandAttributes, runtimeCommandSpanName, withRuntimeSpan } from "./observability";
 import {
@@ -13,7 +13,6 @@ import {
   runtimeEventTagForGraphObserverChannel,
 } from "./operationStarts";
 import { normalizeRuntimeOptions } from "./options";
-import { makeRuntimeScope } from "./scope";
 import { makeRuntimeSignalBus } from "./signalBus";
 import type {
   RuntimeCommand,
@@ -38,7 +37,7 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
     const workFactory = makeRuntimeWorkFactory(runtimeId);
     const eventBus = makeRuntimeEventBus({
       ...config.eventBus,
-      currentWork: () => workFactory.defaultWork,
+      fallbackWork: () => workFactory.defaultWork,
     });
     const signalBus = makeRuntimeSignalBus({
       runtimeId,
@@ -46,7 +45,6 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
       policies: config.signalBus.policies,
       subscribers: config.signalBus.subscribers,
     });
-    const runtimeScope = makeRuntimeScope();
     const operationStarts = makeRuntimeOperationStartRegistry();
     const graphSystem = makeInMemoryGraphSystemFromConfig(
       withGraphSignalAccess(config.graphConfig, signalBus)
@@ -76,49 +74,53 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
     const graphObserverFailureSubscription = yield* graphSystem.observeObserverFailures((failure) =>
       Effect.gen(function* () {
         const at = yield* Clock.currentTimeMillis;
-        yield* eventBus.emit(
-          RuntimeEvents.runtimeObserverFailureObserved(
-            runtimeEventTagForGraphObserverChannel(failure),
-            failure.cause,
-            at
-          )
-        );
+        yield* eventBus.emit({
+          _tag: "RuntimeObserverFailureObserved",
+          eventTag: runtimeEventTagForGraphObserverChannel(failure),
+          cause: failure.cause,
+          at,
+        });
       })
     );
     const graphNodeChangeSubscription = yield* graphSystem.observeNodeChanges((nodeId) =>
       Effect.gen(function* () {
         const at = yield* Clock.currentTimeMillis;
-        yield* eventBus.emit(RuntimeEvents.graphNodeChanged(nodeId, at));
+        yield* eventBus.emit({ _tag: "GraphNodeChanged", nodeId, at });
       })
     );
     const graphResultValiditySubscription = yield* graphSystem.observeResultValidityChanges(
       (nodeId, previous, next, reason) =>
         Effect.gen(function* () {
           const at = yield* Clock.currentTimeMillis;
-          yield* eventBus.emit(
-            RuntimeEvents.graphNodeResultValidityChanged(nodeId, previous, next, reason, at)
-          );
+          yield* eventBus.emit({
+            _tag: "GraphNodeResultValidityChanged",
+            nodeId,
+            previous,
+            next,
+            reason,
+            at,
+          });
         })
     );
     const graphLiveDemandSubscription = yield* graphSystem.observeLiveDemandChanges(
       (nodeId, liveDemand) =>
         Effect.gen(function* () {
           const at = yield* Clock.currentTimeMillis;
-          yield* eventBus.emit(RuntimeEvents.graphNodeLiveDemandChanged(nodeId, liveDemand, at));
+          yield* eventBus.emit({ _tag: "GraphNodeLiveDemandChanged", nodeId, liveDemand, at });
         })
     );
     const graphLiveFailureSubscription = yield* graphSystem.observeLiveFailures(
       (nodeId, failures) =>
         Effect.gen(function* () {
           const at = yield* Clock.currentTimeMillis;
-          yield* eventBus.emit(RuntimeEvents.graphNodeLiveFailed(nodeId, failures, at));
+          yield* eventBus.emit({ _tag: "GraphNodeLiveFailed", nodeId, failures, at });
         })
     );
     const graphCleanupFailureSubscription = yield* graphSystem.observeCleanupFailures(
       (nodeId, reason, failures) =>
         Effect.gen(function* () {
           const at = yield* Clock.currentTimeMillis;
-          yield* eventBus.emit(RuntimeEvents.graphNodeCleanupFailed(nodeId, reason, failures, at));
+          yield* eventBus.emit({ _tag: "GraphNodeCleanupFailed", nodeId, reason, failures, at });
         })
     );
 
@@ -127,8 +129,11 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
     let graphSubscriptionsClosed = false;
     let stopDeferred: Deferred.Deferred<RuntimeSubmission> | undefined;
 
-    const resolveNodeIdSync: RuntimeHostService["resolveNodeIdSync"] = (request) =>
-      graphSystem.resolveNodeIdSync(request);
+    const resolveNodeIdSync: RuntimeHostService["resolveNodeIdSync"] = (request) => {
+      canonicalArgs(request.args);
+
+      return graphSystem.resolveNodeIdSync(request);
+    };
 
     const getStatusSync: RuntimeHostService["getStatusSync"] = () => status;
     const syncProjectionContext = () => ({ now: syncClock.now() });
@@ -174,10 +179,14 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
             Effect.gen(function* () {
               const at = yield* Clock.currentTimeMillis;
 
+              if (status === "running") {
+                return { _tag: "RuntimeStarted" } satisfies RuntimeSubmission;
+              }
+
               status = "running";
               yield* graphSystem.start();
-              yield* emit(RuntimeEvents.runtimeStarted(at));
-              yield* emit(RuntimeEvents.graphSystemStarted(at));
+              yield* emit({ _tag: "RuntimeStarted", at });
+              yield* emit({ _tag: "GraphSystemStarted", at });
               return { _tag: "RuntimeStarted" } satisfies RuntimeSubmission;
             })
           ),
@@ -218,7 +227,7 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
               const at = yield* Clock.currentTimeMillis;
 
               inputIngestionEnabled = enabled;
-              yield* eventBus.emit(RuntimeEvents.inputIngestionChanged(enabled, at), work);
+              yield* eventBus.emit({ _tag: "InputIngestionChanged", enabled, at }, work);
             })
           ),
           Match.exhaustive
@@ -286,9 +295,12 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
         return inputIngestionEnabled
           ? Effect.gen(function* () {
               const at = yield* Clock.currentTimeMillis;
-              yield* eventBus.emit(RuntimeEvents.runtimeInputReceived(input, at), work);
+              yield* eventBus.emit({ _tag: "RuntimeInputReceived", input, at }, work);
               yield* graphSystem.handleInput(input);
-              yield* eventBus.emit(RuntimeEvents.graphSystemInputObserved(input._tag, at), work);
+              yield* eventBus.emit(
+                { _tag: "GraphSystemInputObserved", inputTag: input._tag, at },
+                work
+              );
             })
           : Effect.void;
       });
@@ -304,12 +316,57 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
         return signalBus.publish(signal, work);
       });
 
+    const recordUnsafeScheduleFailure: RuntimeHostService["recordUnsafeScheduleFailure"] = (
+      command,
+      cause
+    ) =>
+      Effect.gen(function* () {
+        const at = yield* Clock.currentTimeMillis;
+        const work = workFactory.nextWork(undefined, {
+          source: "devtools",
+          reason: "unsafe-update",
+          priority: "background",
+        });
+
+        yield* eventBus.emit(
+          {
+            _tag: "RuntimeObserverFailureObserved",
+            eventTag: command._tag,
+            cause,
+            at,
+          },
+          work
+        );
+      });
+
+    const recordMobXProjectionFailure: RuntimeHostService["recordMobXProjectionFailure"] = (
+      nodeId,
+      cause
+    ) =>
+      Effect.gen(function* () {
+        const at = yield* Clock.currentTimeMillis;
+        const work = workFactory.nextWork(undefined, {
+          source: "mobx",
+          reason: "input",
+          priority: "visible",
+        });
+
+        void nodeId;
+        yield* eventBus.emit(
+          {
+            _tag: "RuntimeObserverFailureObserved",
+            eventTag: "MobXProjectionSync",
+            cause,
+            at,
+          },
+          work
+        );
+      });
+
     const subscribeSignals: RuntimeHostService["subscribeSignals"] = (subscriber) =>
       admitRuntimeWork("RuntimeSignalSubscribe", () => signalBus.subscribe(subscriber));
 
-    const getSnapshot = (): Effect.Effect<RuntimeSnapshot> => getSnapshotFor("diagnostics");
-
-    const getSnapshotFor = (_purpose: Parameters<RuntimeHostService["getSnapshotFor"]>[0]) =>
+    const getSnapshot = (): Effect.Effect<RuntimeSnapshot> =>
       Effect.gen(function* () {
         const graph = yield* graphSystem.snapshot();
         const signals = yield* signalBus.records();
@@ -349,20 +406,26 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
       reason: string | undefined,
       emit: (event: RuntimeEvent) => Effect.Effect<void>
     ): Effect.Effect<RuntimeSubmission> {
-      // Contract: stop is idempotent and shared. The first call owns cleanup
-      // and event emission; concurrent and later callers await the same settled
-      // result instead of acknowledging success while cleanup is still running.
-      if (stopDeferred !== undefined) {
-        return Deferred.await(stopDeferred);
-      }
+      return Effect.suspend(() => {
+        // Contract: stop is idempotent and shared. The first call owns cleanup
+        // and event emission; concurrent and later callers await the same settled
+        // result instead of acknowledging success while cleanup is still running.
+        if (stopDeferred !== undefined) {
+          return Deferred.await(stopDeferred);
+        }
 
-      return Effect.gen(function* () {
-        const deferred = yield* Deferred.make<RuntimeSubmission, never>();
+        const deferred = Deferred.makeUnsafe<RuntimeSubmission, never>();
         stopDeferred = deferred;
-        const exit = yield* Effect.exit(runStopRuntime(reason, emit));
+        const owner = runStopRuntime(reason, emit).pipe(
+          Effect.exit,
+          Effect.flatMap((exit) => Deferred.done(deferred, exit)),
+          Effect.uninterruptible
+        );
 
-        yield* Deferred.done(deferred, exit);
-        return yield* Deferred.await(deferred);
+        return owner.pipe(
+          Effect.forkDetach({ startImmediately: true }),
+          Effect.flatMap(() => Deferred.await(deferred))
+        );
       });
     }
 
@@ -384,19 +447,17 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
           (result) =>
             result.failures.length === 0
               ? Effect.void
-              : emit(
-                  RuntimeEvents.graphNodeCleanupFailed(
-                    result.nodeId,
-                    "runtime-stop",
-                    result.failures,
-                    at
-                  )
-                ),
+              : emit({
+                  _tag: "GraphNodeCleanupFailed",
+                  nodeId: result.nodeId,
+                  reason: "runtime-stop",
+                  failures: result.failures,
+                  at,
+                }),
           { concurrency: 1, discard: true }
         );
-        yield* emit(RuntimeEvents.graphSystemStopped(at));
-        yield* runtimeScope.close();
-        yield* emit(RuntimeEvents.runtimeStopped(at, reason));
+        yield* emit({ _tag: "GraphSystemStopped", at });
+        yield* emit({ _tag: "RuntimeStopped", at, reason });
         return { _tag: "RuntimeStopped" } satisfies RuntimeSubmission;
       });
     }
@@ -412,8 +473,9 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
       ingest,
       publish,
       subscribeSignals,
+      recordUnsafeScheduleFailure,
+      recordMobXProjectionFailure,
       getSnapshot,
-      getSnapshotFor,
       observe,
     };
   });

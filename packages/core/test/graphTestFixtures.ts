@@ -21,10 +21,12 @@ export {
   NodeConstructionFailed,
   NodeEvicted,
   RefreshFailed,
+  ReleaseFailed,
   resultCommit,
   SpecOverrideFailed,
   UpdateNodeArgsFailed,
 } from "../src/graph";
+export { KeyNonFiniteNumberError } from "../src/keys";
 export type { ActionContract, Dep, NodeSpec } from "../src/node";
 export { dep, dependencies, NodeBase, resourceSpec, serviceSpec } from "../src/node";
 export { createRuntime, createRuntimeClient } from "../src/runtime";

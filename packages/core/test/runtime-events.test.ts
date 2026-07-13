@@ -1,14 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { Context, Tracer } from "effect";
+import { Context, Fiber, Tracer } from "effect";
 import {
   createErrorReport,
   createRuntimeEventReports,
   createRuntimeReportSink,
 } from "../src/diagnostics";
+import type { NodeId } from "../src/graph";
 import { FrondRuntimeClosed, FrondRuntimeInvariantViolation, type RuntimeId } from "../src/runtime";
 import { bridgeRuntimeHost } from "../src/runtime/bridge";
+import { runRuntimeGraphCommand } from "../src/runtime/graphCommands";
 import { makeRuntimeHost } from "../src/runtime/host";
 import { FrondRuntimeLive } from "../src/runtime/live";
+import { makeRuntimeOperationStartRegistry } from "../src/runtime/operationStarts";
 import { FrondRuntime } from "../src/runtime/types";
 import { waitForRuntimeEvent, waitForRuntimeNodeRead } from "../src/testing";
 import {
@@ -114,6 +117,60 @@ describe("runtime events", () => {
     expect(result.events.map((record) => record.work.source)).toEqual(["test", "test"]);
     expect(result.events.map((record) => record.work.reason)).toEqual(["preload", "preload"]);
     expect(result.events.map((record) => record.work.priority)).toEqual(["idle", "idle"]);
+  });
+
+  test("runtime sinks are delivered inline before submissions settle", async () => {
+    const sinkStarted = await Effect.runPromise(Deferred.make<void>());
+    const sinkGate = await Effect.runPromise(Deferred.make<void>());
+    let sinkCompleted = false;
+    const runtime = createRuntime({
+      sinks: [
+        {
+          name: "slow",
+          handle: (record) =>
+            record.event._tag === "RuntimeStarted"
+              ? Effect.gen(function* () {
+                  yield* Deferred.succeed(sinkStarted, undefined);
+                  yield* Deferred.await(sinkGate);
+                  sinkCompleted = true;
+                })
+              : Effect.void,
+        },
+      ],
+    });
+
+    const submission = runtime.submit({ _tag: "RuntimeStart" });
+    await Effect.runPromise(Deferred.await(sinkStarted));
+
+    const settledBeforeSink = await Promise.race([
+      submission.then(
+        () => true,
+        () => true
+      ),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 0)),
+    ]);
+
+    expect(settledBeforeSink).toBe(false);
+    expect(sinkCompleted).toBe(false);
+
+    await Effect.runPromise(Deferred.succeed(sinkGate, undefined));
+    await submission;
+
+    expect(sinkCompleted).toBe(true);
+  });
+
+  test("second RuntimeStart is idempotent and emits no duplicate lifecycle events", async () => {
+    const runtime = createRuntime();
+
+    await runtime.submit({ _tag: "RuntimeStart" });
+    await runtime.submit({ _tag: "RuntimeStart" });
+
+    const events = (await runtime.query({ _tag: "RuntimeEvents" })).events;
+
+    expect(events.map((record) => record.event._tag)).toEqual([
+      "RuntimeStarted",
+      "GraphSystemStarted",
+    ]);
   });
 
   test("unsafe node update emits a node change event", async () => {
@@ -494,6 +551,80 @@ describe("runtime events", () => {
     expect(stoppedEvents.filter((tag) => tag === "RuntimeStopped")).toHaveLength(1);
   });
 
+  test("interrupted RuntimeStop caller does not abandon cleanup or wedge later stops", async () => {
+    const releaseStarted = await Effect.runPromise(Deferred.make<void>());
+    const releaseGate = await Effect.runPromise(Deferred.make<void>());
+    let releaseRuns = 0;
+    type InterruptStopSpec = NodeSpec<{
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: string;
+    }>;
+
+    class InterruptStopNode extends NodeBase<InterruptStopSpec> {
+      static readonly spec = serviceSpec<InterruptStopSpec>({
+        tag: "services/runtime-stop-interrupted-release",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        driver: Driver.Effect<InterruptStopSpec>({
+          acquire: Driver.Acquire(() => Effect.succeed("ready")),
+          release: Driver.Release(() =>
+            Effect.gen(function* () {
+              releaseRuns += 1;
+              yield* Deferred.succeed(releaseStarted, undefined);
+              yield* Deferred.await(releaseGate);
+            })
+          ),
+        }),
+      });
+    }
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const host = yield* makeRuntimeHost({ driverTimeouts: { release: 5_000 } });
+
+        yield* host.submit({ _tag: "RuntimeStart" });
+        yield* host.submit({
+          _tag: "GraphEnsureReadyNode",
+          request: { spec: InterruptStopNode, args: {} },
+        });
+
+        const first = yield* host
+          .submit({ _tag: "RuntimeStop", reason: "first" })
+          .pipe(Effect.forkDetach);
+
+        yield* Deferred.await(releaseStarted);
+        yield* Fiber.interrupt(first);
+
+        const second = yield* host
+          .submit({ _tag: "RuntimeStop", reason: "second" })
+          .pipe(Effect.timeout("200 millis"), Effect.forkDetach);
+
+        yield* Deferred.succeed(releaseGate, undefined);
+
+        return {
+          second: yield* Fiber.join(second),
+          third: yield* host.submit({ _tag: "RuntimeStop", reason: "third" }),
+          events: (yield* host.query({ _tag: "RuntimeEvents" })).events,
+        };
+      })
+    );
+
+    expect(result.second).toEqual({ _tag: "RuntimeStopped" });
+    expect(result.third).toEqual({ _tag: "RuntimeStopped" });
+    expect(releaseRuns).toBe(1);
+    expect(result.events.map((record) => record.event._tag)).toEqual([
+      "RuntimeStarted",
+      "GraphSystemStarted",
+      "GraphNodeChanged",
+      "GraphNodeChanged",
+      "GraphNodeReadyEnsured",
+      "GraphSystemStopped",
+      "RuntimeStopped",
+    ]);
+  });
+
   test("runtime emits node changes when readiness retries move error to pending", async () => {
     const gate = await Effect.runPromise(Deferred.make<void>());
     let attempts = 0;
@@ -590,9 +721,9 @@ describe("runtime events", () => {
 
     expect(releaseEvent).toMatchObject({
       _tag: "GraphNodeReleased",
-      failure: { _tag: "DisposerFailed", cause },
+      failure: { _tag: "ReleaseFailed", cause },
     });
-    expect(sinkFailures[0]).toMatchObject({ _tag: "DisposerFailed", cause });
+    expect(sinkFailures[0]).toMatchObject({ _tag: "ReleaseFailed", cause });
   });
 
   test("runtime release event carries release defects as typed cleanup failures", async () => {
@@ -625,7 +756,7 @@ describe("runtime events", () => {
     const failure = releaseEvent?._tag === "GraphNodeReleased" ? releaseEvent.failure : undefined;
     const boundary = failure?.cause;
 
-    expect(failure).toMatchObject({ _tag: "DisposerFailed" });
+    expect(failure).toMatchObject({ _tag: "ReleaseFailed" });
     expect(boundary).toBeInstanceOf(EffectBoundaryFailed);
     expect((boundary as EffectBoundaryFailed | undefined)?.boundary).toBe("driver-release");
     expect((boundary as EffectBoundaryFailed | undefined)?.cause).toBe(cause);
@@ -972,6 +1103,61 @@ describe("runtime events", () => {
     expect(sinkEvents).toEqual(eventTags);
   });
 
+  test("failed runtime refresh submission drains pending-start metadata", async () => {
+    const runtimeId = "refresh-pending-cleanup" as RuntimeId;
+    const nodeId = 'services/refresh-pending-cleanup:v1:"singleton"' as NodeId;
+    const operationStarts = makeRuntimeOperationStartRegistry();
+    const submittedWork = {
+      runtimeId,
+      workId: 1 as never,
+      source: "manual",
+      reason: "refresh",
+      priority: "background",
+    } as const;
+    const fallbackWork = {
+      runtimeId,
+      workId: 2 as never,
+      source: "node",
+      reason: "refresh",
+      priority: "background",
+    } as const;
+
+    await expect(
+      Effect.runPromise(
+        runRuntimeGraphCommand({
+          command: {
+            _tag: "GraphRefreshNode",
+            request: { target: { _tag: "NodeId", nodeId } },
+          },
+          graphSystem: {
+            submitRefreshNode: () => Effect.fail(new Error("refresh submit failed")),
+          } as never,
+          runtimeId,
+          work: submittedWork,
+          emit: () => Effect.void,
+          syncProjectionContext: () => ({ now: 0 }),
+          operationStarts,
+        })
+      )
+    ).rejects.toThrow("refresh submit failed");
+
+    const recorded = operationStarts.recordStarted(
+      {
+        _tag: "RefreshStarted",
+        nodeId,
+        operation: {
+          _tag: "Running",
+          kind: "refresh",
+          operationId: 1,
+          startedAt: 0,
+        },
+      },
+      () => fallbackWork
+    );
+
+    expect(recorded.work).toBe(fallbackWork);
+  });
+
   test("runtime sinks can project failure-bearing events into diagnostics reports", async () => {
     const reports: Array<string> = [];
     type FailingRefreshSpec = NodeSpec<{
@@ -1173,7 +1359,7 @@ describe("runtime events", () => {
     const events = (await runtime.query({ _tag: "RuntimeEvents" })).events;
     const liveFailure = events.find((record) => record.event._tag === "GraphNodeLiveFailed")?.event;
 
-    expect(lease.leaseId).toBeDefined();
+    expect(lease._tag === "Held" ? lease.lease.leaseId : undefined).toBeDefined();
     expect(liveFailure).toMatchObject({
       _tag: "GraphNodeLiveFailed",
       nodeId: node.nodeId,
@@ -1289,7 +1475,7 @@ describe("runtime events", () => {
       _tag: "GraphNodeCleanupFailed",
       nodeId: node.nodeId,
       reason: "runtime-stop",
-      failures: [{ _tag: "DisposerFailed", cause }],
+      failures: [{ _tag: "ReleaseFailed", cause }],
     });
     expect(sinkEvents).toContain("GraphNodeCleanupFailed");
   });
@@ -1451,6 +1637,88 @@ describe("runtime events", () => {
       "GraphSystemStarted",
       "RuntimeObserverFailureObserved",
     ]);
+  });
+
+  test("runtime observer failures are delivered to sinks without recursion on sink failure", async () => {
+    const sinkEvents: Array<string> = [];
+    const runtime = createRuntime({
+      sinks: [
+        {
+          name: "observer-failure-sink",
+          handle: (record) =>
+            Effect.sync(() => {
+              sinkEvents.push(record.event._tag);
+            }),
+        },
+        {
+          name: "observer-failure-failing-sink",
+          handle: (record) =>
+            record.event._tag === "RuntimeObserverFailureObserved"
+              ? Effect.fail(new Error("sink rejected observer failure"))
+              : Effect.void,
+        },
+      ],
+    });
+
+    runtime.observe((record) => {
+      if (record.event._tag === "RuntimeStarted") {
+        throw new Error("observer rejected");
+      }
+    });
+
+    await runtime.submit({ _tag: "RuntimeStart" });
+
+    const events = (await runtime.query({ _tag: "RuntimeEvents" })).events;
+    const tags = events.map((record) => record.event._tag);
+
+    expect(tags).toEqual([
+      "RuntimeStarted",
+      "RuntimeObserverFailureObserved",
+      "RuntimeSinkFailureObserved",
+      "GraphSystemStarted",
+    ]);
+    expect(sinkEvents).toEqual([
+      "RuntimeObserverFailureObserved",
+      "RuntimeStarted",
+      "GraphSystemStarted",
+    ]);
+  });
+
+  test("concurrent independent observer failures both reach a slow sink", async () => {
+    const firstSinkStarted = await Effect.runPromise(Deferred.make<void>());
+    const releaseSink = await Effect.runPromise(Deferred.make<void>());
+    const sinkEvents: Array<string> = [];
+    const runtime = createRuntime({
+      sinks: [
+        {
+          name: "slow-observer-failure-sink",
+          handle: (record) =>
+            record.event._tag === "RuntimeObserverFailureObserved"
+              ? Effect.gen(function* () {
+                  sinkEvents.push(record.event.eventTag);
+                  if (sinkEvents.length === 1) {
+                    yield* Deferred.succeed(firstSinkStarted, undefined);
+                    yield* Deferred.await(releaseSink);
+                  }
+                })
+              : Effect.void,
+        },
+      ],
+    });
+
+    runtime.observe(() => {
+      throw new Error("observer rejected");
+    });
+
+    const first = runtime.submit({ _tag: "RuntimeStart" });
+    await Effect.runPromise(Deferred.await(firstSinkStarted));
+    const second = runtime.control({ _tag: "SetInputIngestion", enabled: false });
+    await Promise.resolve();
+    await Effect.runPromise(Deferred.succeed(releaseSink, undefined));
+    await Promise.all([first, second]);
+
+    expect(sinkEvents).toContain("RuntimeStarted");
+    expect(sinkEvents).toContain("InputIngestionChanged");
   });
 });
 

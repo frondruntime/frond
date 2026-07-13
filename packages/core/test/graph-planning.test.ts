@@ -3,6 +3,7 @@ import {
   AcquireFailed,
   CycleDetected,
   createRuntime,
+  Deferred,
   type Dep,
   DependencyDefinitionFailed,
   DependencyDefinitionFailures,
@@ -187,6 +188,77 @@ describe("graph planning", () => {
     expect(snapshot.nodes.filter((node) => node.tag === "services/replan-leaf")).toHaveLength(1);
   });
 
+  test("re-planning invalidates an acquiring cell without wedging the actor", async () => {
+    const acquireStarted = await Effect.runPromise(Deferred.make<void>());
+    const acquireGate = await Effect.runPromise(Deferred.make<string>());
+
+    type MidAcquireLeafSpec = NodeSpec<{
+      readonly args: { readonly which: string };
+      readonly key: Key.Structure<{ readonly which: string }>;
+      readonly deps: Record<string, never>;
+      readonly result: string;
+    }>;
+
+    class MidAcquireLeafNode extends NodeBase<MidAcquireLeafSpec> {
+      static readonly spec = serviceSpec<MidAcquireLeafSpec>({
+        tag: "services/mid-acquire-replan-leaf",
+        key: (args) => Key.structure({ which: args.which }),
+        dependencies: dependencies(() => ({})),
+        driver: Driver.Effect<MidAcquireLeafSpec>({
+          acquire: Driver.Acquire(() => Effect.succeed("leaf")),
+        }),
+      });
+    }
+
+    type MidAcquireParentSpec = NodeSpec<{
+      readonly args: { readonly which: string };
+      readonly key: Key.Singleton;
+      readonly deps: {
+        readonly leaf: Dep<typeof MidAcquireLeafNode>;
+      };
+      readonly result: string;
+    }>;
+
+    class MidAcquireParentNode extends NodeBase<MidAcquireParentSpec> {
+      static readonly spec = resourceSpec<MidAcquireParentSpec>({
+        tag: "resources/mid-acquire-replan-parent",
+        key: () => Key.singleton(),
+        dependencies: dependencies((args) => ({
+          leaf: dep(MidAcquireLeafNode, { which: args.which }),
+        })),
+        driver: Driver.Effect<MidAcquireParentSpec>({
+          acquire: Driver.Acquire((ctx) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(acquireStarted, undefined);
+              const suffix = yield* Deferred.await(acquireGate);
+              return `${ctx.deps.leaf.result}:${suffix}`;
+            })
+          ),
+        }),
+      });
+    }
+    const graph = makeInMemoryGraphSystem();
+    const firstReady = Effect.runPromise(
+      graph.ensureReadyNode({ spec: MidAcquireParentNode, args: { which: "a" } })
+    );
+
+    await Effect.runPromise(Deferred.await(acquireStarted));
+    const invalid = await Effect.runPromise(
+      graph.ensureNode({ spec: MidAcquireParentNode, args: { which: "b" } })
+    );
+    await Effect.runPromise(Deferred.succeed(acquireGate, "late"));
+    const first = await firstReady;
+    const snapshot = await Effect.runPromise(graph.snapshot());
+    const parent = snapshot.nodes.find(
+      (node) => node.tag === "resources/mid-acquire-replan-parent"
+    );
+
+    expect(invalid._tag).toBe("Invalid");
+    expect(first._tag).toBe("Error");
+    expect(parent?.status._tag).toBe("Invalid");
+    expect(parent?.result).toBeUndefined();
+  });
+
   test("dependency cycles become invalid graph state and do not run drivers", async () => {
     let acquireCount = 0;
 
@@ -317,6 +389,105 @@ describe("graph planning", () => {
     expect(node?.failure).toBeInstanceOf(KeyBuildFailed);
   });
 
+  test("invalid key identities use typed error tags and paths instead of messages", async () => {
+    let firstMessageCounter = 0;
+    let secondMessageCounter = 0;
+
+    type ThrowingKeySpec = NodeSpec<{
+      readonly args: Record<string, never>;
+      readonly key: Key.Structure<{ readonly id: string }>;
+      readonly deps: Record<string, never>;
+      readonly result: string;
+    }>;
+
+    class FirstThrowingKeyNode extends NodeBase<ThrowingKeySpec> {
+      static readonly spec = serviceSpec<ThrowingKeySpec>({
+        tag: "services/throwing-key-first",
+        key: () => {
+          firstMessageCounter += 1;
+          throw new Key.KeyNonFiniteNumberError({
+            _tag: "KeyNonFiniteNumberError",
+            message: `invalid finite value ${firstMessageCounter}`,
+            path: "$.id",
+            value: Number.NaN,
+          });
+        },
+        dependencies: dependencies(() => ({})),
+        driver: Driver.Effect<ThrowingKeySpec>({
+          acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        }),
+      });
+    }
+
+    class SecondThrowingKeyNode extends NodeBase<ThrowingKeySpec> {
+      static readonly spec = serviceSpec<ThrowingKeySpec>({
+        tag: "services/throwing-key-second",
+        key: () => {
+          secondMessageCounter += 1;
+          throw new Key.KeyUnsupportedJsonValueError({
+            _tag: "KeyUnsupportedJsonValueError",
+            message: `invalid JSON value ${secondMessageCounter}`,
+            path: "$.id",
+          });
+        },
+        dependencies: dependencies(() => ({})),
+        driver: Driver.Effect<ThrowingKeySpec>({
+          acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        }),
+      });
+    }
+    const graph = makeInMemoryGraphSystem();
+
+    const firstInitial = await Effect.runPromise(
+      graph.ensureNode({ spec: FirstThrowingKeyNode, args: {} })
+    );
+    const firstRepeat = await Effect.runPromise(
+      graph.ensureNode({ spec: FirstThrowingKeyNode, args: {} })
+    );
+    const secondInitial = await Effect.runPromise(
+      graph.ensureNode({ spec: SecondThrowingKeyNode, args: {} })
+    );
+    const secondRepeat = await Effect.runPromise(
+      graph.ensureNode({ spec: SecondThrowingKeyNode, args: {} })
+    );
+
+    expect(firstInitial.nodeId).toBe(firstRepeat.nodeId);
+    expect(secondInitial.nodeId).toBe(secondRepeat.nodeId);
+    expect(firstInitial.nodeId).not.toBe(secondInitial.nodeId);
+    expect(firstInitial.nodeId).toContain("__invalid__:KeyNonFiniteNumberError:_.id");
+    expect(secondInitial.nodeId).toContain("__invalid__:KeyUnsupportedJsonValueError:_.id");
+  });
+
+  test("invalid key identities sanitize and cap hostile error paths", async () => {
+    const hostileProperty = `line\n${"x".repeat(100_000)}`;
+    type HostileKeySpec = NodeSpec<{
+      readonly args: Record<string, never>;
+      readonly key: Key.Structure<Record<string, string>>;
+      readonly deps: Record<string, never>;
+      readonly result: string;
+    }>;
+
+    class HostileKeyNode extends NodeBase<HostileKeySpec> {
+      static readonly spec = serviceSpec<HostileKeySpec>({
+        tag: "services/hostile-invalid-key",
+        key: () => Key.structure({ [hostileProperty]: (() => "invalid") as unknown as string }),
+        dependencies: dependencies(() => ({})),
+        driver: Driver.Effect<HostileKeySpec>({
+          acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        }),
+      });
+    }
+    const graph = makeInMemoryGraphSystem();
+
+    const handle = await Effect.runPromise(graph.ensureNode({ spec: HostileKeyNode, args: {} }));
+    const label = handle.nodeId.slice("services/hostile-invalid-key:__invalid__:".length);
+
+    expect(handle.nodeId).toContain("__invalid__:KeyUnsupportedJsonValueError:");
+    expect(label.length).toBeLessThanOrEqual(180);
+    expect(label).toMatch(/^[a-zA-Z0-9_.:-]+$/);
+    expect(handle.nodeId).not.toContain("\n");
+  });
+
   test("malformed dependency declarations become invalid graph state", async () => {
     const malformedDependencies = () => "not-a-dependency-record";
     type MalformedDependencySpec = NodeSpec<{
@@ -394,6 +565,68 @@ describe("graph planning", () => {
       invariant: "dependency record entry must be a dependency",
       cause: { dependency: "malformed" },
     });
+  });
+
+  test("non-canonical dependency args become structured dependency definition failures", async () => {
+    type DependencyArgSpec = NodeSpec<{
+      readonly args: { readonly id: string };
+      readonly key: Key.Structure<{ readonly id: string }>;
+      readonly deps: Record<string, never>;
+      readonly result: string;
+    }>;
+
+    class DependencyArgNode extends NodeBase<DependencyArgSpec> {
+      static readonly spec = serviceSpec<DependencyArgSpec>({
+        tag: "services/non-canonical-dependency-args-child",
+        key: (args) => Key.structure({ id: args.id }),
+        dependencies: dependencies(() => ({})),
+        driver: Driver.Effect<DependencyArgSpec>({
+          acquire: Driver.Acquire(() => Effect.succeed("child")),
+        }),
+      });
+    }
+
+    type DependencyArgParentSpec = NodeSpec<{
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: {
+        readonly child: Dep<typeof DependencyArgNode>;
+      };
+      readonly result: string;
+    }>;
+
+    class DependencyArgParentNode extends NodeBase<DependencyArgParentSpec> {
+      static readonly spec = resourceSpec<DependencyArgParentSpec>({
+        tag: "resources/non-canonical-dependency-args-parent",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({
+          child: dep(DependencyArgNode, {
+            id: "child",
+            ignoredByKey: () => "not canonical",
+          } as { readonly id: string }),
+        })),
+        driver: Driver.Effect<DependencyArgParentSpec>({
+          acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.deps.child.result)),
+        }),
+      });
+    }
+    const graph = makeInMemoryGraphSystem();
+
+    const handle = await Effect.runPromise(
+      graph.ensureReadyNode({ spec: DependencyArgParentNode, args: {} })
+    );
+    const snapshot = await Effect.runPromise(graph.snapshot());
+    const parent = snapshot.nodes.find(
+      (entry) => entry.tag === "resources/non-canonical-dependency-args-parent"
+    );
+    const failure = parent?.failure;
+
+    expect(handle.status._tag).toBe("Invalid");
+    expect(failure).toBeInstanceOf(DependencyDefinitionFailed);
+    expect((failure as DependencyDefinitionFailed | undefined)?.dependency).toBe("child");
+    expect((failure as DependencyDefinitionFailed | undefined)?.cause).toBeInstanceOf(
+      Key.KeyUnsupportedJsonValueError
+    );
   });
 
   test("multiple malformed dependency entries aggregate before invalidating parent", async () => {
@@ -619,6 +852,85 @@ describe("graph planning", () => {
     expect(node?.failure).toBeInstanceOf(DuplicateNodeTag);
     expect(releaseRuns).toBe(1);
     expect(disposerRuns).toBe(1);
+  });
+
+  test("ready invalidation release does not block unrelated planning", async () => {
+    const releaseStarted = await Effect.runPromise(Deferred.make<void>());
+    const releaseGate = await Effect.runPromise(Deferred.make<void>());
+    let releaseRuns = 0;
+    type SlowInvalidatedSpec = NodeSpec<{
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: string;
+    }>;
+
+    class SlowInvalidatedNode extends NodeBase<SlowInvalidatedSpec> {
+      static readonly spec = serviceSpec<SlowInvalidatedSpec>({
+        tag: "services/slow-invalidated-release",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        driver: Driver.Effect<SlowInvalidatedSpec>({
+          acquire: Driver.Acquire(() => Effect.succeed("ready")),
+          release: Driver.Release(() =>
+            Effect.gen(function* () {
+              releaseRuns += 1;
+              yield* Deferred.succeed(releaseStarted, undefined);
+              yield* Deferred.await(releaseGate);
+            })
+          ),
+        }),
+      });
+    }
+
+    class ConflictingSlowInvalidatedNode extends NodeBase<SlowInvalidatedSpec> {
+      static readonly spec = serviceSpec<SlowInvalidatedSpec>({
+        tag: "services/slow-invalidated-release",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        driver: Driver.Effect<SlowInvalidatedSpec>({
+          acquire: Driver.Acquire(() => Effect.succeed("conflicting")),
+        }),
+      });
+    }
+
+    type UnrelatedSpec = NodeSpec<{
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: string;
+    }>;
+
+    class UnrelatedNode extends NodeBase<UnrelatedSpec> {
+      static readonly spec = serviceSpec<UnrelatedSpec>({
+        tag: "services/unrelated-during-invalid-release",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        driver: Driver.Effect<UnrelatedSpec>({
+          acquire: Driver.Acquire(() => Effect.succeed("unrelated")),
+        }),
+      });
+    }
+
+    const graph = makeInMemoryGraphSystem();
+
+    await Effect.runPromise(graph.ensureReadyNode({ spec: SlowInvalidatedNode, args: {} }));
+    const invalidation = Effect.runPromise(
+      graph.ensureNode({ spec: ConflictingSlowInvalidatedNode, args: {} })
+    );
+
+    await Effect.runPromise(Deferred.await(releaseStarted));
+
+    const unrelated = await Effect.runPromise(
+      graph.ensureNode({ spec: UnrelatedNode, args: {} }).pipe(Effect.timeout("50 millis"))
+    );
+
+    await Effect.runPromise(Deferred.succeed(releaseGate, undefined));
+    const invalid = await invalidation;
+
+    expect(unrelated.status).toMatchObject({ _tag: "Wired", run: { _tag: "Idle" } });
+    expect(invalid.status._tag).toBe("Invalid");
+    expect(releaseRuns).toBe(1);
   });
 
   test("spec overrides substitute dependency node specs during planning and readiness", async () => {

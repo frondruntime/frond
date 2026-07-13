@@ -58,12 +58,40 @@ export interface ReleaseNodeLiveLeaseRequest {
   readonly leaseId: NodeLiveLeaseId;
 }
 
-export interface NodeLiveLeaseResult {
+/**
+ * Held means a lease was recorded in the node cell and is releasable by leaseId.
+ * Failed means acquisition recorded no lease; liveDemand is the current demand.
+ */
+export type NodeLiveLeaseResult =
+  | NodeLiveLeaseHeldResult
+  | NodeLiveLeaseFailedResult
+  | NodeLiveLeaseNodeMissingResult;
+
+/**
+ * A recorded lease. Delivery failures can coexist with Held when the demand
+ * record exists and the lease remains releasable.
+ */
+export interface NodeLiveLeaseHeldResult {
+  readonly _tag: "Held";
   readonly nodeId: NodeId;
   readonly leaseId: NodeLiveLeaseId;
   readonly liveDemand: NodeLiveDemandSnapshot;
   readonly changed: boolean;
   readonly failures: ReadonlyArray<GraphFailure>;
+}
+
+/** Acquisition failed before recording a releasable lease. */
+export interface NodeLiveLeaseFailedResult {
+  readonly _tag: "Failed";
+  readonly nodeId: NodeId;
+  readonly liveDemand: NodeLiveDemandSnapshot;
+  readonly failures: ReadonlyArray<GraphFailure>;
+}
+
+export interface NodeLiveLeaseNodeMissingResult {
+  readonly _tag: "NodeMissing";
+  readonly nodeId: NodeId;
+  readonly liveDemand: NodeLiveDemandSnapshot;
 }
 
 export type ObservedResultLease =

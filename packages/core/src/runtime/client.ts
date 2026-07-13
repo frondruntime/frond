@@ -3,6 +3,7 @@ import type { NodeId } from "../graph/types/ids";
 import type { NodeLiveSource } from "../graph/types/liveness";
 import type { ActionResult, EvictResult, RefreshResult } from "../graph/types/operations";
 import type { NodeRead } from "../graph/types/reads";
+import { isKeyError } from "../keys";
 import { FrondRuntimeInvariantViolation } from "./errors";
 import { bootingRuntimeNodeRead, type RuntimeReadHost, readNode } from "./nodeRead";
 import type {
@@ -11,6 +12,7 @@ import type {
   RuntimeCommand,
   RuntimeNodeHandle,
   RuntimeNodeLiveLease,
+  RuntimeNodeLiveLeaseResult,
   RuntimeNodeRead,
   RuntimeNodeSnapshotLookup,
   RuntimeSubmission,
@@ -139,7 +141,25 @@ function createRuntimeNodeHandle<TArgs, TResult>(
       );
     },
     updateArgs: async (nextArgs, metadata) => {
-      const nextNodeId = runtime.resolveNodeIdSync({ spec, args: nextArgs });
+      let nextNodeId: NodeId;
+
+      try {
+        nextNodeId = runtime.resolveNodeIdSync({ spec, args: nextArgs });
+      } catch (cause) {
+        if (!isKeyError(cause)) {
+          throw cause;
+        }
+
+        return {
+          _tag: "Failure",
+          nodeId,
+          error: new UpdateNodeArgsFailed({
+            nodeId,
+            tag: "unknown",
+            cause,
+          }),
+        };
+      }
 
       if (nextNodeId !== nodeId) {
         return {
@@ -221,7 +241,40 @@ function createRuntimeNodeHandle<TArgs, TResult>(
           metadata,
         },
         "GraphNodeLiveLeaseAcquired",
-        ({ leaseId }) => makeRuntimeNodeLiveLease(runtime, nodeId, leaseId, source, scope)
+        ({ result }) => {
+          switch (result._tag) {
+            case "Held":
+              return {
+                _tag: "Held",
+                nodeId: result.nodeId,
+                lease: makeRuntimeNodeLiveLease(
+                  runtime,
+                  result.nodeId,
+                  result.leaseId,
+                  source,
+                  scope
+                ),
+                liveDemand: result.liveDemand,
+              } satisfies RuntimeNodeLiveLeaseResult;
+            case "Failed":
+              return {
+                _tag: "Failure",
+                nodeId: result.nodeId,
+                failures: result.failures,
+                liveDemand: result.liveDemand,
+              } satisfies RuntimeNodeLiveLeaseResult;
+            case "NodeMissing":
+              return {
+                _tag: "NodeMissing",
+                nodeId: result.nodeId,
+                liveDemand: result.liveDemand,
+              } satisfies RuntimeNodeLiveLeaseResult;
+            default: {
+              const exhaustive: never = result;
+              return exhaustive;
+            }
+          }
+        }
       );
     },
     snapshot: async () => {

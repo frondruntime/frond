@@ -1,11 +1,18 @@
 export {
+  isKeyError,
   type KeyError,
   type KeyErrorTag,
   KeyNonFiniteNumberError,
   KeyTooLongError,
   KeyUnsupportedJsonValueError,
 } from "./errors";
-export { canonicalKey, type JsonValue, type KeyInput, MAX_CANONICAL_KEY_LENGTH } from "./key";
+export {
+  canonicalArgs,
+  canonicalKey,
+  type JsonValue,
+  type KeyInput,
+  MAX_CANONICAL_KEY_LENGTH,
+} from "./key";
 export {
   Key,
   type Key as KeyValue,

@@ -1,4 +1,5 @@
 import { Deferred, Effect } from "effect";
+import type { GraphNodeCell } from "../cell/cellModel";
 import {
   type CellBase,
   type CellPhase,
@@ -6,7 +7,6 @@ import {
   phaseBase,
 } from "../cell/cellPhase";
 import { beginReadinessAttemptState, failReadinessAttemptState } from "../cell/cellTransitions";
-import type { GraphNodeCell } from "../planning/plan";
 import { GraphInvariantViolation, type NodeRead, type ResultValidity } from "../types";
 
 export function runReadinessAttempt(

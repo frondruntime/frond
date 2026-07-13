@@ -138,8 +138,13 @@ export function createDeferredDriver<
   };
 
   if (options.refresh === true) {
-    driverSpec.refresh = (ctx: AsyncDriverContext<TNode, TArgs, TDeps, TResult>) =>
-      refresh.run(ctx).then(() => undefined);
+    driverSpec.refresh = async (ctx: AsyncDriverContext<TNode, TArgs, TDeps, TResult>) => {
+      const next = await refresh.run(ctx);
+
+      if (next !== undefined) {
+        ctx.setResult(next);
+      }
+    };
   }
 
   if (options.release === true) {

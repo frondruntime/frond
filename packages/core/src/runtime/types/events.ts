@@ -56,7 +56,7 @@ export type RuntimeEvent =
     }
   | {
       readonly _tag: "RuntimeObserverFailureObserved";
-      readonly eventTag: RuntimeEvent["_tag"];
+      readonly eventTag: string;
       readonly cause: unknown;
       readonly at: number;
     }

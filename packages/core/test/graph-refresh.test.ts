@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Fiber } from "effect";
 import {
   type ActionContract,
   ActionProfileNode,
@@ -647,6 +648,122 @@ describe("graph refresh", () => {
     expect(node?.result).toEqual({ value: "fresh:2" });
   });
 
+  test("never-awaited refresh submission clears admission after worker completion", async () => {
+    const firstStarted = await Effect.runPromise(Deferred.make<void>());
+    const firstGate = await Effect.runPromise(Deferred.make<void>());
+    const firstCompleted = await Effect.runPromise(Deferred.make<void>());
+    let refreshCount = 0;
+
+    type NeverAwaitedRefreshSpec = NodeSpec<{
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: { readonly value: number };
+    }>;
+
+    class NeverAwaitedRefreshNode extends NodeBase<NeverAwaitedRefreshSpec> {
+      static readonly spec = resourceSpec<NeverAwaitedRefreshSpec>({
+        tag: "resources/never-awaited-refresh",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        driver: Driver.Effect<NeverAwaitedRefreshSpec>({
+          acquire: Driver.Acquire(() => Effect.succeed({ value: 0 })),
+          refresh: Driver.Refresh((ctx) =>
+            Effect.gen(function* () {
+              refreshCount += 1;
+              if (refreshCount === 1) {
+                yield* Deferred.succeed(firstStarted, undefined);
+                yield* Deferred.await(firstGate);
+              }
+              yield* ctx.setResult({ value: refreshCount });
+              if (refreshCount === 1) {
+                yield* Deferred.succeed(firstCompleted, undefined);
+              }
+            })
+          ),
+        }),
+      });
+    }
+    const graph = makeInMemoryGraphSystem();
+    const request = {
+      target: {
+        _tag: "NodeRequest" as const,
+        request: { spec: NeverAwaitedRefreshNode, args: {} },
+      },
+    };
+
+    await Effect.runPromise(graph.ensureReadyNode({ spec: NeverAwaitedRefreshNode, args: {} }));
+    const first = await Effect.runPromise(graph.submitRefreshNode(request));
+    expect(first._tag).toBe("Started");
+    await Effect.runPromise(Deferred.await(firstStarted));
+    await Effect.runPromise(Deferred.succeed(firstGate, undefined));
+    await Effect.runPromise(Deferred.await(firstCompleted));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const second = await Effect.runPromise(graph.submitRefreshNode(request));
+    expect(second._tag).toBe("Started");
+    const result = second._tag === "Started" ? await Effect.runPromise(second.task.await) : second;
+
+    expect(result._tag).toBe("Success");
+    expect(refreshCount).toBe(2);
+  });
+
+  test("interrupted refresh caller clears admission after worker completion", async () => {
+    const firstStarted = await Effect.runPromise(Deferred.make<void>());
+    const firstGate = await Effect.runPromise(Deferred.make<void>());
+    let refreshCount = 0;
+
+    type InterruptedRefreshAdmissionSpec = NodeSpec<{
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: { readonly value: number };
+    }>;
+
+    class InterruptedRefreshAdmissionNode extends NodeBase<InterruptedRefreshAdmissionSpec> {
+      static readonly spec = resourceSpec<InterruptedRefreshAdmissionSpec>({
+        tag: "resources/interrupted-refresh-admission",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        driver: Driver.Effect<InterruptedRefreshAdmissionSpec>({
+          acquire: Driver.Acquire(() => Effect.succeed({ value: 0 })),
+          refresh: Driver.Refresh((ctx) =>
+            Effect.gen(function* () {
+              refreshCount += 1;
+              if (refreshCount === 1) {
+                yield* Deferred.succeed(firstStarted, undefined);
+                yield* Deferred.await(firstGate);
+              }
+              yield* ctx.setResult({ value: refreshCount });
+            })
+          ),
+        }),
+      });
+    }
+    const graph = makeInMemoryGraphSystem();
+    const request = {
+      target: {
+        _tag: "NodeRequest" as const,
+        request: { spec: InterruptedRefreshAdmissionNode, args: {} },
+      },
+    };
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* graph.ensureReadyNode({ spec: InterruptedRefreshAdmissionNode, args: {} });
+        const first = yield* graph.refreshNode(request).pipe(Effect.forkDetach);
+
+        yield* Deferred.await(firstStarted);
+        yield* Fiber.interrupt(first);
+        yield* Deferred.succeed(firstGate, undefined);
+        const second = yield* graph.refreshNode(request).pipe(Effect.timeout("200 millis"));
+
+        expect(second._tag).toBe("Success");
+        expect(refreshCount).toBe(2);
+      })
+    );
+  });
+
   test("coalesced refresh failure resolves every caller with one operation failure", async () => {
     const refreshStarted = await Effect.runPromise(Deferred.make<void>());
     const refreshGate = await Effect.runPromise(Deferred.make<void>());
@@ -942,6 +1059,7 @@ describe("graph refresh", () => {
         target: { _tag: "NodeRequest", request: { spec: ParentNode, args: { id: "right" } } },
       })
     );
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     await Effect.runPromise(Deferred.succeed(childGate, undefined));
     const [leftResult, rightResult] = await Promise.all([left, right]);

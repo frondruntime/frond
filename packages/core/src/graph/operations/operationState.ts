@@ -1,11 +1,11 @@
 import { Clock, Effect } from "effect";
+import type { GraphNodeCell } from "../cell/cellModel";
 import type { ActiveCellOperation } from "../cell/cellPhase";
 import {
   beginNodeOperationState,
   completeNodeOperationState,
   failNodeOperationState,
 } from "../cell/cellTransitions";
-import type { GraphNodeCell } from "../planning/plan";
 import {
   GraphInvariantViolation,
   type GraphOperationStarted,
@@ -131,37 +131,43 @@ function graphOperationStarted(
   operation: ActiveCellOperation,
   actionInput: unknown
 ): GraphOperationStarted {
-  if (operation.kind === "action") {
-    if (operation.action === undefined) {
-      throw new GraphInvariantViolation({
+  switch (operation.kind) {
+    case "action": {
+      if (operation.action === undefined) {
+        throw new GraphInvariantViolation({
+          nodeId: cell.nodeId,
+          tag: cell.tag,
+          invariant: "action operation start requires action name",
+        });
+      }
+
+      return {
+        _tag: "ActionStarted",
         nodeId: cell.nodeId,
-        tag: cell.tag,
-        invariant: "action operation start requires action name",
-      });
+        operation: operation as RunningActionOperation,
+        action: operation.action,
+        input: actionInput,
+      };
     }
-
-    return {
-      _tag: "ActionStarted",
-      nodeId: cell.nodeId,
-      operation: operation as RunningActionOperation,
-      action: operation.action,
-      input: actionInput,
-    };
+    case "refresh":
+      return {
+        _tag: "RefreshStarted",
+        nodeId: cell.nodeId,
+        operation: operation as RunningRefreshOperation,
+      };
+    case "args":
+      return {
+        _tag: "ArgsUpdateStarted",
+        nodeId: cell.nodeId,
+        operation: operation as RunningArgsOperation,
+      };
+    default:
+      return assertNeverOperationKind(operation.kind);
   }
+}
 
-  if (operation.kind === "refresh") {
-    return {
-      _tag: "RefreshStarted",
-      nodeId: cell.nodeId,
-      operation: operation as RunningRefreshOperation,
-    };
-  }
-
-  return {
-    _tag: "ArgsUpdateStarted",
-    nodeId: cell.nodeId,
-    operation: operation as RunningArgsOperation,
-  };
+function assertNeverOperationKind(kind: never): never {
+  throw new Error(`Unsupported node operation kind: ${String(kind)}`);
 }
 
 function completeNodeOperation(

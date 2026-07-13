@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import type { GraphNodeCell, GraphNodeState } from "../cell/cellModel";
 import { phaseReadyData, type ReadyData } from "../cell/cellPhase";
 import { completeReleaseState } from "../cell/cellTransitions";
 import { makeDisposeContext } from "../driverExecution/driverContext";
@@ -7,13 +8,12 @@ import {
   runTimedDriverOperation,
 } from "../driverExecution/driverOperationRunner";
 import { stopCurrentLiveResource } from "../liveness";
-import type { GraphNodeCell, GraphNodeState } from "../planning/plan";
 import { closeReadyNode } from "../planning/readyNodeRuntime";
 import {
-  DisposerFailed,
   type DriverOperationTimeoutMs,
   type GraphFailure,
   type LiveResourceStopReason,
+  ReleaseFailed,
 } from "../types";
 import { runDisposers } from "./disposers";
 
@@ -80,7 +80,7 @@ function runRelease(
   cell: GraphNodeCell,
   node: object,
   timeout: DriverOperationTimeoutMs
-): Effect.Effect<ReadonlyArray<DisposerFailed>> {
+): Effect.Effect<ReadonlyArray<GraphFailure>> {
   const { release } = cell.descriptor.driver;
 
   if (release._tag === "Missing") {
@@ -114,9 +114,9 @@ function runRelease(
           "frond.driver.mode": cell.descriptor.driver.mode,
         },
         run: () => release.run(ctx),
-      }).pipe(Effect.as([] as ReadonlyArray<DisposerFailed>)),
+      }).pipe(Effect.as([] as ReadonlyArray<GraphFailure>)),
       "driver-release",
-      (cause) => Effect.succeed([toDisposerFailed(cell, cause)])
+      (cause) => Effect.succeed([toReleaseFailed(cell, cause)])
     );
     const disposerFailures = yield* runDisposers(cell, releaseDisposers);
 
@@ -124,8 +124,8 @@ function runRelease(
   });
 }
 
-function toDisposerFailed(cell: GraphNodeCell, cause: unknown): DisposerFailed {
-  return cause instanceof DisposerFailed
+function toReleaseFailed(cell: GraphNodeCell, cause: unknown): ReleaseFailed {
+  return cause instanceof ReleaseFailed
     ? cause
-    : new DisposerFailed({ nodeId: cell.nodeId, tag: cell.tag, cause });
+    : new ReleaseFailed({ nodeId: cell.nodeId, tag: cell.tag, cause });
 }

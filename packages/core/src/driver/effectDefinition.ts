@@ -14,7 +14,7 @@ import type {
 export function createEffectDriver<
   TResult,
   TActions extends EffectDriverActionMap<object, unknown, object, TResult>,
-  R = never,
+  R extends never = never,
 >(
   driver: EffectDriver<object, unknown, object, TResult, TActions, R>
 ): Driver<object, unknown, object, TResult, EffectDriverActionContracts<TActions>>;
@@ -24,7 +24,7 @@ export function createEffectDriver<
   TResult = unknown,
   TArgs = unknown,
   TActions extends EffectDriverActionMap<TNode, TArgs, TDeps, TResult> = Record<string, never>,
-  R = never,
+  R extends never = never,
 >(
   driver: EffectDriver<TNode, TArgs, TDeps, TResult, TActions, R>
 ): Driver<object, unknown, object, TResult, EffectDriverActionContracts<TActions>>;
@@ -34,7 +34,7 @@ export function createEffectDriver<
   TResult = unknown,
   TArgs = unknown,
   TActions extends EffectDriverActionMap<TNode, TArgs, TDeps, TResult> = Record<string, never>,
-  R = never,
+  R extends never = never,
 >(
   driver: EffectDriver<TNode, TArgs, TDeps, TResult, TActions, R>
 ): Driver<object, unknown, object, TResult, EffectDriverActionContracts<TActions>> {
@@ -52,6 +52,7 @@ export function createEffectDriver<
   >({
     mode: "effect",
     resultValidity: driver.resultValidity,
+    resultPatch: driver.resultPatch,
     acquire: (ctx) =>
       Effect.suspend(
         () => driver.acquire(ctx.effect) as Effect.Effect<TResult | ResultCommit<TResult>, unknown>
@@ -96,10 +97,8 @@ function normalizeEffectLiveResource<TNode extends object>(
   const resource = {
     start: (ctx, demand) =>
       Effect.suspend(() => live.start(ctx.effect, demand) as Effect.Effect<unknown, unknown>),
-    stop: (ctx, resource, reason) =>
-      Effect.suspend(
-        () => live.stop({ ...ctx.effect, reason }, resource) as Effect.Effect<void, unknown>
-      ),
+    stop: (ctx, resource) =>
+      Effect.suspend(() => live.stop(ctx.effect, resource) as Effect.Effect<void, unknown>),
   } satisfies NormalizedLiveResource<TNode>;
 
   return live.update === undefined

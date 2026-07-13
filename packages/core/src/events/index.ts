@@ -1,6 +1,5 @@
 import { Match } from "effect";
 import type { NodeId, NodeStatus } from "../graph";
-import { runtimeEventNodeIds } from "../runtime/events";
 import type { RuntimeEvent } from "../runtime/types";
 
 export type RuntimeEventCategory =
@@ -22,100 +21,164 @@ export interface RuntimeEventClassification {
   readonly timeline: RuntimeEventTimeline;
 }
 
-export function classify(event: RuntimeEvent): RuntimeEventClassification {
-  return classifyRuntimeEvent(event);
+type RuntimeEventTag = RuntimeEvent["_tag"];
+type RuntimeEventOf<TTag extends RuntimeEventTag> = Extract<RuntimeEvent, { readonly _tag: TTag }>;
+
+interface RuntimeEventMetadata<TEvent extends RuntimeEvent> {
+  readonly classify: (event: TEvent) => RuntimeEventClassification;
+  readonly failures: (event: TEvent) => ReadonlyArray<unknown>;
+  readonly nodeIds: (event: TEvent) => ReadonlyArray<NodeId>;
 }
 
-const classifyRuntimeEvent = Match.type<RuntimeEvent>().pipe(
-  Match.tagsExhaustive({
-    RuntimeStarted: () => lifecycle("info", "system"),
-    RuntimeStopped: () => lifecycle("info", "state"),
-    InputIngestionChanged: () => command("info", "system"),
-    RuntimeInputReceived: () => input("info", "system"),
-    RuntimeSignalPublished: () => input("info", "system"),
-    RuntimeSignalSubscriberFailureObserved: () => diagnostic("error", "system"),
-    RuntimeSinkFailureObserved: () => diagnostic("error", "system"),
-    RuntimeObserverFailureObserved: () => diagnostic("error", "system"),
-    GraphSystemStarted: () => lifecycle("info", "system"),
-    GraphSystemStopped: () => lifecycle("info", "state"),
-    GraphSystemInputObserved: () => input("debug", "system"),
-    GraphNodeEnsured: ({ status }) =>
-      nodeStatusFailure(status) === undefined
-        ? command("debug", "state")
-        : operation("error", "state", true),
-    GraphNodeReadyEnsured: ({ status }) =>
-      nodeStatusFailure(status) === undefined
-        ? command("debug", "state")
-        : operation("error", "state", true),
-    GraphNodeChanged: () => state("debug", "state"),
-    GraphActionStarted: () => operation("info", "work"),
-    GraphActionSucceeded: () => operation("info", "work"),
-    GraphActionFailed: () => operation("error", "work", true),
-    GraphRefreshStarted: () => operation("info", "work"),
-    GraphRefreshSucceeded: () => operation("info", "work"),
-    GraphRefreshFailed: () => operation("error", "work", true),
-    GraphNodeArgsUpdateStarted: () => operation("info", "work"),
-    GraphNodeArgsUpdateSucceeded: () => operation("info", "work"),
-    GraphNodeArgsUpdateFailed: () => operation("error", "work", true),
-    GraphUnsafeNodeUpdated: () => operation("info", "work"),
-    GraphUnsafeNodeUpdateFailed: () => operation("error", "work", true),
-    GraphNodeReleased: ({ failure }) =>
-      failure === undefined ? state("info", "state") : operation("error", "state", true),
-    GraphNodesEvicted: ({ failures }) =>
-      failures.length === 0 ? state("info", "state") : operation("error", "state", true),
-    GraphNodeCleanupFailed: () => diagnostic("error", "state"),
-    GraphNodeLiveDemandChanged: () => state("debug", "live"),
-    GraphNodeLiveFailed: () => operation("error", "live", true),
-    GraphNodeResultValidityChanged: () => state("info", "state"),
-  })
-);
+export function classify(event: RuntimeEvent): RuntimeEventClassification {
+  return eventMetadata(event).classify(event as never);
+}
 
 export function failures(event: RuntimeEvent): ReadonlyArray<unknown> {
-  return runtimeEventFailures(event);
+  return eventMetadata(event).failures(event as never);
 }
-
-const runtimeEventFailures = Match.type<RuntimeEvent>().pipe(
-  Match.tagsExhaustive({
-    RuntimeStarted: () => [],
-    RuntimeStopped: () => [],
-    InputIngestionChanged: () => [],
-    RuntimeInputReceived: () => [],
-    RuntimeSignalPublished: () => [],
-    RuntimeSignalSubscriberFailureObserved: ({ cause }) => [cause],
-    RuntimeSinkFailureObserved: ({ cause }) => [cause],
-    RuntimeObserverFailureObserved: ({ cause }) => [cause],
-    GraphSystemStarted: () => [],
-    GraphSystemStopped: () => [],
-    GraphSystemInputObserved: () => [],
-    GraphNodeEnsured: ({ status }) => maybeFailure(nodeStatusFailure(status)),
-    GraphNodeReadyEnsured: ({ status }) => maybeFailure(nodeStatusFailure(status)),
-    GraphNodeChanged: () => [],
-    GraphActionStarted: () => [],
-    GraphActionSucceeded: () => [],
-    GraphActionFailed: ({ error }) => [error],
-    GraphRefreshStarted: () => [],
-    GraphRefreshSucceeded: () => [],
-    GraphRefreshFailed: ({ error }) => [error],
-    GraphNodeArgsUpdateStarted: () => [],
-    GraphNodeArgsUpdateSucceeded: () => [],
-    GraphNodeArgsUpdateFailed: ({ error }) => [error],
-    GraphUnsafeNodeUpdated: () => [],
-    GraphUnsafeNodeUpdateFailed: ({ error }) => [error],
-    GraphNodeReleased: ({ failure }) => (failure === undefined ? [] : [failure]),
-    GraphNodesEvicted: ({ failures }) => failures,
-    GraphNodeCleanupFailed: ({ failures }) => failures,
-    GraphNodeLiveDemandChanged: () => [],
-    GraphNodeLiveFailed: ({ failures }) => failures,
-    GraphNodeResultValidityChanged: () => [],
-  })
-);
 
 export function isReportable(event: RuntimeEvent): boolean {
   return classify(event).reportable;
 }
 
 export function nodeIds(event: RuntimeEvent): ReadonlyArray<NodeId> {
-  return runtimeEventNodeIds(event);
+  return eventMetadata(event).nodeIds(event as never);
+}
+
+const runtimeEventMetadata = {
+  RuntimeStarted: fixed(lifecycle("info", "system")),
+  RuntimeStopped: fixed(lifecycle("info", "state")),
+  InputIngestionChanged: fixed(command("info", "system")),
+  RuntimeInputReceived: fixed(input("info", "system")),
+  RuntimeSignalPublished: fixed(input("info", "system")),
+  RuntimeSignalSubscriberFailureObserved: metadata({
+    classification: diagnostic("error", "system"),
+    failures: ({ cause }) => [cause],
+  }),
+  RuntimeSinkFailureObserved: metadata({
+    classification: diagnostic("error", "system"),
+    failures: ({ cause }) => [cause],
+  }),
+  RuntimeObserverFailureObserved: metadata({
+    classification: diagnostic("error", "system"),
+    failures: ({ cause }) => [cause],
+  }),
+  GraphSystemStarted: fixed(lifecycle("info", "system")),
+  GraphSystemStopped: fixed(lifecycle("info", "state")),
+  GraphSystemInputObserved: fixed(input("debug", "system")),
+  GraphNodeEnsured: metadata({
+    classify: ({ status }) =>
+      nodeStatusFailure(status) === undefined
+        ? command("debug", "state")
+        : operation("error", "state", true),
+    failures: ({ status }) => maybeFailure(nodeStatusFailure(status)),
+    nodeIds: ({ nodeId }) => [nodeId],
+  }),
+  GraphNodeReadyEnsured: metadata({
+    classify: ({ status }) =>
+      nodeStatusFailure(status) === undefined
+        ? command("debug", "state")
+        : operation("error", "state", true),
+    failures: ({ status }) => maybeFailure(nodeStatusFailure(status)),
+    nodeIds: ({ nodeId }) => [nodeId],
+  }),
+  GraphNodeChanged: nodeEvent(state("debug", "state")),
+  GraphActionStarted: nodeEvent(operation("info", "work")),
+  GraphActionSucceeded: nodeEvent(operation("info", "work")),
+  GraphActionFailed: metadata({
+    classification: operation("error", "work", true),
+    failures: ({ error }) => [error],
+    nodeIds: ({ nodeId }) => [nodeId],
+  }),
+  GraphRefreshStarted: nodeEvent(operation("info", "work")),
+  GraphRefreshSucceeded: nodeEvent(operation("info", "work")),
+  GraphRefreshFailed: metadata({
+    classification: operation("error", "work", true),
+    failures: ({ error }) => [error],
+    nodeIds: ({ nodeId }) => [nodeId],
+  }),
+  GraphNodeArgsUpdateStarted: nodeEvent(operation("info", "work")),
+  GraphNodeArgsUpdateSucceeded: nodeEvent(operation("info", "work")),
+  GraphNodeArgsUpdateFailed: metadata({
+    classification: operation("error", "work", true),
+    failures: ({ error }) => [error],
+    nodeIds: ({ nodeId }) => [nodeId],
+  }),
+  GraphUnsafeNodeUpdated: nodeEvent(operation("info", "work")),
+  GraphUnsafeNodeUpdateFailed: metadata({
+    classification: operation("error", "work", true),
+    failures: ({ error }) => [error],
+    nodeIds: ({ nodeId }) => [nodeId],
+  }),
+  GraphNodeReleased: metadata({
+    classify: ({ failure }) =>
+      failure === undefined ? state("info", "state") : operation("error", "state", true),
+    failures: ({ failure }) => (failure === undefined ? [] : [failure]),
+    nodeIds: ({ nodeId }) => [nodeId],
+  }),
+  GraphNodesEvicted: metadata({
+    classify: ({ failures }) =>
+      failures.length === 0 ? state("info", "state") : operation("error", "state", true),
+    failures: ({ failures }) => failures,
+    nodeIds: ({ nodeIds }) => nodeIds,
+  }),
+  GraphNodeCleanupFailed: metadata({
+    classification: diagnostic("error", "state"),
+    failures: ({ failures }) => failures,
+    nodeIds: ({ nodeId }) => [nodeId],
+  }),
+  GraphNodeLiveDemandChanged: nodeEvent(state("debug", "live")),
+  GraphNodeLiveFailed: metadata({
+    classification: operation("error", "live", true),
+    failures: ({ failures }) => failures,
+    nodeIds: ({ nodeId }) => [nodeId],
+  }),
+  GraphNodeResultValidityChanged: nodeEvent(state("info", "state")),
+} satisfies {
+  readonly [TTag in RuntimeEventTag]: RuntimeEventMetadata<RuntimeEventOf<TTag>>;
+};
+
+function eventMetadata(event: RuntimeEvent): RuntimeEventMetadata<never> {
+  return runtimeEventMetadata[event._tag] as RuntimeEventMetadata<never>;
+}
+
+function fixed<TEvent extends RuntimeEvent>(
+  classification: RuntimeEventClassification
+): RuntimeEventMetadata<TEvent> {
+  return metadata({ classification });
+}
+
+function nodeEvent<TEvent extends RuntimeEvent & { readonly nodeId: NodeId }>(
+  classification: RuntimeEventClassification
+): RuntimeEventMetadata<TEvent> {
+  return metadata({
+    classification,
+    nodeIds: ({ nodeId }) => [nodeId],
+  });
+}
+
+function metadata<TEvent extends RuntimeEvent>(input: {
+  readonly classification?: RuntimeEventClassification | undefined;
+  readonly classify?: ((event: TEvent) => RuntimeEventClassification) | undefined;
+  readonly failures?: ((event: TEvent) => ReadonlyArray<unknown>) | undefined;
+  readonly nodeIds?: ((event: TEvent) => ReadonlyArray<NodeId>) | undefined;
+}): RuntimeEventMetadata<TEvent> {
+  const classify =
+    input.classify ??
+    (() => {
+      if (input.classification === undefined) {
+        throw new Error("Runtime event metadata must define classification.");
+      }
+
+      return input.classification;
+    });
+
+  return {
+    classify,
+    failures: input.failures ?? (() => []),
+    nodeIds: input.nodeIds ?? (() => []),
+  };
 }
 
 function lifecycle(

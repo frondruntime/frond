@@ -14,9 +14,10 @@ import type {
   NormalizedDriverContext,
   NormalizedLiveContext,
   NormalizedLiveStopContext,
+  ResultPatchOptions,
 } from "../../driver/types";
 import type { RuntimeSignalAccess } from "../../signals";
-import type { GraphNodeCell } from "../planning/plan";
+import type { GraphNodeCell } from "../cell/cellModel";
 import {
   commitResultState,
   type ResultCommitDefaultValidity,
@@ -42,6 +43,7 @@ export function makeDriverContext<TDeps extends object>(input: {
   readonly now: () => number;
   readonly setResultDefaultValidity?: ResultCommitDefaultValidity | undefined;
   readonly cloneResultOnPatch?: boolean | undefined;
+  readonly resultPatch?: ResultPatchOptions | undefined;
 }): NormalizedDriverContext<object, unknown, TDeps, unknown> {
   const acquireContext = makeAcquireDriverContext(input);
 
@@ -71,6 +73,7 @@ export function makeAcquireDriverContext<TDeps extends object>(input: {
   readonly now: () => number;
   readonly setResultDefaultValidity?: ResultCommitDefaultValidity | undefined;
   readonly cloneResultOnPatch?: boolean | undefined;
+  readonly resultPatch?: ResultPatchOptions | undefined;
 }): NormalizedAcquireDriverContext<unknown, TDeps, unknown> {
   let resultClonedForPatch = false;
   const setResult = (
@@ -112,9 +115,11 @@ export function makeAcquireDriverContext<TDeps extends object>(input: {
     if (input.cloneResultOnPatch === true && !resultClonedForPatch) {
       input.setCurrentResultState({
         ...input.getCurrentResultState(),
-        result: clonePatchableResult(current),
+        result: clonePatchableResult(current, input.resultPatch, input.cell),
       });
       resultClonedForPatch = true;
+    } else {
+      assertPatchableResult(current, input.resultPatch, input.cell);
     }
 
     recipe(input.getCurrentResultState().result);
@@ -176,15 +181,42 @@ export function makeAcquireDriverContext<TDeps extends object>(input: {
   return { effect: effectContext, async: asyncContext };
 }
 
-function clonePatchableResult(value: unknown): unknown {
+function clonePatchableResult(
+  value: unknown,
+  options: ResultPatchOptions | undefined,
+  context: GraphNodeCell
+): unknown {
   if (Array.isArray(value)) {
-    return value.map((entry) => clonePatchableResult(entry));
+    return value.map((entry) => clonePatchableResult(entry, options, context));
   }
 
   if (isPlainObject(value)) {
     return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, clonePatchableResult(entry)])
+      Object.entries(value).map(([key, entry]) => [
+        key,
+        clonePatchableResult(entry, options, context),
+      ])
     );
+  }
+
+  if (typeof value === "object" && value !== null) {
+    const nonPlainClone = options?.nonPlainClone;
+
+    if (nonPlainClone === "share") {
+      return value;
+    }
+
+    if (typeof nonPlainClone === "function") {
+      return nonPlainClone(value);
+    }
+
+    throw new GraphInvariantViolation({
+      nodeId: context.nodeId,
+      tag: context.tag,
+      invariant:
+        "driver patchResult requires resultPatch.nonPlainClone for non-plain result values",
+      cause: { constructorName: value.constructor?.name },
+    });
   }
 
   return value;
@@ -198,6 +230,27 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   const prototype = Object.getPrototypeOf(value);
 
   return prototype === Object.prototype || prototype === null;
+}
+
+function assertPatchableResult(
+  value: unknown,
+  options: ResultPatchOptions | undefined,
+  context: GraphNodeCell
+): void {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || isPlainObject(value)) {
+    return;
+  }
+
+  if (options?.nonPlainClone !== undefined) {
+    return;
+  }
+
+  throw new GraphInvariantViolation({
+    nodeId: context.nodeId,
+    tag: context.tag,
+    invariant: "driver patchResult requires resultPatch.nonPlainClone for non-plain result values",
+    cause: { constructorName: value.constructor?.name },
+  });
 }
 
 export function makeDisposeContext(input: {

@@ -1,5 +1,9 @@
 import { Effect } from "effect";
-import type { AsyncLiveResourceDescriptor } from "./liveDescriptor";
+import type {
+  AsyncLiveContext,
+  AsyncLiveResourceDescriptor,
+  AsyncLiveStopContext,
+} from "./liveDescriptor";
 import { buildNormalizedDriver } from "./normalize";
 import type {
   AsyncDriver,
@@ -57,6 +61,7 @@ export function createAsyncDriver<
   >({
     mode: "async",
     resultValidity: driver.resultValidity,
+    resultPatch: driver.resultPatch,
     acquire: (ctx) => runAsyncResult(() => driver.acquire(ctx.async)),
     release: driver.release,
     refresh: driver.refresh,
@@ -82,9 +87,9 @@ function normalizeAsyncLiveResource<TNode extends object>(
   live: AsyncLiveResourceDescriptor<TNode, unknown>
 ): NormalizedLiveResource<TNode> {
   const resource = {
-    start: (ctx, demand) => runAsyncResource(() => live.start(ctx.async, demand)),
-    stop: (ctx, resource, reason) =>
-      runAsyncVoid(() => live.stop({ ...ctx.async, reason }, resource)),
+    start: (ctx, demand) =>
+      runAsyncLiveResource(ctx.async, (liveCtx) => live.start(liveCtx, demand)),
+    stop: (ctx, resource) => runAsyncLiveVoid(ctx.async, () => live.stop(ctx.async, resource)),
   } satisfies NormalizedLiveResource<TNode>;
 
   return live.update === undefined
@@ -92,7 +97,7 @@ function normalizeAsyncLiveResource<TNode extends object>(
     : {
         ...resource,
         update: (ctx, liveResource, demand) =>
-          runAsyncVoid(() => live.update?.(ctx.async, liveResource, demand)),
+          runAsyncLiveVoid(ctx.async, (liveCtx) => live.update?.(liveCtx, liveResource, demand)),
       };
 }
 
@@ -132,16 +137,26 @@ function runAsyncResult<TValue>(
   );
 }
 
-function runAsyncResource<TValue>(
-  run: () => TValue | Promise<TValue>
+function runAsyncLiveResource<TNode extends object, TValue>(
+  ctx: AsyncLiveContext<TNode>,
+  run: (ctx: AsyncLiveContext<TNode>) => TValue | Promise<TValue>
 ): Effect.Effect<TValue, AsyncDriverHookFailed> {
-  return runAsync<TValue, TValue>(run, succeedSync);
+  return runAsyncWithAbortSignal<TValue, TValue>((signal) => run({ ...ctx, signal }), succeedSync);
 }
 
 function runAsyncVoid(
   run: () => AsyncDriverVoidResult | undefined
 ): Effect.Effect<void, AsyncDriverHookFailed> {
   return runAsync<void, void>(run as () => void | Promise<void> | undefined, succeedVoid);
+}
+
+function runAsyncLiveVoid<TNode extends object>(
+  ctx: AsyncLiveContext<TNode>,
+  run: (
+    ctx: AsyncLiveContext<TNode> | AsyncLiveStopContext<TNode>
+  ) => AsyncDriverVoidResult | undefined
+): Effect.Effect<void, AsyncDriverHookFailed> {
+  return runAsyncWithAbortSignal<void, void>((signal) => run({ ...ctx, signal }), succeedVoid);
 }
 
 function runAsyncAction<TValue>(
@@ -180,4 +195,14 @@ function isPromiseLike<TValue>(value: unknown): value is Promise<TValue> {
     "then" in value &&
     typeof (value as { readonly then?: unknown }).then === "function"
   );
+}
+
+function runAsyncWithAbortSignal<TIn, TOut>(
+  run: (signal: AbortSignal) => TIn | Promise<TIn> | undefined,
+  onSync: (value: TIn | undefined) => Effect.Effect<TOut, AsyncDriverHookFailed>
+): Effect.Effect<TOut, AsyncDriverHookFailed> {
+  return Effect.tryPromise({
+    try: (signal) => Promise.resolve(run(signal)),
+    catch: (cause) => new AsyncDriverHookFailed(cause),
+  }).pipe(Effect.flatMap(onSync));
 }

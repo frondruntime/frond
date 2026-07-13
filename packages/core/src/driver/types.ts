@@ -19,7 +19,6 @@ import type {
   AsyncLiveStopContext,
   EffectLiveResourceDescriptor,
   LiveContext,
-  LiveResourceStopReason,
   LiveStopContext,
 } from "./liveDescriptor";
 
@@ -67,7 +66,31 @@ export interface DriverActionDescriptor<TRun> {
   readonly admission: ActionAdmission;
 }
 
+export type ResultPatchNonPlainClone = "share" | ((value: unknown) => unknown);
+
+export interface ResultPatchOptions {
+  /**
+   * `patchResult` clones plain objects and arrays before running the recipe so
+   * failed operations can roll back staged mutations. Non-plain values fail
+   * loudly by default because class instances and observables cannot be cloned
+   * with uniform isolation semantics.
+   *
+   * Use "share" only when the driver author accepts shared-reference staging:
+   * recipe mutations are visible immediately. If the operation later fails, the
+   * mutation remains observable on the failed node's result because the stored
+   * result is the same shared reference. Provide a clone function when the
+   * result type has a domain-specific copy operation.
+   */
+  readonly nonPlainClone?: ResultPatchNonPlainClone | undefined;
+}
+
 export interface ActionContract<TInput = void, TOutput = void> {
+  /**
+   * TOutput is the caller-facing action return value. It is not required to be
+   * assignable to the node result type and is never committed as node.result.
+   * Actions update node.result only through setResult, patchResult, or
+   * setResultValidity on the driver context.
+   */
   readonly _input?: TInput | undefined;
   readonly _output?: TOutput | undefined;
 }
@@ -165,6 +188,15 @@ export type AsyncAcquireDriverContext<TArgs, TDeps extends object, TResult> = {
   readonly signal: AbortSignal;
   readonly disposers: DisposerBag;
   readonly signals: AsyncRuntimeSignalAccess;
+  /**
+   * Result staging is shared by acquire, refresh, and action hooks: mutations
+   * staged through setResult, setResultValidity, or patchResult are committed on
+   * hook success. For acquire and refresh, a defined hook return is result-typed
+   * and supersedes the staged result value, but not explicitly staged validity.
+   * For actions, the hook return is ActionContract output for the caller and is
+   * result-neutral; actions update node.result only through these staging
+   * helpers.
+   */
   readonly setResult: (
     next: TResult | ResultCommit<TResult> | ((current: TResult) => TResult | ResultCommit<TResult>)
   ) => void;
@@ -203,6 +235,7 @@ export type AsyncDriver<
   TActions extends AsyncDriverActionMap<TNode, TArgs, TDeps, TResult> = Record<string, never>,
 > = {
   readonly resultValidity?: ResultValidityPolicy | undefined;
+  readonly resultPatch?: ResultPatchOptions | undefined;
   readonly acquire: (
     ctx: AsyncAcquireDriverContext<TArgs, TDeps, TResult>
   ) => AsyncDriverResult<TResult>;
@@ -226,9 +259,10 @@ export type EffectDriver<
   TDeps extends object = object,
   TResult = unknown,
   TActions extends EffectDriverActionMap<TNode, TArgs, TDeps, TResult> = Record<string, never>,
-  R = never,
+  R extends never = never,
 > = {
   readonly resultValidity?: ResultValidityPolicy | undefined;
+  readonly resultPatch?: ResultPatchOptions | undefined;
   readonly acquire: (
     ctx: DriverAcquireContext<TArgs, TDeps, TResult>
   ) => Effect.Effect<TResult | ResultCommit<TResult>, unknown, R>;
@@ -282,6 +316,7 @@ export type Driver<
   readonly mode: DriverMode;
   readonly _actions?: TActions | undefined;
   readonly resultValidity?: ResultValidityPolicy | undefined;
+  readonly resultPatch?: ResultPatchOptions | undefined;
   readonly acquire: (
     ctx: NormalizedAcquireDriverContext<TArgs, TDeps, TResult>
   ) => Effect.Effect<TResult | ResultCommit<TResult>, unknown>;
@@ -332,8 +367,7 @@ export interface NormalizedLiveResource<TNode extends object> {
   ) => Effect.Effect<void, unknown>;
   readonly stop: (
     ctx: NormalizedLiveStopContext<TNode>,
-    resource: unknown,
-    reason: LiveResourceStopReason
+    resource: unknown
   ) => Effect.Effect<void, unknown>;
 }
 
@@ -350,6 +384,15 @@ export type DriverAcquireContext<TArgs, TDeps extends object, TResult> = {
   readonly signal: AbortSignal;
   readonly disposers: DisposerBag;
   readonly signals: RuntimeSignalAccess;
+  /**
+   * Result staging is shared by acquire, refresh, and action hooks: mutations
+   * staged through setResult, setResultValidity, or patchResult are committed on
+   * hook success. For acquire and refresh, a defined hook return is result-typed
+   * and supersedes the staged result value, but not explicitly staged validity.
+   * For actions, the hook return is ActionContract output for the caller and is
+   * result-neutral; actions update node.result only through these staging
+   * helpers.
+   */
   readonly setResult: (
     next: TResult | ResultCommit<TResult> | ((current: TResult) => TResult | ResultCommit<TResult>)
   ) => Effect.Effect<void, unknown>;

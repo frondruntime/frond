@@ -18,9 +18,7 @@ export function makeInspectionSnapshotForbiddenRuntime(options: RuntimeOptions =
   const runtime = {
     ...source,
     getSnapshotSync: forbiddenSnapshot,
-    getSnapshotSyncFor: forbiddenSnapshot,
     getSnapshot: async () => forbiddenSnapshot(),
-    getSnapshotFor: async () => forbiddenSnapshot(),
   } satisfies RuntimeInstance;
 
   return {

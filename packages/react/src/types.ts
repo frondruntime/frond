@@ -10,7 +10,12 @@ import type {
   ResolvedDeps,
 } from "@frondruntime/core";
 
-export type ReactNodeSpec<TArgs, TDeps extends object, TResult, TNode extends object> = NodeSpec<{
+export type ReactNodeSpec<
+  TArgs extends Frond.Key.KeyInput,
+  TDeps extends object,
+  TResult,
+  TNode extends object,
+> = NodeSpec<{
   readonly args: TArgs;
   readonly deps: TDeps;
   readonly result: TResult;

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import type { GraphNodeState } from "../src/graph/cell/cellModel";
 import { makeGraphCellState } from "../src/graph/cell/cellState";
-import type { GraphNodeState } from "../src/graph/planning/plan";
 import type { Runtime } from "../src/runtime";
 import {
   type ActionContract,
@@ -93,7 +93,7 @@ describe("runtime projection surface", () => {
     expect(trapped.snapshotCalls()).toBe(0);
   });
 
-  test("runtime snapshot purpose is currently an intent label, not a shape selector", async () => {
+  test("runtime snapshot uses one projection shape", async () => {
     const runtime = createRuntime();
     const handle = runtime.client.node<Record<string, never>, { readonly value: string }>(
       ProjectionReadyNode,
@@ -102,14 +102,12 @@ describe("runtime projection surface", () => {
 
     await handle.ensureReady();
 
-    const diagnostics = await runtime.getSnapshotFor("diagnostics");
-    const productRead = await runtime.getSnapshotFor("product-read");
-    const testSnapshot = await runtime.getSnapshotFor("test");
+    const first = await runtime.getSnapshot();
+    const second = await runtime.getSnapshot();
 
-    expect(productRead.graph).toEqual(diagnostics.graph);
-    expect(testSnapshot.graph).toEqual(diagnostics.graph);
-    expect(productRead.events.map((record) => record.event._tag)).toEqual(
-      diagnostics.events.map((record) => record.event._tag)
+    expect(second.graph).toEqual(first.graph);
+    expect(second.events.map((record) => record.event._tag)).toEqual(
+      first.events.map((record) => record.event._tag)
     );
   });
 

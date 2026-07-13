@@ -1,7 +1,7 @@
 import { Clock, Deferred, Effect } from "effect";
+import type { GraphNodeCell } from "../cell/cellModel";
 import { phaseBase } from "../cell/cellPhase";
 import { ensureDependencyNodes, type GraphOperationEnvironment } from "../operations/dependencies";
-import type { GraphNodeCell } from "../planning/plan";
 import { effectiveResultValidity } from "../resultValidity";
 import type { NodeRead } from "../types";
 import { runAcquire } from "./acquireOperation";
