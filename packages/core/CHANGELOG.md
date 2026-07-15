@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.0](https://github.com/frondruntime/frond/compare/core-v0.0.3...core-v0.1.0) (2026-07-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* Node args must be canonical KeyInput values (JSON-shaped): functions, Dates, and class instances are rejected at compile time and at runtime with typed KeyErrors, including by React's arg fingerprinting. Action return values are no longer committed to node.result - update results exclusively through setResult/patchResult/setResultValidity. The snapshot API loses its purpose parameter (getSnapshotFor/getSnapshotSyncFor and RuntimeSnapshotPurpose removed; use getSnapshot/getSnapshotSync). The RuntimeEvents constructor namespace is removed; construct events as plain RuntimeEvent literals. Live-lease acquisition returns a Held | Failure | NodeMissing union that callers must narrow (Failure carries typed errors for acquisitions that recorded nothing). GraphFailure gains a ReleaseFailed variant. Driver.Effect pins its requirements channel to never. TimeBound result validity no longer overrides explicitly non-Current stored validity; runtime.stop() cleanup is uninterruptible and idempotent; event sinks deliver inline and are awaited before submissions settle.
+
+### Features
+
+* harden runtime lifecycle, enforce canonical args, unify result staging ([#11](https://github.com/frondruntime/frond/issues/11)) ([0a512e3](https://github.com/frondruntime/frond/commit/0a512e3084f86129bd35155d3780433e84b7e7c0))
+
 ## [0.0.3](https://github.com/frondruntime/frond/compare/core-v0.0.2...core-v0.0.3) (2026-06-30)
 
 
