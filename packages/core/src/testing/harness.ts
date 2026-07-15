@@ -1,3 +1,4 @@
+import { projectError } from "../diagnostics";
 import type {
   DependenciesRecord,
   FrondNode,
@@ -182,6 +183,15 @@ export function createFrondTestHarness(options: FrondTestHarnessOptions = {}): F
       const read = handle.read();
 
       if (read._tag !== "Ready") {
+        if (read._tag === "Error") {
+          const projection = projectError(read.error);
+
+          throw new Error(
+            `Expected Frond test node read Ready, received Error: ${projection.rootTag}: ${projection.rootMessage}.`,
+            { cause: read.error }
+          );
+        }
+
         throw new Error(`Expected Frond test node read Ready, received ${read._tag}.`);
       }
 
@@ -283,14 +293,14 @@ export async function waitForRuntimeEventCount(
   );
   const isMatch = runtimeEventPredicate(predicate);
   const startedAt = performance.now();
-  let events = await readRuntimeEvents(source);
   const matches: Array<RuntimeEventRecord> = [];
   // Track the highest sequence already scanned so each poll only inspects newly
   // appended events. Keyed by sequence (not index) to stay correct when the
   // bounded event buffer trims older records between polls.
   let lastScannedSequence = 0;
+  let events = await readRuntimeEvents(source);
 
-  while (performance.now() - startedAt <= normalizedOptions.timeoutMs) {
+  while (true) {
     for (const record of events) {
       if (record.sequence > lastScannedSequence) {
         lastScannedSequence = record.sequence;
@@ -303,6 +313,10 @@ export async function waitForRuntimeEventCount(
 
     if (matches.length >= count) {
       return matches;
+    }
+
+    if (performance.now() - startedAt > normalizedOptions.timeoutMs) {
+      break;
     }
 
     await sleep(normalizedOptions.intervalMs);
@@ -330,29 +344,55 @@ export function waitForRuntimeNodeRead<TArgs, TResult>(
   return new Promise((resolve, reject) => {
     let latestRead = handle.read();
     let unsubscribe: (() => void) | undefined;
+    let settled = false;
     const timeout = setTimeout(() => {
-      unsubscribe?.();
-      reject(
+      fail(
         new Error(
           `Timed out waiting for Frond node read${waitDescription(normalizedOptions)}. Latest read: ${latestRead._tag}.`
         )
       );
     }, normalizedOptions.timeoutMs);
-    const finish = (read: RuntimeNodeRead<TResult>) => {
+    const cleanup = () => {
       clearTimeout(timeout);
       unsubscribe?.();
+      unsubscribe = undefined;
+    };
+    const finish = (read: RuntimeNodeRead<TResult>) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      cleanup();
       resolve(read);
     };
-    const check = () => {
-      latestRead = handle.read();
+    const fail = (cause: unknown) => {
+      if (settled) {
+        return;
+      }
 
-      if (predicate(latestRead)) {
-        finish(latestRead);
+      settled = true;
+      cleanup();
+      reject(cause);
+    };
+    const check = () => {
+      try {
+        latestRead = handle.read();
+
+        if (predicate(latestRead)) {
+          finish(latestRead);
+        }
+      } catch (cause) {
+        fail(cause);
       }
     };
 
-    unsubscribe = handle.subscribe(check);
-    check();
+    try {
+      unsubscribe = handle.subscribe(check);
+      check();
+    } catch (cause) {
+      fail(cause);
+    }
   });
 }
 
@@ -395,7 +435,7 @@ async function waitForIdle(
   const intervalMs = Math.max(options.intervalMs, 5);
 
   while (performance.now() - startedAt <= options.timeoutMs) {
-    const snapshot = await runtime.getSnapshotFor("test");
+    const snapshot = await runtime.getSnapshot();
     const busyNode = snapshot.graph.nodes.find(
       (node) =>
         node.operation._tag === "Running" ||

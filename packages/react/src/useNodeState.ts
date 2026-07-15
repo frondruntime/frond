@@ -55,7 +55,7 @@ export function useNodeState<TSpec extends NodeSpecLike>(
   // args must not re-run the effect, but a genuine same-identity arg change must.
   // biome-ignore lint/correctness/useExhaustiveDependencies: argsFingerprint stands in for argsRef.current.
   useEffect(() => {
-    void store.updateArgs(argsRef.current);
+    void store.updateArgs(argsRef.current).catch(() => undefined);
   }, [argsFingerprint, store]);
   useSyncExternalStore(store.subscribe, store.getVersion, store.getVersion);
 

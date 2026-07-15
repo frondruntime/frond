@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 
-import type { DisposerFailed, GraphCleanupFailureObserver, NodeId } from "../types";
+import type { GraphCleanupFailureObserver, GraphFailure, NodeId } from "../types";
 
 // Bridge: late cleanup failures can arrive from orphaned synchronous/promise
 // driver continuations after the owning operation effect has already settled.
@@ -10,7 +10,7 @@ export function reportDetachedCleanupFailure(
   notifyCleanupFailures: GraphCleanupFailureObserver,
   nodeId: NodeId,
   reason: Parameters<GraphCleanupFailureObserver>[1],
-  failures: ReadonlyArray<DisposerFailed>
+  failures: ReadonlyArray<GraphFailure>
 ): void {
   void Effect.runPromise(notifyCleanupFailures(nodeId, reason, failures)).catch(() => undefined);
 }

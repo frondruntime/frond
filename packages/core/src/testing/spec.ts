@@ -86,7 +86,7 @@ export function readySpec<TSpec extends NodeSpecLike>(
       Record<string, never>
     >({
       acquire: () => Effect.succeed(result),
-    }) as Driver<
+    }) as unknown as Driver<
       FrondNode<
         NodeSpecArgs<TSpec>,
         ResolvedDeps<Record<string, never>>,

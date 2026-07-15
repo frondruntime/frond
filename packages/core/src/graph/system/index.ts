@@ -1,15 +1,17 @@
 import { Clock, Effect, Layer, Match, Semaphore } from "effect";
 import { makeGraphCellActorRegistry } from "../cell/actorRegistry";
 import { lookupGraphNodeCell } from "../cell/cellLookup";
+import type { GraphPlanState } from "../cell/cellModel";
 import { ensureReadyOperation, refreshOperation } from "../cell/cellOperations";
+import { submitToCellActor } from "../cell/cellSubmission";
 import { type NormalizedGraphSystemConfig, normalizeGraphSystemOptions } from "../config";
 import { releaseCell } from "../lifecycle/cleanup";
 import { evictSubgraph } from "../lifecycle/eviction";
-import { ensurePlannedNode, type GraphPlanState, resolveEffectiveNodeId } from "../planning/plan";
+import { resolveEffectiveNodeId } from "../planning/identity";
+import { ensurePlannedNode } from "../planning/plan";
 import { projectNodeSnapshot, toSnapshot } from "../projection";
 import {
   type ActionResult,
-  GraphInvariantViolation,
   type GraphNodeCleanupResult,
   GraphSystem,
   type GraphSystemOptions,
@@ -34,6 +36,7 @@ export function makeInMemoryGraphSystemFromConfig(
   let status: SystemStatus = "idle";
   let observedInputs = 0;
   const observers = makeGraphSystemObservers();
+  const actorRegistry = makeGraphCellActorRegistry();
   // Forward references: `liveness` and `commands` are captured by closures in
   // `state` (e.g. `executeNodeAction`, `nextLiveLeaseId`) before assignment.
   // This is safe because no `state` method is invoked during construction —
@@ -58,25 +61,29 @@ export function makeInMemoryGraphSystemFromConfig(
     notifyCleanupFailures: observers.notifyCleanupFailures,
     reportResultObserved: (nodeId, scope, observed, leaseId) =>
       liveness.reportResultObserved(nodeId, scope, observed, leaseId),
+    cellActors: {
+      getExistingActor: (nodeId) => actorRegistry.getExistingActor(nodeId),
+      deleteActor: (nodeId, actor) => actorRegistry.deleteActor(nodeId, actor),
+    },
   };
   const planningSemaphore = Semaphore.makeUnsafe(1);
-  const actorRegistry = makeGraphCellActorRegistry();
   const refreshAdmission = makeRefreshAdmissionController();
   const planNode = (request: Parameters<GraphSystemService["ensureNode"]>[0]) =>
     Semaphore.withPermit(planningSemaphore, ensurePlannedNode(state, request));
   const submitEnsureReadyByNodeId = (nodeId: NodeRead["nodeId"]) =>
-    Semaphore.withPermit(
-      planningSemaphore,
-      Match.value(lookupGraphNodeCell(state, nodeId)).pipe(
-        Match.tag("Missing", ({ nodeId }) => Effect.succeed({ _tag: "Missing", nodeId } as const)),
-        Match.tag("Found", ({ cell }) =>
-          Effect.gen(function* () {
-            const actor = yield* actorRegistry.getActor(cell);
-            const task = yield* actor.submit(ensureReadyOperation(graphEnv, cell));
-            return { _tag: "Submitted", nodeId, task } as const;
-          })
-        ),
-        Match.exhaustive
+    submitToCellActor(
+      {
+        state,
+        planningSemaphore,
+        submit: actorRegistry.submit,
+      },
+      nodeId,
+      (cell) => ensureReadyOperation(graphEnv, cell)
+    ).pipe(
+      Effect.map((submission) =>
+        submission._tag === "Missing"
+          ? submission
+          : ({ _tag: "Submitted", nodeId, task: submission.task } as const)
       )
     );
   const ensureReadyNodeById = (nodeId: NodeRead["nodeId"]): Effect.Effect<NodeRead> =>
@@ -98,42 +105,18 @@ export function makeInMemoryGraphSystemFromConfig(
   const submitRefreshByNodeId = (nodeId: NodeRead["nodeId"]) =>
     Semaphore.withPermit(
       planningSemaphore,
-      Match.value(lookupGraphNodeCell(state, nodeId)).pipe(
-        Match.tag("Missing", ({ nodeId }) =>
-          refreshAdmission.submit({
-            request: { target: { _tag: "NodeId", nodeId } },
-            cellLookup: { _tag: "Missing", nodeId },
-            start: () =>
-              Effect.sync(() => {
-                // Structurally unreachable: refresh admission only invokes `start`
-                // on the Found path. Surface the contract violation through the
-                // typed invariant rather than a raw Error so the diagnostics
-                // projection picks it up like every other graph invariant.
-                throw new GraphInvariantViolation({
-                  nodeId,
-                  tag: "unknown",
-                  invariant: "missing dependency refresh must not start a cell operation",
-                });
-              }),
-          })
-        ),
-        Match.tag("Found", ({ cell }) =>
-          refreshAdmission.submit({
-            request: { target: { _tag: "NodeId", nodeId } },
-            cellLookup: { _tag: "Found", cell },
-            start: (cell) =>
-              Effect.gen(function* () {
-                const actor = yield* actorRegistry.getActor(cell);
-                return yield* actor.submit(
-                  refreshOperation(graphEnv, cell, {
-                    target: { _tag: "NodeId", nodeId },
-                  })
-                );
-              }),
-          })
-        ),
-        Match.exhaustive
-      )
+      refreshAdmission.submit({
+        request: { target: { _tag: "NodeId", nodeId } },
+        cellLookup: lookupGraphNodeCell(state, nodeId),
+        start: (cell, onComplete) =>
+          actorRegistry.submit(
+            cell,
+            refreshOperation(graphEnv, cell, {
+              target: { _tag: "NodeId", nodeId },
+            }),
+            { onComplete }
+          ),
+      })
     );
   const graphEnv = {
     runtimeSpanAttributes: config.runtimeSpanAttributes,
@@ -166,31 +149,39 @@ export function makeInMemoryGraphSystemFromConfig(
     stop: () =>
       Effect.gen(function* () {
         status = "stopped";
-        return yield* actorRegistry.shutdownActors((nodeId, actor) => {
-          const cleanup = Match.value(lookupGraphNodeCell(state, nodeId)).pipe(
-            Match.tag("Missing", () => Effect.succeed([])),
-            Match.tag("Found", ({ cell }) =>
-              releaseCell(cell, config.driverTimeouts.release, config.driverTimeouts.live, {
-                _tag: "GraphStopped",
-              })
-            ),
-            Match.exhaustive
-          );
-
-          return actor
-            .shutdown({
-              reason: { _tag: "RuntimeStopped" },
-              cleanup,
-            })
-            .pipe(
-              Effect.map(
-                (failures): GraphNodeCleanupResult => ({
-                  nodeId,
-                  failures: failures ?? [],
+        const actors = yield* Semaphore.withPermit(
+          planningSemaphore,
+          actorRegistry.closeForShutdown()
+        );
+        return yield* Effect.forEach(
+          actors,
+          ([nodeId, actor]) => {
+            const cleanup = Match.value(lookupGraphNodeCell(state, nodeId)).pipe(
+              Match.tag("Missing", () => Effect.succeed([])),
+              Match.tag("Found", ({ cell }) =>
+                releaseCell(cell, config.driverTimeouts.release, config.driverTimeouts.live, {
+                  _tag: "GraphStopped",
                 })
-              )
+              ),
+              Match.exhaustive
             );
-        });
+
+            return actor
+              .shutdown({
+                reason: { _tag: "RuntimeStopped" },
+                cleanup,
+              })
+              .pipe(
+                Effect.map(
+                  (failures): GraphNodeCleanupResult => ({
+                    nodeId,
+                    failures: failures ?? [],
+                  })
+                )
+              );
+          },
+          { concurrency: "unbounded" }
+        );
       }),
     resolveNodeIdSync: (request) => resolveEffectiveNodeId(state, request),
     ensureNode: (request) => planNode(request),
@@ -210,6 +201,7 @@ export function makeInMemoryGraphSystemFromConfig(
             state,
             actors: actorRegistry.actors,
             getExistingActor: actorRegistry.getExistingActor,
+            clearRefreshAdmission: refreshAdmission.clearNode,
             driverTimeouts: config.driverTimeouts,
           },
           request

@@ -1,6 +1,6 @@
 import { Effect } from "effect";
+import type { GraphNodeCell } from "../cell/cellModel";
 import { mapPhaseReady, phaseReadyData, projectCellPhase } from "../cell/cellPhase";
-import type { GraphNodeCell } from "../planning/plan";
 import { updateReadyNodeRuntimeState } from "../planning/readyNodeRuntime";
 import type { UnsafeUpdateNodeRequest, UnsafeUpdateNodeResult } from "../types";
 import { makeUnsafeUpdateNodeFailure } from "./operationFailures";

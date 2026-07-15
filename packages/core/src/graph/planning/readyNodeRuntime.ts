@@ -1,4 +1,4 @@
-import { asRuntimeReadyNodeControl } from "../../node";
+import { asRuntimeReadyNodeControl } from "../../node/runtime";
 
 export function updateReadyNodeRuntimeState(input: {
   readonly node: object;

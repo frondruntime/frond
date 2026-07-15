@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Deferred, Effect } from "effect";
 import type { NodeId, NodeLiveLeaseId, NodeLiveScopeKey, NodeRead } from "../src/graph";
+import type { GraphNodeCell, GraphNodeState } from "../src/graph/cell/cellModel";
 import {
   type ActiveCellOperation,
   acquiringCell,
@@ -23,7 +24,6 @@ import {
 } from "../src/graph/cell/cellPhase";
 import { makeGraphCellState } from "../src/graph/cell/cellState";
 import { runBackgroundOperation } from "../src/graph/operations/operationState";
-import type { GraphNodeCell, GraphNodeState } from "../src/graph/planning/plan";
 
 describe("graph cell phase", () => {
   test("idle projects as wired idle with retained identity data", () => {
@@ -121,14 +121,13 @@ describe("graph cell phase", () => {
 
   test("operating projects as ready and busy with the previous result", () => {
     const ready = makeReadyData({ result: { page: 1 } });
-    const previous = makeReadyData({ result: { page: 0 } });
     const operation: ActiveCellOperation = {
       _tag: "Running",
       operationId: 12,
       kind: "args",
       startedAt: 456,
     };
-    const projection = projectCellPhase(operatingCell(ready, operation, previous));
+    const projection = projectCellPhase(operatingCell(ready, operation));
 
     expect(projection._tag).toBe("Ready");
     expect(projection.status).toEqual({ _tag: "Wired", run: { _tag: "Ready" } });

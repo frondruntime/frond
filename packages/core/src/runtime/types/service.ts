@@ -5,7 +5,7 @@ import type {
   RuntimeSignalSubscriber,
   RuntimeSignalSubscription,
 } from "../../signals";
-import type { RuntimeSnapshotPurpose, RuntimeWorkMetadata } from "../work";
+import type { RuntimeWorkMetadata } from "../work";
 import type { RuntimeCommand, RuntimeControl, RuntimeInput, RuntimeQuery } from "./commands";
 import type { RuntimeEventRecord } from "./events";
 import type { RuntimeError, RuntimeStatus } from "./ids";
@@ -35,11 +35,18 @@ export interface RuntimeHostService {
     signal: RuntimeSignal,
     metadata?: RuntimeWorkMetadata | undefined
   ) => Effect.Effect<void, RuntimeError>;
+  readonly recordUnsafeScheduleFailure: (
+    command: RuntimeCommand,
+    cause: unknown
+  ) => Effect.Effect<void>;
+  readonly recordMobXProjectionFailure: (
+    nodeId: NodeRead["nodeId"],
+    cause: unknown
+  ) => Effect.Effect<void>;
   readonly subscribeSignals: (
     subscriber: RuntimeSignalSubscriber
   ) => Effect.Effect<RuntimeSignalSubscription, RuntimeError>;
   readonly getSnapshot: () => Effect.Effect<RuntimeSnapshot>;
-  readonly getSnapshotFor: (purpose: RuntimeSnapshotPurpose) => Effect.Effect<RuntimeSnapshot>;
   readonly observe: (observer: RuntimeObserver) => Effect.Effect<RuntimeSubscription>;
 }
 

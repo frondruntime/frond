@@ -1,8 +1,8 @@
 import { Effect } from "effect";
+import type { GraphNodeCell } from "../cell/cellModel";
 import type { CellBase, ReadyData } from "../cell/cellPhase";
 import { teardownReadyData } from "../lifecycle/cleanup";
 import { ensureDependencyNodes, type GraphOperationEnvironment } from "../operations/dependencies";
-import type { GraphNodeCell } from "../planning/plan";
 import { validityChanged } from "../resultValidity";
 import type { NodeRead, ResultValidity } from "../types";
 import { runAcquire } from "./acquireOperation";

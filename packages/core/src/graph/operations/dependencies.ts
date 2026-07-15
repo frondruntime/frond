@@ -2,9 +2,9 @@ import { Clock, Effect, Match } from "effect";
 import type { RuntimeSignalAccess } from "../../signals";
 import type { GraphCellTask } from "../cell/cellActor";
 import { lookupGraphNodeCell } from "../cell/cellLookup";
+import type { GraphNodeCell, GraphPlanState } from "../cell/cellModel";
 import { phaseReadyData, projectCellPhase } from "../cell/cellPhase";
 import type { GraphRuntimeSpanAttributes } from "../config";
-import type { GraphNodeCell, GraphPlanState } from "../planning/plan";
 import { effectiveResultValidity } from "../resultValidity";
 import {
   DependencyFailed,
@@ -94,58 +94,54 @@ function readyDependencyValue(
       Match.tag("Submitted", ({ task }) => task.await),
       Match.tag("Missing", () =>
         Effect.fail(
-          new DependencyFailed({
-            nodeId: cell.nodeId,
-            tag: cell.tag,
-            dependency: dependencyName,
+          failDependency(
+            cell,
+            dependencyName,
             dependencyNodeId,
-            cause: new GraphInvariantViolation({
+            new GraphInvariantViolation({
               nodeId: dependencyNodeId,
               tag: "unknown",
               invariant: "dependency cell must exist before dependency readiness awaits",
-            }),
-          })
+            })
+          )
         )
       ),
       Match.exhaustive
     );
 
     if (dependencyHandle.status._tag !== "Wired" || dependencyHandle.status.run._tag !== "Ready") {
-      return yield* new DependencyFailed({
-        nodeId: cell.nodeId,
-        tag: cell.tag,
-        dependency: dependencyName,
+      return yield* failDependency(
+        cell,
+        dependencyName,
         dependencyNodeId,
-        cause: dependencyStatusCause(dependencyHandle),
-      });
+        dependencyStatusCause(dependencyHandle)
+      );
     }
 
     if (dependencyHandle.resultValidity?._tag === "Expired") {
-      return yield* new DependencyFailed({
-        nodeId: cell.nodeId,
-        tag: cell.tag,
-        dependency: dependencyName,
+      return yield* failDependency(
+        cell,
+        dependencyName,
         dependencyNodeId,
-        cause: new DependencyResultExpired({
+        new DependencyResultExpired({
           nodeId: dependencyNodeId,
           tag: dependencyHandle.tag ?? "unknown",
           resultValidity: dependencyHandle.resultValidity,
-        }),
-      });
+        })
+      );
     }
 
     if (dependencyHandle._tag !== "Ready") {
-      return yield* new DependencyFailed({
-        nodeId: cell.nodeId,
-        tag: cell.tag,
-        dependency: dependencyName,
+      return yield* failDependency(
+        cell,
+        dependencyName,
         dependencyNodeId,
-        cause: new GraphInvariantViolation({
+        new GraphInvariantViolation({
           nodeId: dependencyNodeId,
           tag: "unknown",
           invariant: "ready dependency must expose graph-owned node object",
-        }),
-      });
+        })
+      );
     }
 
     return [dependencyName, dependencyHandle.node] as const;
@@ -301,17 +297,16 @@ function currentDependencyValue(
     const dependencyCell = lookupGraphNodeCell(env.state, dependencyNodeId);
 
     if (dependencyCell._tag === "Missing") {
-      return yield* new DependencyFailed({
-        nodeId: cell.nodeId,
-        tag: cell.tag,
-        dependency: dependencyName,
+      return yield* failDependency(
+        cell,
+        dependencyName,
         dependencyNodeId,
-        cause: new GraphInvariantViolation({
+        new GraphInvariantViolation({
           nodeId: dependencyNodeId,
           tag: "unknown",
           invariant: "dependency cell must exist before dependency value collection",
-        }),
-      });
+        })
+      );
     }
 
     const dependencyState = yield* dependencyCell.cell.state.get;
@@ -322,32 +317,27 @@ function currentDependencyValue(
       dependencyProjection.status._tag !== "Wired" ||
       dependencyProjection.status.run._tag !== "Ready"
     ) {
-      return yield* new DependencyFailed({
-        nodeId: cell.nodeId,
-        tag: cell.tag,
-        dependency: dependencyName,
+      return yield* failDependency(
+        cell,
+        dependencyName,
         dependencyNodeId,
-        cause:
-          dependencyProjection._tag === "Removed"
-            ? { _tag: "Unwired" }
-            : dependencyProjection.status,
-      });
+        dependencyProjection._tag === "Removed" ? { _tag: "Unwired" } : dependencyProjection.status
+      );
     }
 
     const dependencyReady = phaseReadyData(dependencyState.phase);
 
     if (dependencyReady._tag === "Missing") {
-      return yield* new DependencyFailed({
-        nodeId: cell.nodeId,
-        tag: cell.tag,
-        dependency: dependencyName,
+      return yield* failDependency(
+        cell,
+        dependencyName,
         dependencyNodeId,
-        cause: new GraphInvariantViolation({
+        new GraphInvariantViolation({
           nodeId: dependencyNodeId,
           tag: "unknown",
           invariant: "ready dependency must expose graph-owned node object",
-        }),
-      });
+        })
+      );
     }
 
     // Guard: time-bound expiry is computed lazily, so the stored validity tag
@@ -363,20 +353,34 @@ function currentDependencyValue(
     );
 
     if (dependencyValidity._tag === "Expired") {
-      return yield* new DependencyFailed({
-        nodeId: cell.nodeId,
-        tag: cell.tag,
-        dependency: dependencyName,
+      return yield* failDependency(
+        cell,
+        dependencyName,
         dependencyNodeId,
-        cause: new DependencyResultExpired({
+        new DependencyResultExpired({
           nodeId: dependencyNodeId,
           tag: dependencyCell.cell.tag,
           resultValidity: dependencyValidity,
-        }),
-      });
+        })
+      );
     }
 
     return [dependencyName, dependencyReady.ready.node] as const;
+  });
+}
+
+function failDependency(
+  cell: GraphNodeCell,
+  dependency: string,
+  dependencyNodeId: NodeRead["nodeId"],
+  cause: unknown
+): DependencyFailed {
+  return new DependencyFailed({
+    nodeId: cell.nodeId,
+    tag: cell.tag,
+    dependency,
+    dependencyNodeId,
+    cause,
   });
 }
 

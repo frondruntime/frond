@@ -11,6 +11,7 @@ import type {
 } from "../graph/types/operations";
 import type { NodeStatus } from "../graph/types/reads";
 import type { ResultValidity } from "../graph/types/resultValidity";
+import type { KeyInput } from "../keys";
 import type { DependenciesRecord, FrondNode, ResolvedDeps } from "../node";
 import type { RuntimeNodeHandle, RuntimeNodeSnapshot, RuntimeSubscription } from "../runtime";
 import { FrondMobXProjectionError } from "./errors";
@@ -25,7 +26,12 @@ const unwiredStatus: NodeStatus = { _tag: "Unwired" };
  * The projection mirrors runtime state for non-React consumers. It does not own
  * readiness, liveness truth, or ready-node construction.
  */
-export function createNode<TArgs, TDeps extends DependenciesRecord, TResult, TNode extends object>(
+export function createNode<
+  TArgs extends KeyInput,
+  TDeps extends DependenciesRecord,
+  TResult,
+  TNode extends object,
+>(
   runtime: MobXNodeRuntime,
   spec: MobXNodeSpec<TArgs, TDeps, TResult, TNode>,
   args: TArgs,
@@ -34,8 +40,12 @@ export function createNode<TArgs, TDeps extends DependenciesRecord, TResult, TNo
   return new RuntimeMobXNode<TArgs, TDeps, TResult, TNode>(runtime, spec, args, options);
 }
 
-class RuntimeMobXNode<TArgs, TDeps extends DependenciesRecord, TResult, TNode extends object>
-  implements MobXNode<TArgs, TDeps, TResult, TNode>
+class RuntimeMobXNode<
+  TArgs extends KeyInput,
+  TDeps extends DependenciesRecord,
+  TResult,
+  TNode extends object,
+> implements MobXNode<TArgs, TDeps, TResult, TNode>
 {
   readonly handle: RuntimeNodeHandle<TArgs, TResult>;
 
@@ -74,7 +84,7 @@ class RuntimeMobXNode<TArgs, TDeps extends DependenciesRecord, TResult, TNode ex
       (options.observeRuntimeEvents ?? true)
         ? runtime.observe((record) => {
             if (record.nodeIds.includes(this.nodeId)) {
-              void this.sync();
+              this.scheduleSync();
             }
           })
         : undefined;
@@ -90,7 +100,7 @@ class RuntimeMobXNode<TArgs, TDeps extends DependenciesRecord, TResult, TNode ex
     });
 
     if (options.autoSync ?? true) {
-      void this.sync();
+      this.scheduleSync();
     }
   }
 
@@ -105,16 +115,26 @@ class RuntimeMobXNode<TArgs, TDeps extends DependenciesRecord, TResult, TNode ex
   async ensure(): Promise<void> {
     const ensure = this.handle.ensure(mobxRuntimeMetadata.readiness());
 
-    await this.sync();
-    await ensure;
+    try {
+      await this.sync();
+      await ensure;
+    } catch (cause) {
+      await ensure.catch(() => undefined);
+      throw cause;
+    }
     await this.sync();
   }
 
   async ensureReady(): Promise<void> {
     const ensureReady = this.handle.ensureReady(mobxRuntimeMetadata.readiness());
 
-    await this.sync();
-    await ensureReady;
+    try {
+      await this.sync();
+      await ensureReady;
+    } catch (cause) {
+      await ensureReady.catch(() => undefined);
+      throw cause;
+    }
     await this.sync();
   }
 
@@ -162,6 +182,19 @@ class RuntimeMobXNode<TArgs, TDeps extends DependenciesRecord, TResult, TNode ex
           ? snapshot.result
           : undefined;
       this.failure = snapshot?.failure;
+    });
+  }
+
+  private scheduleSync(): void {
+    void this.sync().catch((cause) => {
+      void this.runtime.recordMobXProjectionFailure?.(
+        this.nodeId,
+        new FrondMobXProjectionError({
+          nodeId: this.nodeId,
+          message: `Frond MobX projection ${this.nodeId} failed to sync.`,
+          cause,
+        })
+      );
     });
   }
 

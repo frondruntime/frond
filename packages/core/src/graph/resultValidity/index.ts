@@ -30,6 +30,11 @@ export interface ResultCommitOptions {
   readonly defaultValidity?: ResultCommitDefaultValidity | undefined;
 }
 
+export interface DriverResultCommitOptions extends ResultCommitOptions {
+  readonly returned: unknown;
+  readonly staged: ResultState;
+}
+
 export const staticResultValidityPolicy: NormalizedResultValidityPolicy = { _tag: "Static" };
 
 export function currentResultValidity(currentAt?: number | undefined): ResultValidity {
@@ -101,13 +106,39 @@ export function commitResultState(
   };
 }
 
+export function commitDriverOperationResult(
+  policy: NormalizedResultValidityPolicy,
+  now: number,
+  options: DriverResultCommitOptions
+): ResultState {
+  if (options.returned === undefined) {
+    return options.staged;
+  }
+
+  const returnedState = commitResultState(options.returned, options.staged, policy, now, {
+    context: options.context,
+    defaultLoadedAt: options.defaultLoadedAt,
+    defaultValidity: options.defaultValidity,
+  });
+
+  if (options.staged.resultValidityCommit !== "explicit") {
+    return returnedState;
+  }
+
+  return {
+    ...returnedState,
+    resultValidity: options.staged.resultValidity,
+    resultValidityCommit: "explicit",
+  };
+}
+
 export function effectiveResultValidity(
   stored: ResultValidity,
   policy: NormalizedResultValidityPolicy,
   loadedAt: number | undefined,
   now: number
 ): ResultValidity {
-  if (policy._tag !== "TimeBound" || loadedAt === undefined) {
+  if (policy._tag !== "TimeBound" || loadedAt === undefined || stored._tag !== "Current") {
     return stored;
   }
 

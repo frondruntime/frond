@@ -1,12 +1,14 @@
 import type { Effect as EffectType } from "effect";
+import type { ResultValidityPolicy } from "../graph/types";
+import type { NodeBase } from "../node/runtime";
 import type {
-  NodeBase,
   NodeSpec,
   NodeSpecActions,
   NodeSpecArgs,
   NodeSpecResolvedDeps,
   NodeSpecResult,
 } from "../node/types";
+import { FrondNodeSpecError } from "../node/types";
 import { createAsyncDriver } from "./asyncDefinition";
 import { createEffectDriver } from "./effectDefinition";
 import type {
@@ -25,6 +27,7 @@ import type {
   AsyncDriver,
   AsyncDriverActionMap,
   AsyncDriverActionResult,
+  AsyncDriverContext,
   AsyncDriverResult,
   AsyncDriverVoidResult,
   DisposeContext,
@@ -35,6 +38,7 @@ import type {
   EffectDriver,
   EffectDriverActionMap,
   ResultCommit,
+  ResultPatchOptions,
 } from "./types";
 import { FROND_DRIVER_ACTION_BRAND as ACTION_BRAND } from "./types";
 
@@ -45,13 +49,13 @@ type DriverHookDescriptor<TKind extends string, TRun> = {
   readonly run: TRun;
 };
 
-type AsyncNode<TSpec extends NodeSpec<{ readonly result?: unknown }>> = NodeBase<TSpec>;
+type SpecNode<TSpec extends NodeSpec<{ readonly result?: unknown }>> = NodeBase<TSpec>;
 
 type AsyncActionImplementations<TSpec extends NodeSpec<{ readonly result?: unknown }>> = {
   readonly [TName in keyof NodeSpecActions<TSpec> & string]: DriverActionDescriptor<
     (
-      ctx: import("./types").AsyncDriverContext<
-        AsyncNode<TSpec>,
+      ctx: AsyncDriverContext<
+        SpecNode<TSpec>,
         NodeSpecArgs<TSpec>,
         NodeSpecResolvedDeps<TSpec>,
         NodeSpecResult<TSpec>
@@ -61,11 +65,14 @@ type AsyncActionImplementations<TSpec extends NodeSpec<{ readonly result?: unkno
   >;
 };
 
-type EffectActionImplementations<TSpec extends NodeSpec<{ readonly result?: unknown }>, R> = {
+type EffectActionImplementations<
+  TSpec extends NodeSpec<{ readonly result?: unknown }>,
+  R extends never,
+> = {
   readonly [TName in keyof NodeSpecActions<TSpec> & string]: DriverActionDescriptor<
     (
       ctx: DriverContext<
-        AsyncNode<TSpec>,
+        SpecNode<TSpec>,
         NodeSpecArgs<TSpec>,
         NodeSpecResolvedDeps<TSpec>,
         NodeSpecResult<TSpec>
@@ -84,8 +91,8 @@ type AsyncAcquire<TSpec extends NodeSpec<{ readonly result?: unknown }>> = (
 ) => AsyncDriverResult<NodeSpecResult<TSpec>>;
 
 type AsyncRefresh<TSpec extends NodeSpec<{ readonly result?: unknown }>> = (
-  ctx: import("./types").AsyncDriverContext<
-    AsyncNode<TSpec>,
+  ctx: AsyncDriverContext<
+    SpecNode<TSpec>,
     NodeSpecArgs<TSpec>,
     NodeSpecResolvedDeps<TSpec>,
     NodeSpecResult<TSpec>
@@ -93,74 +100,53 @@ type AsyncRefresh<TSpec extends NodeSpec<{ readonly result?: unknown }>> = (
 ) => AsyncDriverVoidResult;
 
 type AsyncRelease<TSpec extends NodeSpec<{ readonly result?: unknown }>> = (
-  ctx: AsyncDisposeContext<AsyncNode<TSpec>>
+  ctx: AsyncDisposeContext<SpecNode<TSpec>>
 ) => AsyncDriverVoidResult;
 
-type EffectAcquire<TSpec extends NodeSpec<{ readonly result?: unknown }>, R> = (
+type EffectAcquire<TSpec extends NodeSpec<{ readonly result?: unknown }>, R extends never> = (
   ctx: DriverAcquireContext<NodeSpecArgs<TSpec>, NodeSpecResolvedDeps<TSpec>, NodeSpecResult<TSpec>>
 ) => EffectType.Effect<NodeSpecResult<TSpec> | ResultCommit<NodeSpecResult<TSpec>>, unknown, R>;
 
-type EffectRefresh<TSpec extends NodeSpec<{ readonly result?: unknown }>, R> = (
+type EffectRefresh<TSpec extends NodeSpec<{ readonly result?: unknown }>, R extends never> = (
   ctx: DriverContext<
-    AsyncNode<TSpec>,
+    SpecNode<TSpec>,
     NodeSpecArgs<TSpec>,
     NodeSpecResolvedDeps<TSpec>,
     NodeSpecResult<TSpec>
   >
 ) => EffectType.Effect<void, unknown, R>;
 
-type EffectRelease<TSpec extends NodeSpec<{ readonly result?: unknown }>, R> = (
-  ctx: DisposeContext<AsyncNode<TSpec>>
+type EffectRelease<TSpec extends NodeSpec<{ readonly result?: unknown }>, R extends never> = (
+  ctx: DisposeContext<SpecNode<TSpec>>
 ) => EffectType.Effect<void, unknown, R>;
 
 export type AsyncInput<
   TSpec extends NodeSpec<{ readonly result?: unknown }>,
   TActions = AsyncActionImplementations<TSpec>,
 > = {
-  readonly resultValidity?: AsyncDriver<
-    AsyncNode<TSpec>,
-    NodeSpecArgs<TSpec>,
-    NodeSpecResolvedDeps<TSpec>,
-    NodeSpecResult<TSpec>,
-    AsyncDriverActionMap<
-      AsyncNode<TSpec>,
-      NodeSpecArgs<TSpec>,
-      NodeSpecResolvedDeps<TSpec>,
-      NodeSpecResult<TSpec>
-    >
-  >["resultValidity"];
+  readonly resultValidity?: ResultValidityPolicy | undefined;
+  readonly resultPatch?: ResultPatchOptions | undefined;
   readonly acquire: DriverHookDescriptor<"acquire", AsyncAcquire<TSpec>>;
   readonly refresh?: DriverHookDescriptor<"refresh", AsyncRefresh<TSpec>> | undefined;
   readonly release?: DriverHookDescriptor<"release", AsyncRelease<TSpec>> | undefined;
   readonly live?:
-    | DriverHookDescriptor<"live", AsyncLiveResourceDescriptor<AsyncNode<TSpec>, unknown>>
+    | DriverHookDescriptor<"live", AsyncLiveResourceDescriptor<SpecNode<TSpec>, unknown>>
     | undefined;
   readonly actions?: TActions | undefined;
 };
 
 export type EffectInput<
   TSpec extends NodeSpec<{ readonly result?: unknown }>,
-  R = never,
+  R extends never = never,
   TActions = EffectActionImplementations<TSpec, R>,
 > = {
-  readonly resultValidity?: EffectDriver<
-    AsyncNode<TSpec>,
-    NodeSpecArgs<TSpec>,
-    NodeSpecResolvedDeps<TSpec>,
-    NodeSpecResult<TSpec>,
-    EffectDriverActionMap<
-      AsyncNode<TSpec>,
-      NodeSpecArgs<TSpec>,
-      NodeSpecResolvedDeps<TSpec>,
-      NodeSpecResult<TSpec>
-    >,
-    R
-  >["resultValidity"];
+  readonly resultValidity?: ResultValidityPolicy | undefined;
+  readonly resultPatch?: ResultPatchOptions | undefined;
   readonly acquire: DriverHookDescriptor<"acquire", EffectAcquire<TSpec, R>>;
   readonly refresh?: DriverHookDescriptor<"refresh", EffectRefresh<TSpec, R>> | undefined;
   readonly release?: DriverHookDescriptor<"release", EffectRelease<TSpec, R>> | undefined;
   readonly live?:
-    | DriverHookDescriptor<"live", EffectLiveResourceDescriptor<AsyncNode<TSpec>, unknown, R>>
+    | DriverHookDescriptor<"live", EffectLiveResourceDescriptor<SpecNode<TSpec>, unknown, R>>
     | undefined;
   readonly actions?: TActions | undefined;
 };
@@ -178,32 +164,39 @@ export function Async<
 >(
   input: AsyncInput<TSpec, TActions>
 ): Driver<
-  AsyncNode<TSpec>,
+  SpecNode<TSpec>,
   NodeSpecArgs<TSpec>,
   NodeSpecResolvedDeps<TSpec>,
   NodeSpecResult<TSpec>,
   NodeSpecActions<TSpec>
 > {
+  assertHookDescriptor(input.acquire, "acquire", "acquire");
+  assertOptionalHookDescriptor(input.refresh, "refresh", "refresh");
+  assertOptionalHookDescriptor(input.release, "release", "release");
+  assertOptionalHookDescriptor(input.live, "live", "live");
+  assertActionMap(input.actions);
+
   return createAsyncDriver({
     resultValidity: input.resultValidity,
+    resultPatch: input.resultPatch,
     acquire: input.acquire.run,
     refresh: input.refresh?.run,
     release: input.release?.run,
     live: input.live?.run,
     actions: input.actions,
   } as AsyncDriver<
-    AsyncNode<TSpec>,
+    SpecNode<TSpec>,
     NodeSpecArgs<TSpec>,
     NodeSpecResolvedDeps<TSpec>,
     NodeSpecResult<TSpec>,
     AsyncDriverActionMap<
-      AsyncNode<TSpec>,
+      SpecNode<TSpec>,
       NodeSpecArgs<TSpec>,
       NodeSpecResolvedDeps<TSpec>,
       NodeSpecResult<TSpec>
     >
   >) as unknown as Driver<
-    AsyncNode<TSpec>,
+    SpecNode<TSpec>,
     NodeSpecArgs<TSpec>,
     NodeSpecResolvedDeps<TSpec>,
     NodeSpecResult<TSpec>,
@@ -220,38 +213,45 @@ export function Async<
  */
 export function Effect<
   TSpec extends NodeSpec<{ readonly result?: unknown }>,
-  R = never,
+  R extends never = never,
   TActions = EffectActionImplementations<TSpec, R>,
 >(
   input: EffectInput<TSpec, R, TActions>
 ): Driver<
-  AsyncNode<TSpec>,
+  SpecNode<TSpec>,
   NodeSpecArgs<TSpec>,
   NodeSpecResolvedDeps<TSpec>,
   NodeSpecResult<TSpec>,
   NodeSpecActions<TSpec>
 > {
+  assertHookDescriptor(input.acquire, "acquire", "acquire");
+  assertOptionalHookDescriptor(input.refresh, "refresh", "refresh");
+  assertOptionalHookDescriptor(input.release, "release", "release");
+  assertOptionalHookDescriptor(input.live, "live", "live");
+  assertActionMap(input.actions);
+
   return createEffectDriver({
     resultValidity: input.resultValidity,
+    resultPatch: input.resultPatch,
     acquire: input.acquire.run,
     refresh: input.refresh?.run,
     release: input.release?.run,
     live: input.live?.run,
     actions: input.actions,
   } as EffectDriver<
-    AsyncNode<TSpec>,
+    SpecNode<TSpec>,
     NodeSpecArgs<TSpec>,
     NodeSpecResolvedDeps<TSpec>,
     NodeSpecResult<TSpec>,
     EffectDriverActionMap<
-      AsyncNode<TSpec>,
+      SpecNode<TSpec>,
       NodeSpecArgs<TSpec>,
       NodeSpecResolvedDeps<TSpec>,
       NodeSpecResult<TSpec>
     >,
     R
   >) as unknown as Driver<
-    AsyncNode<TSpec>,
+    SpecNode<TSpec>,
     NodeSpecArgs<TSpec>,
     NodeSpecResolvedDeps<TSpec>,
     NodeSpecResult<TSpec>,
@@ -347,4 +347,59 @@ function hook<TKind extends string, TRun>(
     [DRIVER_HOOK_BRAND]: kind,
     run,
   };
+}
+
+function assertOptionalHookDescriptor<TKind extends string>(
+  value: unknown,
+  expectedKind: TKind,
+  field: string
+): void {
+  if (value !== undefined) {
+    assertHookDescriptor(value, expectedKind, field);
+  }
+}
+
+function assertHookDescriptor<TKind extends string>(
+  value: unknown,
+  expectedKind: TKind,
+  field: string
+): asserts value is DriverHookDescriptor<TKind, unknown> {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    (value as { readonly [DRIVER_HOOK_BRAND]?: unknown })[DRIVER_HOOK_BRAND] !== expectedKind ||
+    !("run" in value) ||
+    (expectedKind !== "live" && typeof (value as { readonly run?: unknown }).run !== "function")
+  ) {
+    throw new FrondNodeSpecError(
+      `Frond driver ${field} hook must use Driver.${hookName(expectedKind)}(...).`
+    );
+  }
+}
+
+function assertActionMap(actions: unknown): void {
+  const actionMap = actions as Readonly<Record<string, unknown>> | undefined;
+
+  for (const [name, action] of Object.entries(actionMap ?? {})) {
+    if (typeof action === "function") {
+      continue;
+    }
+
+    if (
+      typeof action === "object" &&
+      action !== null &&
+      (action as { readonly [ACTION_BRAND]?: unknown })[ACTION_BRAND] === true &&
+      typeof (action as { readonly run?: unknown }).run === "function"
+    ) {
+      continue;
+    }
+
+    throw new FrondNodeSpecError(
+      `Frond driver action "${name}" must be a function or Driver.Action(...).`
+    );
+  }
+}
+
+function hookName(kind: string): string {
+  return `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`;
 }

@@ -1,4 +1,3 @@
-import type { GraphNodeState } from "../planning/plan";
 import type { ResultState } from "../resultValidity";
 import type {
   GraphFailure,
@@ -6,6 +5,7 @@ import type {
   NormalizedResultValidityPolicy,
   ResultValidity,
 } from "../types";
+import type { GraphNodeState } from "./cellModel";
 import {
   type ActiveCellOperation,
   acquiringCell,
@@ -57,6 +57,7 @@ export function failReadinessAttemptState(input: {
 
 export function completeAcquireState(input: {
   readonly latest: GraphNodeState;
+  readonly attempt: CellReadinessAttempt;
   readonly ready: {
     readonly node: object;
     readonly args: unknown;
@@ -65,23 +66,35 @@ export function completeAcquireState(input: {
     readonly resultValidityPolicy: NormalizedResultValidityPolicy;
     readonly disposers: ReadonlyArray<() => void>;
   };
-}): GraphNodeState {
+}):
+  | { readonly _tag: "Committed"; readonly state: GraphNodeState }
+  | { readonly _tag: "Stale"; readonly state: GraphNodeState } {
+  if (
+    input.latest.phase._tag !== "Acquiring" ||
+    input.latest.phase.attempt.attemptId !== input.attempt.attemptId
+  ) {
+    return { _tag: "Stale", state: input.latest };
+  }
+
   return {
-    ...input.latest,
-    phase: readyCell({
-      node: input.ready.node,
-      args: input.ready.args,
-      liveLeases: phaseLiveLeases(input.latest.phase),
-      deps: input.ready.deps,
-      result: input.ready.resultState.result,
-      resultValidity: input.ready.resultState.resultValidity,
-      resultLoadedAt: input.ready.resultState.resultLoadedAt,
-      resultValidityPolicy: input.ready.resultValidityPolicy,
-      disposers: input.ready.disposers,
-      // Contract: a freshly ready node preserves accumulated live leases, but no
-      // live resource exists until demand is delivered after the ready commit.
-      liveResource: { _tag: "Inactive" },
-    }),
+    _tag: "Committed",
+    state: {
+      ...input.latest,
+      phase: readyCell({
+        node: input.ready.node,
+        args: input.ready.args,
+        liveLeases: phaseLiveLeases(input.latest.phase),
+        deps: input.ready.deps,
+        result: input.ready.resultState.result,
+        resultValidity: input.ready.resultState.resultValidity,
+        resultLoadedAt: input.ready.resultState.resultLoadedAt,
+        resultValidityPolicy: input.ready.resultValidityPolicy,
+        disposers: input.ready.disposers,
+        // Contract: a freshly ready node preserves accumulated live leases, but no
+        // live resource exists until demand is delivered after the ready commit.
+        liveResource: { _tag: "Inactive" },
+      }),
+    },
   };
 }
 

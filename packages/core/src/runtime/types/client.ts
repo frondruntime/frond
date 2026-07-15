@@ -1,4 +1,9 @@
-import type { NodeLiveLeaseId, NodeLiveSource } from "../../graph/types/liveness";
+import type { GraphFailure } from "../../graph/types/failures";
+import type {
+  NodeLiveDemandSnapshot,
+  NodeLiveLeaseId,
+  NodeLiveSource,
+} from "../../graph/types/liveness";
 import type {
   ActionResult,
   EvictResult,
@@ -13,7 +18,7 @@ import type {
   RuntimeSignalSubscriber,
   RuntimeSignalSubscription,
 } from "../../signals";
-import type { RuntimeSnapshotPurpose, RuntimeWorkMetadata } from "../work";
+import type { RuntimeWorkMetadata } from "../work";
 import type { RuntimeCommand, RuntimeControl, RuntimeInput, RuntimeQuery } from "./commands";
 import type { RuntimeStatus } from "./ids";
 import type { RuntimeQueryResult } from "./queries";
@@ -48,9 +53,7 @@ export interface Runtime {
     subscriber: RuntimeSignalSubscriber
   ) => Promise<RuntimeSignalSubscription>;
   readonly getSnapshotSync: () => RuntimeSnapshot;
-  readonly getSnapshotSyncFor: (purpose: RuntimeSnapshotPurpose) => RuntimeSnapshot;
   readonly getSnapshot: () => Promise<RuntimeSnapshot>;
-  readonly getSnapshotFor: (purpose: RuntimeSnapshotPurpose) => Promise<RuntimeSnapshot>;
   readonly observe: (observer: RuntimeObserver) => RuntimeSubscription;
 }
 
@@ -103,7 +106,7 @@ export interface RuntimeNodeHandle<TArgs, TResult> {
     source: NodeLiveSource,
     scope: unknown,
     metadata?: RuntimeWorkMetadata | undefined
-  ) => Promise<RuntimeNodeLiveLease>;
+  ) => Promise<RuntimeNodeLiveLeaseResult>;
   readonly snapshot: () => Promise<RuntimeNodeSnapshotLookup<TResult>>;
 }
 
@@ -120,6 +123,29 @@ export interface RuntimeNodeLiveLease {
   readonly scope: unknown;
   readonly dispose: () => Promise<void>;
 }
+
+/**
+ * Held exposes a public lease only when the graph recorded a releasable lease.
+ * Failure exposes typed acquisition failures when no lease was recorded.
+ */
+export type RuntimeNodeLiveLeaseResult =
+  | {
+      readonly _tag: "Held";
+      readonly nodeId: NodeRead["nodeId"];
+      readonly lease: RuntimeNodeLiveLease;
+      readonly liveDemand: NodeLiveDemandSnapshot;
+    }
+  | {
+      readonly _tag: "Failure";
+      readonly nodeId: NodeRead["nodeId"];
+      readonly failures: ReadonlyArray<GraphFailure>;
+      readonly liveDemand: NodeLiveDemandSnapshot;
+    }
+  | {
+      readonly _tag: "NodeMissing";
+      readonly nodeId: NodeRead["nodeId"];
+      readonly liveDemand: NodeLiveDemandSnapshot;
+    };
 
 export type UnsafeNodeRead = RawRuntimeNodeRead<unknown>;
 

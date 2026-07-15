@@ -3,7 +3,6 @@ import {
   type ActionContract,
   Deferred,
   type Dep,
-  DisposerFailed,
   Driver,
   dep,
   dependencies,
@@ -14,6 +13,7 @@ import {
   NodeEvicted,
   type NodeSpec,
   ProfileNode,
+  ReleaseFailed,
   resourceSpec,
   serviceSpec,
 } from "./graphTestFixtures";
@@ -587,6 +587,99 @@ describe("graph eviction", () => {
     expect(snapshot.nodes).toEqual([]);
   });
 
+  test("evicting a dependent during dependency acquire does not resurrect it", async () => {
+    const childStarted = await Effect.runPromise(Deferred.make<void>());
+    const childGate = await Effect.runPromise(Deferred.make<string>());
+    let childDisposerRuns = 0;
+
+    type DependencySpec = NodeSpec<{
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: string;
+    }>;
+
+    class DependencyNode extends NodeBase<DependencySpec> {
+      static readonly spec = serviceSpec<DependencySpec>({
+        tag: "services/dependent-evict-child",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        driver: Driver.Effect<DependencySpec>({
+          acquire: Driver.Acquire((ctx) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(childStarted, undefined);
+              const value = yield* Deferred.await(childGate);
+              ctx.disposers.add(() => {
+                childDisposerRuns += 1;
+              });
+              return value;
+            })
+          ),
+        }),
+      });
+    }
+
+    type DependentSpec = NodeSpec<{
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: {
+        readonly child: Dep<typeof DependencyNode>;
+      };
+      readonly result: string;
+    }>;
+
+    class DependentNode extends NodeBase<DependentSpec> {
+      static readonly spec = resourceSpec<DependentSpec>({
+        tag: "resources/dependent-evict-root",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({ child: dep(DependencyNode, {}) })),
+        driver: Driver.Effect<DependentSpec>({
+          acquire: Driver.Acquire(() => Effect.succeed("root")),
+        }),
+      });
+    }
+
+    const graph = makeInMemoryGraphSystem();
+    const ready = Effect.runPromise(graph.ensureReadyNode({ spec: DependentNode, args: {} })).catch(
+      (cause) => cause
+    );
+
+    await Effect.runPromise(Deferred.await(childStarted));
+
+    const pending = await Effect.runPromise(graph.snapshot());
+    const child = pending.nodes.find((node) => node.tag === "services/dependent-evict-child");
+    const root = pending.nodes.find((node) => node.tag === "resources/dependent-evict-root");
+
+    if (child === undefined || root === undefined) {
+      throw new Error("Expected pending dependency graph.");
+    }
+
+    await Effect.runPromise(
+      graph.evictSubgraph({
+        rootNodeIds: [root.nodeId],
+        mode: "selfAndDependents",
+        reason: "dependent evicted",
+      })
+    );
+    const release = Effect.runPromise(graph.releaseNode(child.nodeId));
+
+    await Effect.runPromise(Deferred.succeed(childGate, "child"));
+    const readyResult = await ready;
+    await release;
+
+    const snapshot = await Effect.runPromise(graph.snapshot());
+    const releasedChild = snapshot.nodes.find(
+      (node) => node.tag === "services/dependent-evict-child"
+    );
+
+    expect(readyResult.status).toMatchObject({ _tag: "Wired", run: { _tag: "Error" } });
+    expect(childDisposerRuns).toBe(1);
+    expect(snapshot.nodes.some((node) => node.tag === "resources/dependent-evict-root")).toBe(
+      false
+    );
+    expect(releasedChild?.status).toMatchObject({ _tag: "Wired", run: { _tag: "Idle" } });
+  });
+
   test("double eviction and missing eviction are idempotent", async () => {
     const graph = makeInMemoryGraphSystem();
 
@@ -846,7 +939,7 @@ describe("graph eviction", () => {
 
     expect(result.nodeIds).toEqual([handle.nodeId]);
     expect(result.failures).toHaveLength(1);
-    expect(result.failures[0]).toBeInstanceOf(DisposerFailed);
+    expect(result.failures[0]).toBeInstanceOf(ReleaseFailed);
     expect(snapshot.nodes).toEqual([]);
   });
 });

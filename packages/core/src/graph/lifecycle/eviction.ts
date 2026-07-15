@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import type { GraphCellActor } from "../cell/cellActor";
 import { lookupGraphNodeCell } from "../cell/cellLookup";
-import type { GraphPlanState } from "../planning/plan";
+import type { GraphPlanState } from "../cell/cellModel";
 import type {
   DriverOperationTimeouts,
   EvictResult,
@@ -15,6 +15,7 @@ export interface GraphEvictionEnvironment {
   readonly state: GraphPlanState;
   readonly actors: Map<NodeId, GraphCellActor>;
   readonly getExistingActor: (nodeId: NodeId) => Effect.Effect<GraphCellActor | undefined>;
+  readonly clearRefreshAdmission: (nodeId: NodeId) => Effect.Effect<void>;
   readonly driverTimeouts: DriverOperationTimeouts;
 }
 
@@ -62,6 +63,7 @@ function evictNode(
           })) ?? []);
 
     env.actors.delete(nodeId);
+    yield* env.clearRefreshAdmission(nodeId);
     env.state.nodes.delete(nodeId);
     removeEdgesForNode(env.state, nodeId);
     return cleanupFailures;

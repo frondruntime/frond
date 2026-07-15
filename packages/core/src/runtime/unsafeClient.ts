@@ -1,8 +1,19 @@
 import type { NodeId } from "../graph";
 import { type RuntimeReadHost, readRawNode } from "./nodeRead";
-import type { RawRuntimeNodeRead, Runtime, RuntimeClient, UnsafeScheduleResult } from "./types";
+import type {
+  RawRuntimeNodeRead,
+  Runtime,
+  RuntimeClient,
+  RuntimeCommand,
+  UnsafeScheduleResult,
+} from "./types";
 
-type UnsafeRuntimeHost = Pick<Runtime, "submit"> & RuntimeReadHost;
+type UnsafeRuntimeHost = Pick<Runtime, "submit"> &
+  RuntimeReadHost & {
+    readonly recordUnsafeScheduleFailure?:
+      | ((command: RuntimeCommand, cause: unknown) => void)
+      | undefined;
+  };
 
 /**
  * Creates the devtools/test escape hatch client.
@@ -70,6 +81,8 @@ export function createUnsafeRuntimeClient(runtime: UnsafeRuntimeHost): RuntimeCl
       return { _tag: "Invalid", nodeId, error: read.error };
     }
 
+    // Devtools escape hatch: unsafe updates intentionally bypass request/args
+    // validation and operate on an existing node id plus a mutation recipe.
     scheduleUnsafe(runtime, {
       _tag: "GraphUnsafeUpdateNode",
       request: {
@@ -90,8 +103,14 @@ export function createUnsafeRuntimeClient(runtime: UnsafeRuntimeHost): RuntimeCl
 }
 
 function scheduleUnsafe(
-  runtime: Pick<Runtime, "submit">,
-  command: Parameters<Runtime["submit"]>[0]
+  runtime: Pick<Runtime, "submit"> & {
+    readonly recordUnsafeScheduleFailure?:
+      | ((command: RuntimeCommand, cause: unknown) => void)
+      | undefined;
+  },
+  command: RuntimeCommand
 ): void {
-  void runtime.submit(command).catch(() => undefined);
+  void runtime.submit(command).catch((cause) => {
+    runtime.recordUnsafeScheduleFailure?.(command, cause);
+  });
 }

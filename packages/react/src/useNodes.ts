@@ -1,7 +1,9 @@
+import type * as Frond from "@frondruntime/core";
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useRuntime } from "./context";
 import {
   assertStableKeySet as assertStableNodeKeySet,
+  type PreparedReactNodeMapEntry,
   prepareReactNodeMap,
   type ReactNodeMapEntry,
 } from "./nodeInputMap";
@@ -47,14 +49,15 @@ export function useNodes<const TMap extends ReactNodeInputMap>(
   useEffect(() => () => store.dispose(), [store]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: prepared.argsIdentity stands in for entriesRef.current.
   useEffect(() => {
-    void store.updateArgs(entriesRef.current);
+    void store.updateArgs(entriesRef.current).catch(() => undefined);
   }, [prepared.argsIdentity, store]);
   useSyncExternalStore(store.subscribe, store.getVersion, store.getVersion);
 
   return store.read() as UseNodesResult<TMap>;
 }
 
-export type ReactNodeStoreEntry = ReactNodeMapEntry;
+export type ReactNodeStoreEntry = ReactNodeMapEntry &
+  Partial<Pick<PreparedReactNodeMapEntry, "argsFingerprint">>;
 
 export interface ReactNodesStore {
   readonly subscribe: (listener: () => void) => () => void;
@@ -70,9 +73,9 @@ export function makeReactNodesStore(
 ): ReactNodesStore {
   const stores = entries.map((entry) => ({
     key: entry.key,
-    store: makeReactNodeStore<unknown, object, unknown, object>(runtime, {
-      spec: entry.spec as ReactNodeSpec<unknown, object, unknown, object>,
-      args: entry.args,
+    store: makeReactNodeStore<Frond.Key.KeyInput, object, unknown, object>(runtime, {
+      spec: entry.spec as ReactNodeSpec<Frond.Key.KeyInput, object, unknown, object>,
+      args: entry.args as Frond.Key.KeyInput,
       nodeId: entry.nodeId,
     }),
   }));
@@ -140,7 +143,12 @@ export function makeReactNodesStore(
       cachedReadyVersion = -1;
       await Promise.all(
         nextEntries.map((entry) => {
-          return storeByKey.get(entry.key)?.updateArgs(entry.args) ?? Promise.resolve();
+          return (
+            storeByKey
+              .get(entry.key)
+              ?.updateArgs(entry.args as Frond.Key.KeyInput, entry.argsFingerprint) ??
+            Promise.resolve()
+          );
         })
       );
     },

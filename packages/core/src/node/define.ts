@@ -5,7 +5,6 @@ import type {
   NodeKind,
   NodeSpec,
   NodeSpecInput,
-  NodeSpecLike,
   NodeTag,
 } from "./types";
 import { FROND_DEPENDENCIES_BRAND, FROND_NODE_SPEC_BRAND, FrondNodeSpecError } from "./types";
@@ -108,16 +107,6 @@ function nodeSpecWithKind<TSpec extends NodeSpec<{ readonly result?: unknown }>>
   });
 
   return descriptor;
-}
-
-export function assertNodeSpec(value: unknown): asserts value is NodeSpecLike {
-  if (
-    (typeof value !== "function" && typeof value !== "object") ||
-    value === null ||
-    (value as { readonly spec?: unknown }).spec === undefined
-  ) {
-    throw new FrondNodeSpecError("Frond graph node request must use a Frond node spec.");
-  }
 }
 
 export function validateNodeTag(value: unknown): NodeTag {

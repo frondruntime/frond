@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Context, Effect } from "effect";
 import type {
   ActionContract,
   ActiveNodeLiveDemandSnapshot,
@@ -24,7 +24,7 @@ import {
   serviceSpec,
   tag,
 } from "../../src";
-import type { GraphNodeCellView, GraphNodeState } from "../../src/graph/planning/plan";
+import type { GraphNodeCellView, GraphNodeState } from "../../src/graph/cell/cellModel";
 import { createFrondTestHarness, mockSpec, readySpec } from "../../src/testing";
 
 type Equal<TLeft, TRight> =
@@ -37,6 +37,35 @@ type TransportSpec = import("../../src").NodeSpec<{
   readonly key: Key.Singleton;
   readonly result: TransportResult;
 }>;
+
+// @ts-expect-error node spec args must be canonical JSON-shaped key inputs
+export type FunctionArgsSpec = import("../../src").NodeSpec<{
+  readonly args: { readonly onSelect: () => void };
+  readonly key: Key.Singleton;
+  readonly result: string;
+}>;
+
+// @ts-expect-error node spec args must reject Date instances
+export type DateArgsSpec = import("../../src").NodeSpec<{
+  readonly args: { readonly at: Date };
+  readonly key: Key.Singleton;
+  readonly result: string;
+}>;
+
+declare class NonJsonArgsValue {
+  readonly id: string;
+}
+
+// @ts-expect-error node spec args must reject class instances
+export type ClassInstanceArgsSpec = import("../../src").NodeSpec<{
+  readonly args: { readonly value: NonJsonArgsValue };
+  readonly key: Key.Singleton;
+  readonly result: string;
+}>;
+
+export type ArgsNoneIsCanonical = Expect<
+  Args.None extends import("../../src").Key.KeyInput ? true : false
+>;
 
 type TransportResult = {
   readonly token: string;
@@ -55,6 +84,32 @@ class TransportNode extends NodeBase<TransportSpec> {
     return `Bearer ${this.result.token}`;
   }
 }
+
+const DriverValue = Context.Service<{ readonly value: string }>("types/node-authoring/DriverValue");
+
+type ServiceBackedSpec = import("../../src").NodeSpec<{
+  readonly args: Args.None;
+  readonly key: Key.Singleton;
+  readonly result: string;
+}>;
+
+class RChannelRejectedNode extends NodeBase<ServiceBackedSpec> {
+  static readonly spec = serviceSpec<ServiceBackedSpec>({
+    tag: tag("types/r-channel-rejected"),
+    key: () => Key.singleton(),
+    // @ts-expect-error Driver.Effect requirements are not provisioned by Frond runtime.
+    driver: Driver.Effect<ServiceBackedSpec, typeof DriverValue>({
+      acquire: Driver.Acquire(() =>
+        Effect.gen(function* () {
+          const service = yield* DriverValue;
+          return service.value;
+        })
+      ),
+    }),
+  });
+}
+
+RChannelRejectedNode.spec satisfies unknown;
 
 type CounterSpec = import("../../src").NodeSpec<{
   readonly args: Args.None;

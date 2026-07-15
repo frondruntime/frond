@@ -73,7 +73,11 @@ function frameFromValue(
   const boundary = safeString(safeGet(value, "boundary"), options.maxStringLength);
   const cancellation = cancellationFromValue(safeGet(value, "cancellation"), options);
   const timeout = safeString(safeGet(value, "timeout"), options.maxStringLength);
-  const path = safeStringArray(safeGet(value, "path"), options.maxStringLength);
+  const path = safeStringArray(
+    safeGet(value, "path"),
+    options.maxStringLength,
+    options.maxObjectKeys
+  );
 
   return {
     index,

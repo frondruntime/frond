@@ -21,33 +21,6 @@ export interface PreparedReactNodeMap {
   readonly argsIdentity: string;
 }
 
-export function reactNodeMapEntries(input: {
-  readonly hook: string;
-  readonly runtime: ReactNodeRuntime;
-  readonly map: ReactNodeInputMap;
-}): ReadonlyArray<ReactNodeMapEntry> {
-  return Object.keys(input.map)
-    .sort()
-    .map((key) => {
-      const entry = input.map[key];
-
-      if (entry === undefined) {
-        throw new FrondReactUsageError({
-          hook: input.hook,
-          message: `FrondReact.${input.hook} missing node entry for key '${key}'.`,
-        });
-      }
-
-      const [spec, args] = entry;
-      return {
-        key,
-        spec,
-        args,
-        nodeId: input.runtime.resolveNodeIdSync({ spec, args }),
-      };
-    });
-}
-
 export function prepareReactNodeMap(input: {
   readonly hook: string;
   readonly runtime: ReactNodeRuntime;

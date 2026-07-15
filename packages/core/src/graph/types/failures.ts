@@ -65,6 +65,12 @@ export class DisposerFailed extends Data.TaggedError("DisposerFailed")<{
   readonly cause: unknown;
 }> {}
 
+export class ReleaseFailed extends Data.TaggedError("ReleaseFailed")<{
+  readonly nodeId: NodeId;
+  readonly tag: string;
+  readonly cause: unknown;
+}> {}
+
 export class LiveDeliveryFailed extends Data.TaggedError("LiveDeliveryFailed")<{
   readonly nodeId: NodeId;
   readonly tag: string;
@@ -176,6 +182,7 @@ export type GraphFailure =
   | DriverPromiseFailed
   | DriverOperationTimedOut
   | DisposerFailed
+  | ReleaseFailed
   | LiveDeliveryFailed
   | NodeEvicted
   | CycleDetected

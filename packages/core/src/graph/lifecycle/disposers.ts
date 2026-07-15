@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import type { GraphNodeCell } from "../planning/plan";
+import type { GraphNodeCell } from "../cell/cellModel";
 import { DisposerFailed } from "../types";
 
 export function runDisposers(

@@ -60,6 +60,9 @@ export class OrdersNode extends Frond.NodeBase<OrdersSpec> {
 - Prefer inline `deps` and `actions` fields inside the carrier unless a type is reused outside the node.
 - Prefer inline `actions` inside `driver.actions`; extract an action object only when reuse or readability clearly wins.
 - Prefer inferred action `input` and driver `ctx` inside `Driver.Async<XSpec>` / `Driver.Effect<XSpec>`. Add annotations only when TypeScript cannot infer.
+- Treat an action return value as caller-facing `ActionContract` output only. It is never committed as `node.result`; result changes go exclusively through `ctx.setResult`, `ctx.patchResult`, or `ctx.setResultValidity`.
+- Keep node args canonical JSON-shaped `KeyInput`. Type carriers enforce this at compile time, and runtime rejects functions, `Date`s, class instances, and other non-canonical values. Args are not size-capped; only canonical graph keys carry the 2048-character identity cap.
+- `ctx.patchResult` accepts plain cloneable results by default. For non-plain result objects, opt into `resultPatch.nonPlainClone`; otherwise patching fails with a typed error.
 - Use `node.actions.*` from consumers. Add domain methods only when they add real domain semantics, not as pass-through wrappers.
 - Keep computed/read-only domain getters on the node when they improve consumer readability.
 - Use `ctx.refreshDep("name")` only when a parent driver intentionally refreshes a direct dependency. Runtime does not cascade refresh automatically.

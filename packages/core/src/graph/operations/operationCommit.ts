@@ -1,7 +1,7 @@
 import { Effect } from "effect";
+import type { GraphNodeCell } from "../cell/cellModel";
 import { phaseArgs } from "../cell/cellPhase";
 import { appendReadyDisposersState, commitReadyOperationState } from "../cell/cellTransitions";
-import type { GraphNodeCell } from "../planning/plan";
 import { updateReadyNodeRuntimeState } from "../planning/readyNodeRuntime";
 import { type ResultState, validityChanged } from "../resultValidity";
 import type { ResultValidity, ResultValidityChangedReason } from "../types";

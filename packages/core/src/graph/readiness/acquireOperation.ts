@@ -1,4 +1,5 @@
-import { Cause, Clock, Effect } from "effect";
+import { Cause, Clock, Deferred, Effect } from "effect";
+import type { GraphNodeCell } from "../cell/cellModel";
 import {
   type CellReadinessAttempt,
   phaseBase,
@@ -23,8 +24,8 @@ import { deliverLiveDemand } from "../liveness";
 import { makeResultObservedReporter } from "../liveness/resultObservationBridge";
 import type { GraphOperationEnvironment } from "../operations/dependencies";
 import { constructReadyNode } from "../planning/nodeMaterialization";
-import type { GraphNodeCell } from "../planning/plan";
 import {
+  commitDriverOperationResult,
   commitResultState,
   type ResultState,
   resultValidityInvariantFailure,
@@ -95,6 +96,7 @@ export function runAcquire(
       setCurrentResultState: (next) => {
         currentResultState = next;
       },
+      resultPatch: cell.descriptor.driver.resultPatch,
     });
 
     return yield* runTimedDriverOperation({
@@ -187,8 +189,10 @@ function commitResultStateEffect(
 ): Effect.Effect<ResultState, unknown> {
   return Effect.try({
     try: () =>
-      commitResultState(next, current, cell.resultValidityPolicy, now, {
+      commitDriverOperationResult(cell.resultValidityPolicy, now, {
         context: cell,
+        returned: next,
+        staged: current,
         defaultLoadedAt: now,
       }),
     catch: (cause) => resultValidityInvariantFailure(cell, "driver result commit failed", cause),
@@ -268,25 +272,38 @@ function completeAcquireSuccess(
         ? previousReady.ready.resultValidity
         : base.base.resultValidity;
 
-    yield* cell.state.transition((latest) => [
-      undefined,
-      completeAcquireState({
-        latest,
-        ready: {
-          node,
-          args,
-          deps,
-          resultState,
-          resultValidityPolicy: cell.resultValidityPolicy,
-          // Ownership: the live collected array transfers to ready data, so
-          // disposers added after the ready commit keep accumulating into the
-          // node's disposer set until teardown. The hand-off also makes a
-          // post-commit interrupt drain a no-op so the committed node keeps
-          // its disposers.
-          disposers: disposers.handOff(),
-        },
-      }),
-    ]);
+    let acquireCommit: "Committed" | "Stale" = "Stale";
+    yield* cell.state.transition((latest) => {
+      const currentAttempt =
+        latest.phase._tag === "Acquiring" && latest.phase.attempt.attemptId === attempt.attemptId;
+      const result = currentAttempt
+        ? completeAcquireState({
+            latest,
+            attempt,
+            ready: {
+              node,
+              args,
+              deps,
+              resultState,
+              resultValidityPolicy: cell.resultValidityPolicy,
+              // Ownership: the live collected array transfers to ready data, so
+              // disposers added after the ready commit keep accumulating into the
+              // node's disposer set until teardown. The hand-off also makes a
+              // post-commit interrupt drain a no-op so the committed node keeps
+              // its disposers.
+              disposers: disposers.handOff(),
+            },
+          })
+        : ({ _tag: "Stale", state: latest } as const);
+      acquireCommit = result._tag;
+      return [undefined, result.state];
+    });
+
+    if (acquireCommit === "Stale") {
+      yield* cleanupAcquireDisposers(env, cell, disposers);
+      return yield* Deferred.await(attempt.deferred);
+    }
+
     yield* cell.notifyChanged(cell.nodeId);
     if (
       previousValidity !== undefined &&

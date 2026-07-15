@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { classify, failures, isReportable, nodeIds } from "../src/events";
 import type { NodeId } from "../src/graph";
-import { type RuntimeEvent, RuntimeEvents } from "../src/runtime";
+import type { RuntimeEvent } from "../src/runtime";
 import { Signals } from "../src/signals";
 import {
   ActionFailed,
@@ -78,20 +78,19 @@ describe("runtime event classification", () => {
   });
 
   test("state noise is not reportable", () => {
-    expect(classify(RuntimeEvents.graphNodeChanged(nodeId, at))).toMatchObject({
+    expect(classify({ _tag: "GraphNodeChanged", nodeId, at })).toMatchObject({
       category: "state",
       reportable: false,
       severity: "debug",
       timeline: "state",
     });
     expect(
-      classify(
-        RuntimeEvents.graphNodeLiveDemandChanged(
-          nodeId,
-          { isLive: true, sources: ["mobx"], scopes: [] },
-          at
-        )
-      )
+      classify({
+        _tag: "GraphNodeLiveDemandChanged",
+        nodeId,
+        liveDemand: { isLive: true, sources: ["mobx"], scopes: [] },
+        at,
+      })
     ).toMatchObject({
       category: "state",
       reportable: false,
@@ -100,11 +99,25 @@ describe("runtime event classification", () => {
   });
 
   test("node id projection does not require event-specific devtools code", () => {
-    expect(nodeIds(RuntimeEvents.graphNodesEvicted([nodeId, otherNodeId], "test", [], at))).toEqual(
-      [nodeId, otherNodeId]
-    );
-    expect(nodeIds(RuntimeEvents.runtimeStarted(at))).toEqual([]);
-    expect(nodeIds(RuntimeEvents.graphActionStarted(nodeId, "save", {}, at))).toEqual([nodeId]);
+    expect(
+      nodeIds({
+        _tag: "GraphNodesEvicted",
+        nodeIds: [nodeId, otherNodeId],
+        reason: "test",
+        failures: [],
+        at,
+      })
+    ).toEqual([nodeId, otherNodeId]);
+    expect(nodeIds({ _tag: "RuntimeStarted", at })).toEqual([]);
+    expect(
+      nodeIds({
+        _tag: "GraphActionStarted",
+        nodeId,
+        action: "save",
+        input: {},
+        at,
+      })
+    ).toEqual([nodeId]);
   });
 });
 
@@ -153,51 +166,122 @@ function runtimeEventSamples(): ReadonlyArray<RuntimeEvent> {
   const readinessError = { _tag: "ReadinessErrorForEventTest" };
 
   return [
-    RuntimeEvents.runtimeStarted(at),
-    RuntimeEvents.runtimeStopped(at, "stop"),
-    RuntimeEvents.inputIngestionChanged(true, at),
-    RuntimeEvents.runtimeInputReceived({ _tag: "RuntimeInput", name: "input", payload: {} }, at),
-    RuntimeEvents.runtimeSignalPublished(signalRecord, at),
-    RuntimeEvents.runtimeSignalSubscriberFailureObserved(
-      "subscriber",
-      signalRecord,
-      signalFailure,
-      at
-    ),
-    RuntimeEvents.runtimeSinkFailureObserved("sink", "RuntimeStarted", sinkFailure, at),
-    RuntimeEvents.runtimeObserverFailureObserved("RuntimeStarted", new Error("observer"), at),
-    RuntimeEvents.graphSystemStarted(at),
-    RuntimeEvents.graphSystemStopped(at),
-    RuntimeEvents.graphSystemInputObserved("RuntimeInput", at),
-    RuntimeEvents.graphNodeEnsured(nodeId, { _tag: "Invalid", error: invalidGraphError }, at),
-    RuntimeEvents.graphNodeReadyEnsured(nodeId, { _tag: "Wired", run: { _tag: "Ready" } }, at),
-    RuntimeEvents.graphNodeReadyEnsured(nodeId, { _tag: "Invalid", error: invalidGraphError }, at),
-    RuntimeEvents.graphNodeReadyEnsured(
+    { _tag: "RuntimeStarted", at },
+    { _tag: "RuntimeStopped", at, reason: "stop" },
+    { _tag: "InputIngestionChanged", enabled: true, at },
+    {
+      _tag: "RuntimeInputReceived",
+      input: { _tag: "RuntimeInput", name: "input", payload: {} },
+      at,
+    },
+    { _tag: "RuntimeSignalPublished", record: signalRecord, at },
+    {
+      _tag: "RuntimeSignalSubscriberFailureObserved",
+      subscriber: "subscriber",
+      signal: signalRecord,
+      cause: signalFailure,
+      at,
+    },
+    {
+      _tag: "RuntimeSinkFailureObserved",
+      sink: "sink",
+      eventTag: "RuntimeStarted",
+      cause: sinkFailure,
+      at,
+    },
+    {
+      _tag: "RuntimeObserverFailureObserved",
+      eventTag: "RuntimeStarted",
+      cause: new Error("observer"),
+      at,
+    },
+    { _tag: "GraphSystemStarted", at },
+    { _tag: "GraphSystemStopped", at },
+    { _tag: "GraphSystemInputObserved", inputTag: "RuntimeInput", at },
+    {
+      _tag: "GraphNodeEnsured",
       nodeId,
-      { _tag: "Wired", run: { _tag: "Error", error: readinessError } },
-      at
-    ),
-    RuntimeEvents.graphNodeChanged(nodeId, at),
-    RuntimeEvents.graphActionStarted(nodeId, "save", {}, at),
-    RuntimeEvents.graphActionSucceeded(nodeId, "save", {}, "ok", at),
-    RuntimeEvents.graphActionFailed(nodeId, "save", {}, actionFailure, at),
-    RuntimeEvents.graphRefreshStarted(nodeId, at),
-    RuntimeEvents.graphRefreshSucceeded(nodeId, "ok", at),
-    RuntimeEvents.graphRefreshFailed(nodeId, refreshFailure, at),
-    RuntimeEvents.graphNodeArgsUpdateStarted(nodeId, at),
-    RuntimeEvents.graphNodeArgsUpdateSucceeded(nodeId, false, at),
-    RuntimeEvents.graphNodeArgsUpdateFailed(nodeId, argsFailure, at),
-    RuntimeEvents.graphUnsafeNodeUpdated(nodeId, "debug", at),
-    RuntimeEvents.graphUnsafeNodeUpdateFailed(nodeId, "debug", argsFailure, at),
-    RuntimeEvents.graphNodeReleased(nodeId, "release", at, cleanupFailure),
-    RuntimeEvents.graphNodesEvicted([nodeId], "evict", [cleanupFailure], at),
-    RuntimeEvents.graphNodeCleanupFailed(nodeId, "runtime-stop", [cleanupFailure], at),
-    RuntimeEvents.graphNodeLiveDemandChanged(
+      status: { _tag: "Invalid", error: invalidGraphError },
+      at,
+    },
+    {
+      _tag: "GraphNodeReadyEnsured",
       nodeId,
-      { isLive: true, sources: ["manual"], scopes: [] },
-      at
-    ),
-    RuntimeEvents.graphNodeLiveFailed(nodeId, [cleanupFailure], at),
+      status: { _tag: "Wired", run: { _tag: "Ready" } },
+      at,
+    },
+    {
+      _tag: "GraphNodeReadyEnsured",
+      nodeId,
+      status: { _tag: "Invalid", error: invalidGraphError },
+      at,
+    },
+    {
+      _tag: "GraphNodeReadyEnsured",
+      nodeId,
+      status: { _tag: "Wired", run: { _tag: "Error", error: readinessError } },
+      at,
+    },
+    { _tag: "GraphNodeChanged", nodeId, at },
+    { _tag: "GraphActionStarted", nodeId, action: "save", input: {}, at },
+    {
+      _tag: "GraphActionSucceeded",
+      nodeId,
+      action: "save",
+      input: {},
+      value: "ok",
+      at,
+    },
+    {
+      _tag: "GraphActionFailed",
+      nodeId,
+      action: "save",
+      input: {},
+      error: actionFailure,
+      at,
+    },
+    { _tag: "GraphRefreshStarted", nodeId, at },
+    { _tag: "GraphRefreshSucceeded", nodeId, value: "ok", at },
+    { _tag: "GraphRefreshFailed", nodeId, error: refreshFailure, at },
+    { _tag: "GraphNodeArgsUpdateStarted", nodeId, at },
+    { _tag: "GraphNodeArgsUpdateSucceeded", nodeId, shouldRefresh: false, at },
+    { _tag: "GraphNodeArgsUpdateFailed", nodeId, error: argsFailure, at },
+    { _tag: "GraphUnsafeNodeUpdated", nodeId, label: "debug", at },
+    {
+      _tag: "GraphUnsafeNodeUpdateFailed",
+      nodeId,
+      label: "debug",
+      error: argsFailure,
+      at,
+    },
+    {
+      _tag: "GraphNodeReleased",
+      nodeId,
+      reason: "release",
+      failure: cleanupFailure,
+      at,
+    },
+    {
+      _tag: "GraphNodesEvicted",
+      nodeIds: [nodeId],
+      reason: "evict",
+      failures: [cleanupFailure],
+      at,
+    },
+    {
+      _tag: "GraphNodeCleanupFailed",
+      nodeId,
+      reason: "runtime-stop",
+      failures: [cleanupFailure],
+      at,
+    },
+    {
+      _tag: "GraphNodeLiveDemandChanged",
+      nodeId,
+      liveDemand: { isLive: true, sources: ["manual"], scopes: [] },
+      at,
+    },
+    { _tag: "GraphNodeLiveFailed", nodeId, failures: [cleanupFailure], at },
   ];
 }
 

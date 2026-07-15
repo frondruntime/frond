@@ -8,7 +8,6 @@ export {
   FrondRuntimeReadError,
   FrondRuntimeUnavailable,
 } from "./errors";
-export { RuntimeEvents, runtimeEventNodeId, runtimeEventNodeIds } from "./events";
 export type {
   DisplayableResultValidity,
   RawRuntimeNodeRead,
@@ -25,6 +24,7 @@ export type {
   RuntimeInput,
   RuntimeNodeHandle,
   RuntimeNodeLiveLease,
+  RuntimeNodeLiveLeaseResult,
   RuntimeNodeRead,
   RuntimeNodeSnapshot,
   RuntimeNodeSnapshotLookup,
@@ -41,7 +41,6 @@ export type {
   RuntimeSignalSubscription,
   RuntimeSink,
   RuntimeSnapshot,
-  RuntimeSnapshotPurpose,
   RuntimeStatus,
   RuntimeSubscription,
   RuntimeSyncClock,

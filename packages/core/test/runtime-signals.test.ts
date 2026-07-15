@@ -137,6 +137,49 @@ describe("runtime signals", () => {
     expect(ephemeral._tag === "RuntimeSignals" ? ephemeral.records : []).toEqual([]);
   });
 
+  test("none retention redacts signal payloads from runtime events and sink delivery", async () => {
+    const sinkSignals: Array<RuntimeSignalRecord> = [];
+    const runtime = createRuntime({
+      channels: [ephemeralChannel],
+      sinks: [
+        {
+          name: "signal-redaction-sink",
+          handle: (record) =>
+            Effect.sync(() => {
+              if (record.event._tag === "RuntimeSignalPublished") {
+                sinkSignals.push(record.event.record);
+              }
+            }),
+        },
+      ],
+    });
+
+    await runtime.publish(ephemeralChannel.signal("hidden", { token: "secret" }));
+
+    const events = await runtime.query({ _tag: "RuntimeEvents" });
+    const published =
+      events._tag === "RuntimeEvents"
+        ? events.events.find((record) => record.event._tag === "RuntimeSignalPublished")?.event
+        : undefined;
+
+    expect(
+      published?._tag === "RuntimeSignalPublished" ? published.record.signal : undefined
+    ).toEqual({
+      channel: ephemeralChannel.channel,
+      name: "hidden",
+      payload: undefined,
+      metadata: undefined,
+    });
+    expect(sinkSignals.map((record) => record.signal)).toEqual([
+      {
+        channel: ephemeralChannel.channel,
+        name: "hidden",
+        payload: undefined,
+        metadata: undefined,
+      },
+    ]);
+  });
+
   test("duplicate channel definitions fail loudly", () => {
     expect(() =>
       createRuntime({

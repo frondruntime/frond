@@ -1,5 +1,12 @@
-import { describe, expect, test } from "bun:test";
-import { Effect } from "effect";
+import { describe, expect, spyOn, test } from "bun:test";
+import { Data, Effect } from "effect";
+import { classify } from "../src/events";
+import type {
+  Runtime,
+  RuntimeEventRecord,
+  RuntimeNodeHandle,
+  RuntimeNodeRead,
+} from "../src/runtime";
 import {
   createDeferredDriver,
   createFrondTestHarness,
@@ -7,6 +14,7 @@ import {
   mockSpec,
   readySpec,
   waitForRuntimeEventCount,
+  waitForRuntimeNodeRead,
 } from "../src/testing";
 import {
   Driver,
@@ -73,6 +81,55 @@ describe("Frond testing harness", () => {
     await expect(harness.teardown()).resolves.toBeUndefined();
   });
 
+  test("readReady reports the underlying node error", async () => {
+    class HarnessBackendFailed extends Data.TaggedError("HarnessBackendFailed")<{
+      readonly message: string;
+    }> {}
+
+    const deferred = createDeferredDriver<string>();
+
+    type ReadReadyFailureSpec = NodeSpec<{
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: string;
+    }>;
+
+    class ReadReadyFailureNode extends NodeBase<ReadReadyFailureSpec> {
+      static readonly spec = serviceSpec<ReadReadyFailureSpec>({
+        tag: "testing/resources/read-ready-failure",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        driver: deferred.driver,
+      });
+    }
+
+    const harness = createFrondTestHarness();
+    await harness.start();
+
+    const handle = harness.node(ReadReadyFailureNode, {});
+    const readiness = handle.ensureReady({
+      source: "test",
+      reason: "readiness",
+      priority: "blocking",
+    });
+
+    await deferred.acquire.waitForCall();
+    deferred.acquire.rejectNext(new HarnessBackendFailed({ message: "backend unavailable" }));
+    await readiness;
+
+    const nodeError = harness.readError(handle).error;
+
+    try {
+      harness.readReady(handle);
+      throw new Error("Expected readReady to throw.");
+    } catch (cause) {
+      expect(cause).toBeInstanceOf(Error);
+      expect((cause as Error).message).toContain("HarnessBackendFailed: backend unavailable");
+      expect((cause as Error).cause).toBe(nodeError);
+    }
+  });
+
   test("sink failures are captured as runtime events and do not fail harness commands", async () => {
     const harness = createFrondTestHarness({
       sinks: [
@@ -84,7 +141,7 @@ describe("Frond testing harness", () => {
     });
 
     await harness.start();
-    const snapshot = await harness.runtime.getSnapshotFor("test");
+    const snapshot = await harness.runtime.getSnapshot();
 
     expect(snapshot.events.map((record) => record.event._tag)).toContain(
       "RuntimeSinkFailureObserved"
@@ -215,6 +272,48 @@ describe("Frond testing harness", () => {
     expect(harness.readReady(handle).result).toBe("initial");
   });
 
+  test("deferred driver refresh gate commits a resolved value", async () => {
+    const deferred = createDeferredDriver<string>({ refresh: true });
+
+    type RefreshValueHarnessSpec = NodeSpec<{
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: string;
+    }>;
+
+    class RefreshValueHarnessNode extends NodeBase<RefreshValueHarnessSpec> {
+      static readonly spec = serviceSpec<RefreshValueHarnessSpec>({
+        tag: "testing/resources/refresh-value-harness",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        driver: deferred.driver,
+      });
+    }
+
+    const harness = createFrondTestHarness();
+    await harness.start();
+
+    const handle = harness.node(RefreshValueHarnessNode, {});
+    const readiness = handle.ensureReady({
+      source: "test",
+      reason: "readiness",
+      priority: "blocking",
+    });
+
+    await deferred.acquire.waitForCall();
+    deferred.acquire.resolveNext("initial");
+    await readiness;
+
+    const refresh = handle.refresh({ source: "test", reason: "refresh", priority: "visible" });
+
+    await deferred.refresh.waitForCall();
+    deferred.refresh.resolveNext("updated");
+
+    await expect(refresh).resolves.toMatchObject({ _tag: "Success" });
+    expect(harness.readReady(handle).result).toBe("updated");
+  });
+
   test("wait helpers observe public runtime records and node reads", async () => {
     const deferred = createDeferredDriver<string>();
 
@@ -291,6 +390,88 @@ describe("Frond testing harness", () => {
 
     expect(matches.length).toBeGreaterThanOrEqual(2);
     expect(matches.every((record) => record.event._tag === "GraphNodeReadyEnsured")).toBe(true);
+  });
+
+  test("waitForRuntimeEventCount scans events fetched by the final poll", async () => {
+    const matchingRecord = runtimeStartedRecord(1);
+    const nowValues = [0, 0, 2];
+    const now = spyOn(performance, "now").mockImplementation(() => nowValues.shift() ?? 2);
+    let queryCount = 0;
+    const source = {
+      query: async () => {
+        queryCount += 1;
+
+        return {
+          _tag: "RuntimeEvents" as const,
+          runtimeId: "testing-runtime",
+          events: queryCount === 1 ? [] : [matchingRecord],
+        };
+      },
+    } as unknown as Runtime;
+
+    try {
+      const matches = await waitForRuntimeEventCount(source, "RuntimeStarted", 1, {
+        timeoutMs: 1,
+        intervalMs: 0,
+      });
+
+      expect(matches).toEqual([matchingRecord]);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  test("waitForRuntimeNodeRead rejects predicate exceptions and cleans up", async () => {
+    const predicateError = new TypeError("predicate exploded");
+    const pendingRead = {
+      _tag: "Pending",
+      nodeId: 'testing/resources/wait-predicate:v1:"singleton"',
+      attempt: Promise.resolve({ _tag: "Ready" }),
+      operation: { _tag: "Idle" },
+      busy: false,
+    } as RuntimeNodeRead<string>;
+    let listener: (() => void) | undefined;
+    let unsubscribed = 0;
+    let predicateCalls = 0;
+    const clearTimeoutSpy = spyOn(globalThis, "clearTimeout");
+    const handle = {
+      read: () => pendingRead,
+      subscribe: (next: () => void) => {
+        listener = next;
+
+        return () => {
+          unsubscribed += 1;
+        };
+      },
+    } as RuntimeNodeHandle<Record<string, never>, string>;
+    const waiting = waitForRuntimeNodeRead(
+      handle,
+      () => {
+        predicateCalls += 1;
+
+        if (predicateCalls === 1) {
+          return false;
+        }
+
+        throw predicateError;
+      },
+      { timeoutMs: 50 }
+    );
+
+    try {
+      listener?.();
+    } catch {
+      // Mirrors runtime observer delivery, which records observer failures
+      // without letting them reject the wait helper's promise.
+    }
+
+    try {
+      await expect(waiting).rejects.toBe(predicateError);
+      expect(unsubscribed).toBe(1);
+      expect(clearTimeoutSpy).toHaveBeenCalled();
+    } finally {
+      clearTimeoutSpy.mockRestore();
+    }
   });
 
   test("deferred action gate captures input and preserves FIFO resolution", async () => {
@@ -465,3 +646,18 @@ describe("low-level test runtime", () => {
     ).toBe("test");
   });
 });
+
+function runtimeStartedRecord(sequence: number): RuntimeEventRecord {
+  const event = { _tag: "RuntimeStarted" as const, at: sequence };
+
+  return {
+    runtimeId: "testing-runtime" as RuntimeEventRecord["runtimeId"],
+    sequence,
+    recordedAt: sequence,
+    work: { source: "test", reason: "start", priority: "blocking" },
+    event,
+    classification: classify(event),
+    nodeIds: [],
+    failures: [],
+  };
+}

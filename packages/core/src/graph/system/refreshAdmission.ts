@@ -1,8 +1,8 @@
 import { Effect, Match } from "effect";
 import type { GraphCellTask } from "../cell/cellActor";
 import type { GraphNodeCellLookup } from "../cell/cellLookup";
+import type { GraphNodeCell } from "../cell/cellModel";
 import { makeMissingNodeRefreshFailure } from "../operations/operationFailures";
-import type { GraphNodeCell } from "../planning/plan";
 import type {
   NodeId,
   OperationAdmission,
@@ -12,6 +12,7 @@ import type {
   RefreshResult,
   RefreshSubmission,
 } from "../types";
+import { registerAdmittedTask } from "./admissionRegistration";
 
 const refreshAdmissionPolicy = "join" satisfies OperationAdmissionPolicy;
 const refreshStartedAdmission = {
@@ -31,8 +32,12 @@ export interface RefreshAdmissionController {
   readonly submit: (input: {
     readonly request: RefreshRequest;
     readonly cellLookup: GraphNodeCellLookup;
-    readonly start: (cell: GraphNodeCell) => Effect.Effect<GraphCellTask<RefreshResult>>;
+    readonly start: (
+      cell: GraphNodeCell,
+      onComplete: () => void
+    ) => Effect.Effect<GraphCellTask<RefreshResult>>;
   }) => Effect.Effect<RefreshSubmission>;
+  readonly clearNode: (nodeId: NodeId) => Effect.Effect<void>;
 }
 
 export function makeRefreshAdmissionController(): RefreshAdmissionController {
@@ -62,16 +67,22 @@ export function makeRefreshAdmissionController(): RefreshAdmissionController {
           } satisfies RefreshSubmission;
         }
 
-        const task = yield* input.start(cell);
-        const admittedTask = yield* startAdmittedRefreshTask(task, admissionKey, activeRefreshes);
-        activeRefreshes.set(admissionKey, admittedTask);
+        const task = yield* registerAdmittedTask({
+          active: activeRefreshes,
+          key: admissionKey,
+          start: (onComplete) => input.start(cell, onComplete),
+        });
 
         return {
           _tag: "Started",
           nodeId: cell.nodeId,
           admission: refreshStartedAdmission,
-          task: admittedTask,
+          task,
         } satisfies RefreshSubmission;
+      }),
+    clearNode: (nodeId) =>
+      Effect.sync(() => {
+        activeRefreshes.delete(operationAdmissionMapKey(refreshAdmissionKey(nodeId)));
       }),
   };
 }
@@ -83,26 +94,6 @@ function missingRefreshSubmission(request: RefreshRequest, nodeId: NodeId): Refr
     admission: refreshMissingAdmission,
     result: makeMissingNodeRefreshFailure(nodeId, request),
   } satisfies RefreshSubmission;
-}
-
-function startAdmittedRefreshTask(
-  task: GraphCellTask<RefreshResult>,
-  admissionKey: string,
-  activeRefreshes: Map<string, GraphCellTask<RefreshResult>>
-): Effect.Effect<GraphCellTask<RefreshResult>> {
-  return Effect.gen(function* () {
-    const awaitRefresh = yield* Effect.cached(
-      task.await.pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            activeRefreshes.delete(admissionKey);
-          })
-        )
-      )
-    );
-
-    return { await: awaitRefresh };
-  });
 }
 
 function refreshAdmissionKey(nodeId: NodeId): OperationAdmissionKey {

@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import type { GraphNodeCell } from "../cell/cellModel";
 import {
   mapPhaseBase,
   mapPhaseReady,
@@ -6,12 +7,11 @@ import {
   phaseReadyData,
   projectCellPhase,
 } from "../cell/cellPhase";
+import { resolveStaticDependencyIds } from "../planning/dependencyDefinitions";
 import { type GraphOutcome, graphFailure, graphSuccess } from "../planning/outcome";
-import { type GraphNodeCell, resolveEffectiveNodeId, sameDependencyIds } from "../planning/plan";
 import { updateReadyNodeRuntimeState } from "../planning/readyNodeRuntime";
 import {
   GraphInvariantViolation,
-  type NodeRead,
   type UpdateNodeArgsRequest,
   type UpdateNodeArgsResult,
 } from "../types";
@@ -122,45 +122,36 @@ function validateStaticDependencies(
   cell: GraphNodeCell,
   args: unknown
 ): GraphOutcome<void, unknown> {
-  try {
-    const dependencies = cell.descriptor.dependencies(args);
-    const entries = Object.entries(dependencies);
-    const dependencyIds: Record<string, NodeRead["nodeId"]> = {};
+  const dependencyIds = resolveStaticDependencyIds(
+    env.state,
+    cell,
+    args,
+    (dependencyName) =>
+      new GraphInvariantViolation({
+        nodeId: cell.nodeId,
+        tag: cell.tag,
+        invariant: "same-identity args dependency record must be a dependency",
+        cause: { dependency: dependencyName },
+      })
+  );
 
-    for (const [dependencyName, dependency] of entries) {
-      if (dependency.type !== "dependency") {
-        return graphFailure(
-          new GraphInvariantViolation({
-            nodeId: cell.nodeId,
-            tag: cell.tag,
-            invariant: "same-identity args dependency record must be a dependency",
-            cause: { dependency: dependencyName },
-          })
-        );
-      }
-
-      dependencyIds[dependencyName] = resolveEffectiveNodeId(env.state, {
-        spec: dependency.spec,
-        args: dependency.args,
-      });
-    }
-
-    if (!sameDependencyIds(cell.dependencies, dependencyIds)) {
-      return graphFailure(
-        new GraphInvariantViolation({
-          nodeId: cell.nodeId,
-          tag: cell.tag,
-          invariant: "same-identity args update cannot change static dependencies",
-          cause: {
-            currentDependencies: cell.dependencies,
-            nextDependencies: dependencyIds,
-          },
-        })
-      );
-    }
-
-    return graphSuccess(undefined);
-  } catch (cause) {
-    return graphFailure(cause);
+  if (dependencyIds._tag === "Malformed") {
+    return graphFailure(dependencyIds.cause);
   }
+
+  if (dependencyIds._tag === "Changed") {
+    return graphFailure(
+      new GraphInvariantViolation({
+        nodeId: cell.nodeId,
+        tag: cell.tag,
+        invariant: "same-identity args update cannot change static dependencies",
+        cause: {
+          currentDependencies: dependencyIds.currentIds,
+          nextDependencies: dependencyIds.nextIds,
+        },
+      })
+    );
+  }
+
+  return graphSuccess(undefined);
 }

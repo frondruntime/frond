@@ -358,7 +358,155 @@ describe("React node store", () => {
 
     store.dispose();
   });
+
+  test("rejected updateArgs rolls back the fingerprint and allows retry", async () => {
+    const baseRuntime = createRuntime();
+    const runtime = rejectTransportArgsUpdate(baseRuntime, "transport-reject");
+    const initial = { filter: "init" };
+    const store = makeReactNodeStore(runtime, {
+      spec: ReactArgsSelectiveNode,
+      args: initial,
+      nodeId: runtime.resolveNodeIdSync({ spec: ReactArgsSelectiveNode, args: initial }),
+    });
+
+    await runtime.submit({ _tag: "RuntimeStart" });
+    await readThrownPromise(store.read);
+
+    await store.updateArgs({ filter: "transport-reject" });
+
+    await store.updateArgs({ filter: "transport-reject" });
+    await store.updateArgs({ filter: "ok" });
+
+    const ready = store.read();
+    const events = (await runtime.query({ _tag: "RuntimeEvents" })).events;
+
+    expect(ready.node.result).toEqual({ timezone: "ok" });
+    expect(ready.operationFailure).toBeUndefined();
+    expect(
+      events.filter((record) => record.event._tag === "GraphNodeArgsUpdateStarted")
+    ).toHaveLength(2);
+
+    store.dispose();
+  });
+
+  test("a transport rejection cannot shadow a newer graph-projected args failure", async () => {
+    const baseRuntime = createRuntime();
+    const runtime = rejectTransportArgsUpdate(baseRuntime, "transport-reject");
+    const initial = { filter: "init" };
+    const store = makeReactNodeStore(runtime, {
+      spec: ReactArgsSelectiveNode,
+      args: initial,
+      nodeId: runtime.resolveNodeIdSync({ spec: ReactArgsSelectiveNode, args: initial }),
+    });
+    const handle = runtime.client.node(ReactArgsSelectiveNode, initial);
+
+    await runtime.submit({ _tag: "RuntimeStart" });
+    await readThrownPromise(store.read);
+
+    await store.updateArgs({ filter: "transport-reject" });
+    const graphFailure = await handle.updateArgs({ filter: "fail" });
+    const read = store.read();
+    const snapshot = await runtime.getSnapshot();
+    const graphNode = snapshot.graph.nodes.find(
+      (node) => node.tag === "react/resources/args-selective"
+    );
+
+    expect(graphFailure._tag).toBe("Failure");
+    expect(read.operationFailure).toMatchObject({
+      kind: "args",
+      error: { _tag: "UpdateNodeArgsFailed" },
+    });
+    expect(read.operationFailure?.operationId).toBe(graphNode?.operationFailure?.operationId);
+
+    store.dispose();
+  });
+
+  test("failed updateArgs across dispose-revive still rolls back the fingerprint", async () => {
+    const failStarted = await Effect.runPromise(Deferred.make<void>());
+    const failGate = await Effect.runPromise(Deferred.make<void>());
+
+    class SlowFailingArgsNode extends NodeBase<ReactArgsRollbackSpec> {
+      static readonly spec = resourceSpec<ReactArgsRollbackSpec>({
+        tag: "react/resources/args-revive-rollback",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        driver: Driver.Effect<ReactArgsRollbackSpec>({
+          acquire: Driver.Acquire((ctx) => Effect.succeed({ timezone: ctx.args.filter })),
+          refresh: Driver.Refresh(() =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(failStarted, undefined);
+              yield* Deferred.await(failGate);
+              return yield* Effect.fail({ _tag: "RefreshRejected" });
+            })
+          ),
+        }),
+      });
+    }
+    const runtime = createRuntime();
+    const initial = { filter: "init" };
+    const store = makeReactNodeStore(runtime, {
+      spec: SlowFailingArgsNode,
+      args: initial,
+      nodeId: runtime.resolveNodeIdSync({ spec: SlowFailingArgsNode, args: initial }),
+    });
+
+    await runtime.submit({ _tag: "RuntimeStart" });
+    const unsubscribe = store.subscribe(() => {});
+    await readThrownPromise(store.read);
+
+    const failed = store.updateArgs({ filter: "fail" });
+    await Effect.runPromise(Deferred.await(failStarted));
+
+    unsubscribe();
+    const revive = store.subscribe(() => {});
+
+    await Effect.runPromise(Deferred.succeed(failGate, undefined));
+    await failed;
+    await store.updateArgs({ filter: "fail" });
+
+    const events = (await runtime.query({ _tag: "RuntimeEvents" })).events;
+
+    expect(
+      events.filter((record) => record.event._tag === "GraphNodeArgsUpdateStarted")
+    ).toHaveLength(2);
+
+    revive();
+  });
 });
+
+function rejectTransportArgsUpdate(
+  runtime: RuntimeInstance,
+  rejectedFilter: string
+): RuntimeInstance {
+  let rejected = false;
+  const wrappedRuntime = {
+    ...runtime,
+    submit: (command: Parameters<RuntimeInstance["submit"]>[0]) => {
+      if (
+        !rejected &&
+        command._tag === "GraphUpdateNodeArgs" &&
+        (command.request.args as { readonly filter?: unknown }).filter === rejectedFilter
+      ) {
+        rejected = true;
+        return Promise.reject(new Error(`transport rejected ${rejectedFilter}`));
+      }
+
+      return runtime.submit(command);
+    },
+  } satisfies RuntimeInstance;
+
+  return {
+    ...wrappedRuntime,
+    client: createRuntimeClient({
+      resolveNodeIdSync: wrappedRuntime.resolveNodeIdSync,
+      getStatusSync: wrappedRuntime.getStatusSync,
+      readNodeSnapshotSync: wrappedRuntime.readNodeSnapshotSync,
+      readNodeSnapshot: wrappedRuntime.readNodeSnapshot,
+      observe: wrappedRuntime.observe,
+      submit: wrappedRuntime.submit,
+    }),
+  };
+}
 
 function readThrownPromise(read: () => unknown): Promise<unknown> {
   try {

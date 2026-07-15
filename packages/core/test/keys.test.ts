@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Key } from "../src";
+import { Args, Key } from "../src";
 
 describe("keys", () => {
   test("Key exposes singleton and structured key helpers", () => {
@@ -7,6 +7,11 @@ describe("keys", () => {
 
     expect(Key.singleton()).toBe("singleton");
     expect(structured).toEqual({ outer: { b: 1, a: 2 } });
+  });
+
+  test("Args.none is frozen", () => {
+    expect(Object.isFrozen(Args.none)).toBe(true);
+    expect(() => Object.assign(Args.none, { leaked: true })).toThrow(TypeError);
   });
 
   test("canonicalKey is deterministic for nested object order", () => {
@@ -83,6 +88,18 @@ describe("keys", () => {
     );
     expect(() => Key.canonicalKey({ a: "x".repeat(exactPayloadLength + 1) })).toThrow(
       Key.KeyTooLongError
+    );
+  });
+
+  test("canonicalArgs validates and serializes shape without the key length cap", () => {
+    const args = { payload: "x".repeat(3_000), nested: { page: 1 } };
+
+    expect(Key.canonicalArgs(args)).toBe(
+      `v1:{"nested":{"page":1},"payload":${JSON.stringify(args.payload)}}`
+    );
+    expect(() => Key.canonicalArgs({ invalid: Number.NaN })).toThrow(Key.KeyNonFiniteNumberError);
+    expect(() => Key.canonicalArgs({ invalid: new Date() })).toThrow(
+      Key.KeyUnsupportedJsonValueError
     );
   });
 });

@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import type { RuntimeCancellationReason } from "../../cancellation";
 import type { DisposerBag } from "../../driver";
-import type { GraphNodeCell } from "../planning/plan";
+import type { GraphNodeCell } from "../cell/cellModel";
 import { DisposerFailed, type GraphCleanupFailureObserver, type NodeId } from "../types";
 import { reportDetachedCleanupFailure } from "./cleanupFailureBridge";
 import { runDisposers } from "./disposers";
