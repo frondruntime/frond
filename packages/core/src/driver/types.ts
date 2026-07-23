@@ -277,9 +277,13 @@ export type Driver<
   TDeps extends object = object,
   TResult = unknown,
   TActions extends ActionContracts = ActionContracts,
+  TMode extends DriverMode = DriverMode,
 > = {
   readonly _tag: "NormalizedDriver";
-  readonly mode: DriverMode;
+  // Authored mode literal. `Driver.Async` fixes this to "async" and
+  // `Driver.Effect` to "effect", so the public action surface can present each
+  // action in the representation it was authored in.
+  readonly mode: TMode;
   readonly _actions?: TActions | undefined;
   readonly resultValidity?: ResultValidityPolicy | undefined;
   readonly acquire: (

@@ -19,6 +19,24 @@ export function readNode<TResult>(
   return publicRuntimeNodeRead(readRawNode<TResult>(runtime, nodeId));
 }
 
+/**
+ * Reads the node's monotonic revision without materializing a read object.
+ *
+ * The revision bumps on every committed change to the node's cell state, so it
+ * gives external stores an `Object.is`-stable snapshot for `useSyncExternalStore`
+ * (`getSnapshot: handle.readVersion`) instead of hashing a fresh `read()` by hand.
+ * A stopped runtime or an unwired node reports `0`.
+ */
+export function readNodeRevision(runtime: RuntimeReadHost, nodeId: NodeId): number {
+  if (runtime.getStatusSync() === "stopped") {
+    return 0;
+  }
+
+  const lookup = runtime.readNodeSnapshotSync(nodeId);
+
+  return lookup._tag === "Missing" ? 0 : lookup.snapshot.revision;
+}
+
 export function readRawNode<TResult>(
   runtime: RuntimeReadHost,
   nodeId: NodeId

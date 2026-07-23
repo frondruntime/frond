@@ -26,25 +26,23 @@ type StaticCounterSpec = import("../src").NodeSpec<{
 }>;
 
 class StaticCounterNode extends NodeBase<StaticCounterSpec> {
-  static readonly spec = resourceSpec<StaticCounterSpec>({
+  static readonly spec = resourceSpec.async<StaticCounterSpec>({
     tag: tag("tests/static-counter"),
     key: () => Key.singleton(),
-    driver: Driver.Async<StaticCounterSpec>({
-      acquire: Driver.Acquire(() => ({ count: 1 })),
-      actions: {
-        add: Driver.Action(
-          (
-            ctx: AsyncDriverContext<
-              NodeBase<StaticCounterSpec>,
-              NodeSpecArgs<StaticCounterSpec>,
-              NodeSpecResolvedDeps<StaticCounterSpec>,
-              { readonly count: number }
-            >,
-            input: { readonly by: number }
-          ) => ctx.node.result.count + input.by
-        ),
-      },
-    }),
+    acquire: Driver.Acquire(() => ({ count: 1 })),
+    actions: {
+      add: Driver.Action(
+        (
+          ctx: AsyncDriverContext<
+            NodeBase<StaticCounterSpec>,
+            NodeSpecArgs<StaticCounterSpec>,
+            NodeSpecResolvedDeps<StaticCounterSpec>,
+            { readonly count: number }
+          >,
+          input: { readonly by: number }
+        ) => ctx.node.result.count + input.by
+      ),
+    },
   });
 
   get count(): number {
@@ -96,26 +94,24 @@ describe("static-spec authoring", () => {
     const gate = makeGate();
 
     class AdmissionNode extends NodeBase<AdmissionSpec> {
-      static readonly spec = resourceSpec<AdmissionSpec>({
+      static readonly spec = resourceSpec.async<AdmissionSpec>({
         tag: tag("tests/action-admission-reject"),
         key: () => Key.singleton(),
-        driver: Driver.Async<AdmissionSpec>({
-          acquire: Driver.Acquire(() => "ready"),
-          actions: {
-            rejectSlow: Driver.Action(
-              async (_ctx, input: { readonly id: string }) => {
-                gate.markStarted();
-                await gate.promise;
-                return input.id;
-              },
-              { admission: "reject" }
-            ),
-            joinSlow: Driver.Action((_ctx, input: { readonly id: string }) => input.id, {
-              admission: "join",
-              admissionKey: (input) => input.id,
-            }),
-          },
-        }),
+        acquire: Driver.Acquire(() => "ready"),
+        actions: {
+          rejectSlow: Driver.Action(
+            async (_ctx, input: { readonly id: string }) => {
+              gate.markStarted();
+              await gate.promise;
+              return input.id;
+            },
+            { admission: "reject" }
+          ),
+          joinSlow: Driver.Action((_ctx, input: { readonly id: string }) => input.id, {
+            admission: "join",
+            admissionKey: (input) => input.id,
+          }),
+        },
       });
     }
 
@@ -136,27 +132,25 @@ describe("static-spec authoring", () => {
     let runs = 0;
 
     class AdmissionNode extends NodeBase<AdmissionSpec> {
-      static readonly spec = resourceSpec<AdmissionSpec>({
+      static readonly spec = resourceSpec.async<AdmissionSpec>({
         tag: tag("tests/action-admission-join"),
         key: () => Key.singleton(),
-        driver: Driver.Async<AdmissionSpec>({
-          acquire: Driver.Acquire(() => "ready"),
-          actions: {
-            rejectSlow: Driver.Action((_ctx, input: { readonly id: string }) => input.id),
-            joinSlow: Driver.Action(
-              async (_ctx, input: { readonly id: string }) => {
-                runs += 1;
-                gate.markStarted();
-                await gate.promise;
-                return input.id;
-              },
-              {
-                admission: "join",
-                admissionKey: (input) => input.id,
-              }
-            ),
-          },
-        }),
+        acquire: Driver.Acquire(() => "ready"),
+        actions: {
+          rejectSlow: Driver.Action((_ctx, input: { readonly id: string }) => input.id),
+          joinSlow: Driver.Action(
+            async (_ctx, input: { readonly id: string }) => {
+              runs += 1;
+              gate.markStarted();
+              await gate.promise;
+              return input.id;
+            },
+            {
+              admission: "join",
+              admissionKey: (input) => input.id,
+            }
+          ),
+        },
       });
     }
 

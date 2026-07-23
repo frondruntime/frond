@@ -48,25 +48,23 @@ type AnalyticsSpec = NodeSpec<{
   readonly result: AnalyticsResultStore;
 }>;
 
-class AnalyticsNode extends NodeBase<AnalyticsSpec> {
-  static readonly spec = serviceSpec<AnalyticsSpec>({
+class AnalyticsNode extends NodeBase<AnalyticsSpec, "effect"> {
+  static readonly spec = serviceSpec.effect<AnalyticsSpec>({
     tag: tag("e2e/signal-boundary/analytics"),
     key: () => Key.singleton(),
-    driver: Driver.Effect<AnalyticsSpec>({
-      acquire: Driver.Acquire((ctx) =>
-        Effect.gen(function* () {
-          const result = new AnalyticsResultStore();
-          const subscription = yield* ctx.signals.subscribe({
-            name: "e2e-analytics-node",
-            channels: [analyticsChannel, domainChannel],
-            handle: (record) => Effect.sync(() => result.record(record)),
-          });
+    acquire: Driver.Acquire((ctx) =>
+      Effect.gen(function* () {
+        const result = new AnalyticsResultStore();
+        const subscription = yield* ctx.signals.subscribe({
+          name: "e2e-analytics-node",
+          channels: [analyticsChannel, domainChannel],
+          handle: (record) => Effect.sync(() => result.record(record)),
+        });
 
-          ctx.disposers.add(subscription.unsubscribe);
-          return result;
-        })
-      ),
-    }),
+        ctx.disposers.add(subscription.unsubscribe);
+        return result;
+      })
+    ),
   });
 }
 
@@ -76,31 +74,29 @@ type DiagnosticsSpec = NodeSpec<{
   readonly result: DiagnosticsResultStore;
 }>;
 
-class DiagnosticsNode extends NodeBase<DiagnosticsSpec> {
-  static readonly spec = serviceSpec<DiagnosticsSpec>({
+class DiagnosticsNode extends NodeBase<DiagnosticsSpec, "effect"> {
+  static readonly spec = serviceSpec.effect<DiagnosticsSpec>({
     tag: tag("e2e/signal-boundary/diagnostics"),
     key: () => Key.singleton(),
-    driver: Driver.Effect<DiagnosticsSpec>({
-      acquire: Driver.Acquire((ctx) =>
-        Effect.gen(function* () {
-          const result = new DiagnosticsResultStore();
-          const retained = yield* ctx.signals.readRetained({ channel: diagnosticsChannel });
+    acquire: Driver.Acquire((ctx) =>
+      Effect.gen(function* () {
+        const result = new DiagnosticsResultStore();
+        const retained = yield* ctx.signals.readRetained({ channel: diagnosticsChannel });
 
-          for (const record of retained) {
-            result.record(record);
-          }
+        for (const record of retained) {
+          result.record(record);
+        }
 
-          const subscription = yield* ctx.signals.subscribe({
-            name: "e2e-diagnostics-node",
-            channels: [diagnosticsChannel],
-            handle: (record) => Effect.sync(() => result.record(record)),
-          });
+        const subscription = yield* ctx.signals.subscribe({
+          name: "e2e-diagnostics-node",
+          channels: [diagnosticsChannel],
+          handle: (record) => Effect.sync(() => result.record(record)),
+        });
 
-          ctx.disposers.add(subscription.unsubscribe);
-          return result;
-        })
-      ),
-    }),
+        ctx.disposers.add(subscription.unsubscribe);
+        return result;
+      })
+    ),
   });
 }
 

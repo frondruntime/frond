@@ -74,22 +74,20 @@ describe("runtime config normalization", () => {
       readonly result: string;
     }>;
 
-    class SignalReaderNode extends NodeBase<SignalReaderSpec> {
-      static readonly spec = serviceSpec<SignalReaderSpec>({
+    class SignalReaderNode extends NodeBase<SignalReaderSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<SignalReaderSpec>({
         tag: "services/test-graph-signal-default",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SignalReaderSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.gen(function* () {
-              const retained = yield* ctx.signals.readRetained({
-                channel: configSignalChannel,
-              });
-              retainedCounts.push(retained.length);
-              return "ready";
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.gen(function* () {
+            const retained = yield* ctx.signals.readRetained({
+              channel: configSignalChannel,
+            });
+            retainedCounts.push(retained.length);
+            return "ready";
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem({ runtimeId: "mock-test-runtime" });

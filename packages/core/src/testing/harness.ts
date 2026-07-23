@@ -1,10 +1,12 @@
 import type {
   DependenciesRecord,
   FrondNode,
+  NodeSpecActions,
   NodeSpecArgs,
   NodeSpecDeclaredDeps,
   NodeSpecInstance,
   NodeSpecLike,
+  NodeSpecMode,
   NodeSpecResult,
   ResolvedDeps,
 } from "../node";
@@ -23,6 +25,22 @@ export interface FrondTestHarnessOptions extends TestRuntimeOptions {
   readonly waitIntervalMs?: number | undefined;
 }
 
+// Phantom spec brand. A test handle is a runtime handle that also remembers the
+// node spec it was opened for, so `readReady`/`readError` can recover the node
+// instance, deps, and result types instead of collapsing them to `object`. The
+// symbol is type-only; nothing is attached at runtime.
+declare const FROND_TEST_SPEC: unique symbol;
+
+export interface FrondTestNodeHandle<TSpec extends NodeSpecLike>
+  extends RuntimeNodeHandle<
+    NodeSpecArgs<TSpec>,
+    NodeSpecResult<TSpec>,
+    NodeSpecActions<TSpec>,
+    NodeSpecMode<TSpec>
+  > {
+  readonly [FROND_TEST_SPEC]?: TSpec;
+}
+
 export interface FrondTestHarness {
   readonly runtime: Runtime;
   readonly client: RuntimeClient;
@@ -34,7 +52,7 @@ export interface FrondTestHarness {
   readonly node: <TSpec extends NodeSpecLike>(
     spec: TSpec,
     args: NodeSpecArgs<TSpec>
-  ) => RuntimeNodeHandle<NodeSpecArgs<TSpec>, NodeSpecResult<TSpec>>;
+  ) => FrondTestNodeHandle<TSpec>;
   readonly startNode: <TSpec extends NodeSpecLike>(
     spec: TSpec,
     args: NodeSpecArgs<TSpec>
@@ -49,12 +67,17 @@ export interface FrondTestHarness {
   readonly startNodes: <TMap extends FrondTestNodeInputMap>(
     map: TMap
   ) => Promise<FrondTestReadyNodeMap<TMap>>;
-  readonly readReady: <TArgs, TDeps extends DependenciesRecord, TResult, TNode extends object>(
-    handle: RuntimeNodeHandle<TArgs, TResult>
-  ) => FrondTestReadyRead<TArgs, TDeps, TResult, TNode>;
-  readonly readError: <TArgs, TResult>(
-    handle: RuntimeNodeHandle<TArgs, TResult>
-  ) => Extract<RuntimeNodeRead<TResult>, { readonly _tag: "Error" }>;
+  readonly readReady: <TSpec extends NodeSpecLike>(
+    handle: FrondTestNodeHandle<TSpec>
+  ) => FrondTestReadyRead<
+    NodeSpecArgs<TSpec>,
+    NodeSpecDeclaredDeps<TSpec>,
+    NodeSpecResult<TSpec>,
+    NodeSpecInstance<TSpec>
+  >;
+  readonly readError: <TSpec extends NodeSpecLike>(
+    handle: FrondTestNodeHandle<TSpec>
+  ) => Extract<RuntimeNodeRead<NodeSpecResult<TSpec>>, { readonly _tag: "Error" }>;
   readonly waitForEvent: (
     predicate: (record: RuntimeEventRecord) => boolean,
     options?: FrondTestWaitOptions | undefined
@@ -155,16 +178,11 @@ export function createFrondTestHarness(options: FrondTestHarnessOptions = {}): F
       });
     },
     node: <TSpec extends NodeSpecLike>(spec: TSpec, args: NodeSpecArgs<TSpec>) =>
-      runtime.client.node(spec, args),
+      runtime.client.node(spec, args) as FrondTestNodeHandle<TSpec>,
     startNode: async <TSpec extends NodeSpecLike>(spec: TSpec, args: NodeSpecArgs<TSpec>) => {
-      const handle = runtime.client.node<NodeSpecArgs<TSpec>, NodeSpecResult<TSpec>>(spec, args);
+      const handle = harness.node(spec, args);
       await handle.ensureReady(testWork("readiness", "blocking"));
-      return harness.readReady<
-        NodeSpecArgs<TSpec>,
-        NodeSpecDeclaredDeps<TSpec>,
-        NodeSpecResult<TSpec>,
-        NodeSpecInstance<TSpec>
-      >(handle).node;
+      return harness.readReady(handle).node;
     },
     startNodes: async (map) => {
       const entries = await Promise.all(
@@ -176,25 +194,28 @@ export function createFrondTestHarness(options: FrondTestHarnessOptions = {}): F
 
       return Object.fromEntries(entries) as FrondTestReadyNodeMap<typeof map>;
     },
-    readReady: <TArgs, TDeps extends DependenciesRecord, TResult, TNode extends object>(
-      handle: RuntimeNodeHandle<TArgs, TResult>
-    ) => {
+    readReady: <TSpec extends NodeSpecLike>(handle: FrondTestNodeHandle<TSpec>) => {
       const read = handle.read();
 
       if (read._tag !== "Ready") {
         throw new Error(`Expected Frond test node read Ready, received ${read._tag}.`);
       }
 
-      return read as unknown as FrondTestReadyRead<TArgs, TDeps, TResult, TNode>;
+      return read as unknown as FrondTestReadyRead<
+        NodeSpecArgs<TSpec>,
+        NodeSpecDeclaredDeps<TSpec>,
+        NodeSpecResult<TSpec>,
+        NodeSpecInstance<TSpec>
+      >;
     },
-    readError: (handle) => {
+    readError: <TSpec extends NodeSpecLike>(handle: FrondTestNodeHandle<TSpec>) => {
       const read = handle.read();
 
       if (read._tag !== "Error") {
         throw new Error(`Expected Frond test node read Error, received ${read._tag}.`);
       }
 
-      return read;
+      return read as Extract<RuntimeNodeRead<NodeSpecResult<TSpec>>, { readonly _tag: "Error" }>;
     },
     waitForEvent: (predicate, waitOptions) =>
       waitForRuntimeEvent(

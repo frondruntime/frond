@@ -1,8 +1,15 @@
 import type { NodeId } from "../graph";
+import type { RuntimeEffectBridgeRunner } from "./client";
 import { type RuntimeReadHost, readRawNode } from "./nodeRead";
-import type { RawRuntimeNodeRead, Runtime, RuntimeClient, UnsafeScheduleResult } from "./types";
+import type {
+  RawRuntimeNodeRead,
+  RuntimeClient,
+  RuntimeCommand,
+  RuntimeHostService,
+  UnsafeScheduleResult,
+} from "./types";
 
-type UnsafeRuntimeHost = Pick<Runtime, "submit"> & RuntimeReadHost;
+type UnsafeRuntimeHost = Pick<RuntimeHostService, "submit"> & RuntimeReadHost;
 
 /**
  * Creates the devtools/test escape hatch client.
@@ -10,7 +17,10 @@ type UnsafeRuntimeHost = Pick<Runtime, "submit"> & RuntimeReadHost;
  * Boundary: unsafe calls are fire-and-forget scheduling helpers over current
  * projection state. Product code should use typed node handles instead.
  */
-export function createUnsafeRuntimeClient(runtime: UnsafeRuntimeHost): RuntimeClient["__unsafe"] {
+export function createUnsafeRuntimeClient(
+  runtime: UnsafeRuntimeHost,
+  runner: RuntimeEffectBridgeRunner
+): RuntimeClient["__unsafe"] {
   const readNodeUnsafe = (nodeId: NodeId): RawRuntimeNodeRead<unknown> =>
     readRawNode<unknown>(runtime, nodeId);
 
@@ -25,7 +35,7 @@ export function createUnsafeRuntimeClient(runtime: UnsafeRuntimeHost): RuntimeCl
       return { _tag: "Invalid", nodeId, error: read.error };
     }
 
-    scheduleUnsafe(runtime, {
+    scheduleUnsafe(runtime, runner, {
       _tag: "GraphEnsureReadyNodeById",
       nodeId,
     });
@@ -43,7 +53,7 @@ export function createUnsafeRuntimeClient(runtime: UnsafeRuntimeHost): RuntimeCl
       return { _tag: "Invalid", nodeId, error: read.error };
     }
 
-    scheduleUnsafe(runtime, {
+    scheduleUnsafe(runtime, runner, {
       _tag: "GraphRefreshNode",
       request: {
         target: {
@@ -70,7 +80,7 @@ export function createUnsafeRuntimeClient(runtime: UnsafeRuntimeHost): RuntimeCl
       return { _tag: "Invalid", nodeId, error: read.error };
     }
 
-    scheduleUnsafe(runtime, {
+    scheduleUnsafe(runtime, runner, {
       _tag: "GraphUnsafeUpdateNode",
       request: {
         nodeId,
@@ -90,8 +100,11 @@ export function createUnsafeRuntimeClient(runtime: UnsafeRuntimeHost): RuntimeCl
 }
 
 function scheduleUnsafe(
-  runtime: Pick<Runtime, "submit">,
-  command: Parameters<Runtime["submit"]>[0]
+  runtime: Pick<RuntimeHostService, "submit">,
+  runner: RuntimeEffectBridgeRunner,
+  command: RuntimeCommand
 ): void {
-  void runtime.submit(command).catch(() => undefined);
+  // Fire-and-forget: run the Effect submit through the bridge and swallow the
+  // result. Unsafe scheduling never awaits.
+  void runner.run(runtime.submit(command)).catch(() => undefined);
 }

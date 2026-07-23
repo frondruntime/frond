@@ -18,5 +18,6 @@ export type {
   UseNodesResult,
 } from "./types";
 export { useNode } from "./useNode";
+export { useNodeRead } from "./useNodeRead";
 export { useNodeState } from "./useNodeState";
 export { useNodes } from "./useNodes";

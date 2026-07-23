@@ -11,6 +11,7 @@ export {
   createFrondTestHarness,
   type FrondTestHarness,
   type FrondTestHarnessOptions,
+  type FrondTestNodeHandle,
   type FrondTestNodeInput,
   type FrondTestNodeInputMap,
   type FrondTestReadyNodeMap,

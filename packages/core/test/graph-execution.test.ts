@@ -38,19 +38,17 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class ScopedGraphNode extends NodeBase<ScopedGraphSpec> {
-      static readonly spec = serviceSpec<ScopedGraphSpec>({
+    class ScopedGraphNode extends NodeBase<ScopedGraphSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<ScopedGraphSpec>({
         tag: "services/graph-live-finalizer",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ScopedGraphSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          release: Driver.Release(() =>
-            Effect.sync(() => {
-              releases.push("release");
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        release: Driver.Release(() =>
+          Effect.sync(() => {
+            releases.push("release");
+          })
+        ),
       });
     }
 
@@ -94,14 +92,12 @@ describe("graph execution", () => {
       readonly result: undefined;
     }>;
 
-    class UndefinedResultNode extends NodeBase<UndefinedResultSpec> {
-      static readonly spec = resourceSpec<UndefinedResultSpec>({
+    class UndefinedResultNode extends NodeBase<UndefinedResultSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<UndefinedResultSpec>({
         tag: "resources/undefined-result",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<UndefinedResultSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed(undefined)),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed(undefined)),
       });
 
       get loaded() {
@@ -133,20 +129,18 @@ describe("graph execution", () => {
       readonly result: { readonly label: string };
     }>;
 
-    class ReadyFieldsNode extends NodeBase<ReadyFieldsSpec> {
-      static readonly spec = resourceSpec<ReadyFieldsSpec>({
+    class ReadyFieldsNode extends NodeBase<ReadyFieldsSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<ReadyFieldsSpec>({
         tag: "resources/ready-fields",
         key: (args) => Key.structure({ suffix: args.suffix }),
         dependencies: dependencies(() => ({
           transport: dep(TransportNode, {}),
         })),
-        driver: Driver.Effect<ReadyFieldsSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.succeed({
-              label: `${ctx.deps.transport.result}:${ctx.args.suffix}`,
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.succeed({
+            label: `${ctx.deps.transport.result}:${ctx.args.suffix}`,
+          })
+        ),
       });
 
       get label(): string {
@@ -193,27 +187,25 @@ describe("graph execution", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class ContextOnlyNode extends NodeBase<ContextOnlySpec> {
-      static readonly spec = resourceSpec<ContextOnlySpec>({
+    class ContextOnlyNode extends NodeBase<ContextOnlySpec, "effect"> {
+      static readonly spec = resourceSpec.effect<ContextOnlySpec>({
         tag: "resources/context-only-acquire",
         key: (args) => Key.structure({ id: args.id }),
         dependencies: dependencies(() => ({
           transport: dep(TransportNode, {}),
         })),
-        driver: Driver.Effect<ContextOnlySpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.sync(() => {
-              capturedSignalAborted = ctx.signal.aborted;
-              ctx.disposers.add(() => {
-                disposed += 1;
-              });
+        acquire: Driver.Acquire((ctx) =>
+          Effect.sync(() => {
+            capturedSignalAborted = ctx.signal.aborted;
+            ctx.disposers.add(() => {
+              disposed += 1;
+            });
 
-              return {
-                value: `${ctx.args.id}:${ctx.deps.transport.result}:${String(ctx.signal.aborted)}`,
-              };
-            })
-          ),
-        }),
+            return {
+              value: `${ctx.args.id}:${ctx.deps.transport.result}:${String(ctx.signal.aborted)}`,
+            };
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -248,14 +240,12 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class AcquireTimeoutNode extends NodeBase<AcquireTimeoutSpec> {
-      static readonly spec = serviceSpec<AcquireTimeoutSpec>({
+    class AcquireTimeoutNode extends NodeBase<AcquireTimeoutSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<AcquireTimeoutSpec>({
         tag: "services/acquire-timeout",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<AcquireTimeoutSpec>({
-          acquire: Driver.Acquire(() => Effect.never),
-        }),
+        acquire: Driver.Acquire(() => Effect.never),
       });
     }
     const graph = makeInMemoryGraphSystem({
@@ -289,15 +279,13 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class ReleaseTimeoutNode extends NodeBase<ReleaseTimeoutSpec> {
-      static readonly spec = serviceSpec<ReleaseTimeoutSpec>({
+    class ReleaseTimeoutNode extends NodeBase<ReleaseTimeoutSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<ReleaseTimeoutSpec>({
         tag: "services/release-timeout",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ReleaseTimeoutSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          release: Driver.Release(() => Effect.never),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        release: Driver.Release(() => Effect.never),
       });
     }
     const graph = makeInMemoryGraphSystem({
@@ -338,21 +326,19 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class CaptureNode extends NodeBase<CaptureSpec> {
-      static readonly spec = resourceSpec<CaptureSpec>({
+    class CaptureNode extends NodeBase<CaptureSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<CaptureSpec>({
         tag: "resources/capture-transport-node",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({
           transport: dep(TransportNode, {}),
         })),
-        driver: Driver.Effect<CaptureSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.sync(() => {
-              capturedDependency = ctx.deps.transport;
-              return ctx.deps.transport.result;
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.sync(() => {
+            capturedDependency = ctx.deps.transport;
+            return ctx.deps.transport.result;
+          })
+        ),
       });
     }
 
@@ -375,19 +361,17 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class LeftNode extends NodeBase<LeftSpec> {
-      static readonly spec = serviceSpec<LeftSpec>({
+    class LeftNode extends NodeBase<LeftSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<LeftSpec>({
         tag: "services/parallel-left",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<LeftSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(leftStarted, undefined);
-              return yield* Deferred.await(leftGate);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(leftStarted, undefined);
+            return yield* Deferred.await(leftGate);
+          })
+        ),
       });
     }
 
@@ -398,20 +382,18 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class RightNode extends NodeBase<RightSpec> {
-      static readonly spec = serviceSpec<RightSpec>({
+    class RightNode extends NodeBase<RightSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<RightSpec>({
         tag: "services/parallel-right",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<RightSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              rightStartedBeforeLeftResolved = !leftResolved;
-              yield* Deferred.succeed(rightStarted, undefined);
-              return "right";
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            rightStartedBeforeLeftResolved = !leftResolved;
+            yield* Deferred.succeed(rightStarted, undefined);
+            return "right";
+          })
+        ),
       });
     }
 
@@ -425,17 +407,15 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class RootNode extends NodeBase<RootSpec> {
-      static readonly spec = resourceSpec<RootSpec>({
+    class RootNode extends NodeBase<RootSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<RootSpec>({
         tag: "resources/parallel-root",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({
           left: dep(LeftNode, {}),
           right: dep(RightNode, {}),
         })),
-        driver: Driver.Effect<RootSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("root")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("root")),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -470,14 +450,12 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class LeftNode extends NodeBase<LeftSpec> {
-      static readonly spec = serviceSpec<LeftSpec>({
+    class LeftNode extends NodeBase<LeftSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<LeftSpec>({
         tag: "services/aggregate-left",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<LeftSpec>({
-          acquire: Driver.Acquire(() => Effect.fail(leftCause)),
-        }),
+        acquire: Driver.Acquire(() => Effect.fail(leftCause)),
       });
     }
 
@@ -488,20 +466,18 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class RightNode extends NodeBase<RightSpec> {
-      static readonly spec = serviceSpec<RightSpec>({
+    class RightNode extends NodeBase<RightSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<RightSpec>({
         tag: "services/aggregate-right",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<RightSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(rightStarted, undefined);
-              yield* Deferred.await(rightGate);
-              return yield* Effect.fail(rightCause);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(rightStarted, undefined);
+            yield* Deferred.await(rightGate);
+            return yield* Effect.fail(rightCause);
+          })
+        ),
       });
     }
 
@@ -515,22 +491,20 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class RootNode extends NodeBase<RootSpec> {
-      static readonly spec = resourceSpec<RootSpec>({
+    class RootNode extends NodeBase<RootSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<RootSpec>({
         tag: "resources/aggregate-root",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({
           left: dep(LeftNode, {}),
           right: dep(RightNode, {}),
         })),
-        driver: Driver.Effect<RootSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.sync(() => {
-              acquireCount += 1;
-              return "root";
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.sync(() => {
+            acquireCount += 1;
+            return "root";
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -574,13 +548,11 @@ describe("graph execution", () => {
     }>;
 
     class AsyncNode extends NodeBase<AsyncSpec> {
-      static readonly spec = serviceSpec<AsyncSpec>({
+      static readonly spec = serviceSpec.async<AsyncSpec>({
         tag: "services/async",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Async<AsyncSpec>({
-          acquire: Driver.Acquire(async () => "async-value"),
-        }),
+        acquire: Driver.Acquire(async () => "async-value"),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -604,19 +576,17 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class ServiceBackedNode extends NodeBase<ServiceBackedSpec> {
-      static readonly spec = serviceSpec<ServiceBackedSpec>({
+    class ServiceBackedNode extends NodeBase<ServiceBackedSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<ServiceBackedSpec, typeof DriverValue>({
         tag: "services/effect-service-backed",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ServiceBackedSpec, typeof DriverValue>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              const service = yield* DriverValue;
-              return service.value;
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            const service = yield* DriverValue;
+            return service.value;
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -643,14 +613,12 @@ describe("graph execution", () => {
     }>;
 
     class AsyncRejectedNode extends NodeBase<AsyncRejectedSpec> {
-      static readonly spec = serviceSpec<AsyncRejectedSpec>({
+      static readonly spec = serviceSpec.async<AsyncRejectedSpec>({
         tag: "services/async-rejected",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Async<AsyncRejectedSpec>({
-          acquire: Driver.Acquire(async () => {
-            throw cause;
-          }),
+        acquire: Driver.Acquire(async () => {
+          throw cause;
         }),
       });
     }
@@ -679,14 +647,12 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class FailingNode extends NodeBase<FailingSpec> {
-      static readonly spec = serviceSpec<FailingSpec>({
+    class FailingNode extends NodeBase<FailingSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<FailingSpec>({
         tag: "services/failing",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<FailingSpec>({
-          acquire: Driver.Acquire(() => Effect.fail(cause)),
-        }),
+        acquire: Driver.Acquire(() => Effect.fail(cause)),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -723,23 +689,21 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class FailingDisposerNode extends NodeBase<FailingDisposerSpec> {
-      static readonly spec = serviceSpec<FailingDisposerSpec>({
+    class FailingDisposerNode extends NodeBase<FailingDisposerSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<FailingDisposerSpec>({
         tag: "services/failing-acquire-disposer",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<FailingDisposerSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.gen(function* () {
-              ctx.disposers.add(() => {
-                disposed = true;
-                throw cleanupCause;
-              });
+        acquire: Driver.Acquire((ctx) =>
+          Effect.gen(function* () {
+            ctx.disposers.add(() => {
+              disposed = true;
+              throw cleanupCause;
+            });
 
-              return yield* Effect.fail(cause);
-            })
-          ),
-        }),
+            return yield* Effect.fail(cause);
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -776,25 +740,23 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class ExpiredDisposerNode extends NodeBase<ExpiredDisposerSpec> {
-      static readonly spec = serviceSpec<ExpiredDisposerSpec>({
+    class ExpiredDisposerNode extends NodeBase<ExpiredDisposerSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<ExpiredDisposerSpec>({
         tag: "services/expired-acquire-disposer",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ExpiredDisposerSpec>({
-          resultValidity: { _tag: "Manual" },
-          acquire: Driver.Acquire((ctx) =>
-            Effect.sync(() => {
-              ctx.disposers.add(() => {
-                disposed = true;
-              });
+        resultValidity: { _tag: "Manual" },
+        acquire: Driver.Acquire((ctx) =>
+          Effect.sync(() => {
+            ctx.disposers.add(() => {
+              disposed = true;
+            });
 
-              return resultCommit("expired", {
-                validity: { _tag: "Expired", expiredAt: 1 },
-              });
-            })
-          ),
-        }),
+            return resultCommit("expired", {
+              validity: { _tag: "Expired", expiredAt: 1 },
+            });
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -816,14 +778,12 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class DefectNode extends NodeBase<DefectSpec> {
-      static readonly spec = serviceSpec<DefectSpec>({
+    class DefectNode extends NodeBase<DefectSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<DefectSpec>({
         tag: "services/acquire-defect",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<DefectSpec>({
-          acquire: Driver.Acquire(() => Effect.die(cause)),
-        }),
+        acquire: Driver.Acquire(() => Effect.die(cause)),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -853,22 +813,20 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class DisposableNode extends NodeBase<DisposableSpec> {
-      static readonly spec = serviceSpec<DisposableSpec>({
+    class DisposableNode extends NodeBase<DisposableSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<DisposableSpec>({
         tag: "services/disposable",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<DisposableSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.sync(() => {
-              ctx.disposers.add(() => {
-                disposed = true;
-              });
+        acquire: Driver.Acquire((ctx) =>
+          Effect.sync(() => {
+            ctx.disposers.add(() => {
+              disposed = true;
+            });
 
-              return "disposable";
-            })
-          ),
-        }),
+            return "disposable";
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -895,21 +853,19 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class ReleaseDisposableNode extends NodeBase<ReleaseDisposableSpec> {
-      static readonly spec = serviceSpec<ReleaseDisposableSpec>({
+    class ReleaseDisposableNode extends NodeBase<ReleaseDisposableSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<ReleaseDisposableSpec>({
         tag: "services/release-disposable",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ReleaseDisposableSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("disposable")),
-          release: Driver.Release((ctx) =>
-            Effect.sync(() => {
-              ctx.disposers.add(() => {
-                disposed = true;
-              });
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("disposable")),
+        release: Driver.Release((ctx) =>
+          Effect.sync(() => {
+            ctx.disposers.add(() => {
+              disposed = true;
+            });
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -932,23 +888,21 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class ReleaseFailingDisposerNode extends NodeBase<ReleaseFailingDisposerSpec> {
-      static readonly spec = serviceSpec<ReleaseFailingDisposerSpec>({
+    class ReleaseFailingDisposerNode extends NodeBase<ReleaseFailingDisposerSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<ReleaseFailingDisposerSpec>({
         tag: "services/release-failing-disposer",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ReleaseFailingDisposerSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("disposable")),
-          release: Driver.Release((ctx) =>
-            Effect.gen(function* () {
-              ctx.disposers.add(() => {
-                disposed = true;
-              });
+        acquire: Driver.Acquire(() => Effect.succeed("disposable")),
+        release: Driver.Release((ctx) =>
+          Effect.gen(function* () {
+            ctx.disposers.add(() => {
+              disposed = true;
+            });
 
-              return yield* Effect.fail(cause);
-            })
-          ),
-        }),
+            return yield* Effect.fail(cause);
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -976,19 +930,17 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class SlowNode extends NodeBase<SlowSpec> {
-      static readonly spec = serviceSpec<SlowSpec>({
+    class SlowNode extends NodeBase<SlowSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<SlowSpec>({
         tag: "services/slow",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SlowSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(started, undefined);
-              return yield* Deferred.await(gate);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined);
+            return yield* Deferred.await(gate);
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -1027,20 +979,18 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class SlowNode extends NodeBase<SlowSpec> {
-      static readonly spec = serviceSpec<SlowSpec>({
+    class SlowNode extends NodeBase<SlowSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<SlowSpec>({
         tag: "services/one-acquire",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SlowSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              acquireCount += 1;
-              yield* Deferred.succeed(started, undefined);
-              return yield* Deferred.await(gate);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            acquireCount += 1;
+            yield* Deferred.succeed(started, undefined);
+            return yield* Deferred.await(gate);
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -1071,32 +1021,30 @@ describe("graph execution", () => {
       };
     }>;
 
-    class ReleasableNode extends NodeBase<ReleasableSpec> {
-      static readonly spec = resourceSpec<ReleasableSpec>({
+    class ReleasableNode extends NodeBase<ReleasableSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<ReleasableSpec>({
         tag: "resources/release-during-action",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ReleasableSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.sync(() => {
-              ctx.disposers.add(() => {
-                disposed = true;
+        acquire: Driver.Acquire((ctx) =>
+          Effect.sync(() => {
+            ctx.disposers.add(() => {
+              disposed = true;
+            });
+            return { count: 0 };
+          })
+        ),
+        actions: {
+          increment: Driver.Action((ctx) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(actionStarted, undefined);
+              yield* Deferred.await(actionGate);
+              yield* ctx.patchResult((current) => {
+                current.count += 1;
               });
-              return { count: 0 };
             })
           ),
-          actions: {
-            increment: Driver.Action((ctx) =>
-              Effect.gen(function* () {
-                yield* Deferred.succeed(actionStarted, undefined);
-                yield* Deferred.await(actionGate);
-                yield* ctx.patchResult((current) => {
-                  current.count += 1;
-                });
-              })
-            ),
-          },
-        }),
+        },
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -1134,21 +1082,19 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class StopNode extends NodeBase<StopSpec> {
-      static readonly spec = serviceSpec<StopSpec>({
+    class StopNode extends NodeBase<StopSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<StopSpec>({
         tag: "services/stop-release",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<StopSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.sync(() => {
-              ctx.disposers.add(() => {
-                disposed = true;
-              });
-              return "ready";
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.sync(() => {
+            ctx.disposers.add(() => {
+              disposed = true;
+            });
+            return "ready";
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -1173,19 +1119,17 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class HangingNode extends NodeBase<HangingSpec> {
-      static readonly spec = serviceSpec<HangingSpec>({
+    class HangingNode extends NodeBase<HangingSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<HangingSpec>({
         tag: "services/hanging-stop",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<HangingSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(started, undefined);
-              return yield* Effect.never;
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined);
+            return yield* Effect.never;
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -1218,15 +1162,13 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class ReleaseFailNode extends NodeBase<ReleaseFailSpec> {
-      static readonly spec = serviceSpec<ReleaseFailSpec>({
+    class ReleaseFailNode extends NodeBase<ReleaseFailSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<ReleaseFailSpec>({
         tag: "services/release-failure",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ReleaseFailSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          release: Driver.Release(() => Effect.fail(cause)),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        release: Driver.Release(() => Effect.fail(cause)),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -1252,15 +1194,13 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class ReleaseDefectNode extends NodeBase<ReleaseDefectSpec> {
-      static readonly spec = serviceSpec<ReleaseDefectSpec>({
+    class ReleaseDefectNode extends NodeBase<ReleaseDefectSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<ReleaseDefectSpec>({
         tag: "services/release-defect",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ReleaseDefectSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          release: Driver.Release(() => Effect.die(cause)),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        release: Driver.Release(() => Effect.die(cause)),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -1290,21 +1230,19 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class DisposerFailNode extends NodeBase<DisposerFailSpec> {
-      static readonly spec = serviceSpec<DisposerFailSpec>({
+    class DisposerFailNode extends NodeBase<DisposerFailSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<DisposerFailSpec>({
         tag: "services/disposer-failure",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<DisposerFailSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.sync(() => {
-              ctx.disposers.add(() => {
-                throw cause;
-              });
-              return "ready";
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.sync(() => {
+            ctx.disposers.add(() => {
+              throw cause;
+            });
+            return "ready";
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -1331,22 +1269,20 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class CleanupOrderNode extends NodeBase<CleanupOrderSpec> {
-      static readonly spec = serviceSpec<CleanupOrderSpec>({
+    class CleanupOrderNode extends NodeBase<CleanupOrderSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<CleanupOrderSpec>({
         tag: "services/cleanup-failure-order",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<CleanupOrderSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.sync(() => {
-              ctx.disposers.add(() => {
-                throw disposerCause;
-              });
-              return "ready";
-            })
-          ),
-          release: Driver.Release(() => Effect.fail(releaseCause)),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.sync(() => {
+            ctx.disposers.add(() => {
+              throw disposerCause;
+            });
+            return "ready";
+          })
+        ),
+        release: Driver.Release(() => Effect.fail(releaseCause)),
       });
     }
     const graph = makeInMemoryGraphSystem();

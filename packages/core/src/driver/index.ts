@@ -1,13 +1,5 @@
 export { resultCommit } from "../graph/types";
-export {
-  Acquire,
-  Action,
-  Async,
-  Effect,
-  Live,
-  Refresh,
-  Release,
-} from "./authoring";
+export { Acquire, Action, Live, Refresh, Release } from "./authoring";
 export type {
   ActiveNodeLiveDemandSnapshot,
   AsyncLiveContext,

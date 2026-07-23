@@ -72,14 +72,12 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class NoopRefreshNode extends NodeBase<NoopRefreshSpec> {
-      static readonly spec = resourceSpec<NoopRefreshSpec>({
+    class NoopRefreshNode extends NodeBase<NoopRefreshSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<NoopRefreshSpec>({
         tag: "resources/noop-refresh",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<NoopRefreshSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -116,20 +114,18 @@ describe("graph refresh", () => {
       readonly result: { readonly value: number };
     }>;
 
-    class ChildNode extends NodeBase<ChildSpec> {
-      static readonly spec = serviceSpec<ChildSpec>({
+    class ChildNode extends NodeBase<ChildSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<ChildSpec>({
         tag: "services/no-implicit-refresh-child",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ChildSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: 0 })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              childRefreshes += 1;
-              yield* ctx.setResult({ value: childRefreshes });
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: 0 })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            childRefreshes += 1;
+            yield* ctx.setResult({ value: childRefreshes });
+          })
+        ),
       });
     }
 
@@ -142,23 +138,21 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class ParentNode extends NodeBase<ParentSpec> {
-      static readonly spec = resourceSpec<ParentSpec>({
+    class ParentNode extends NodeBase<ParentSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<ParentSpec>({
         tag: "resources/no-implicit-refresh-parent",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({
           child: dep(ChildNode, {}),
         })),
-        driver: Driver.Effect<ParentSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.succeed({ value: `parent:${ctx.deps.child.result.value}` })
-          ),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              yield* ctx.setResult({ value: "parent-only" });
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.succeed({ value: `parent:${ctx.deps.child.result.value}` })
+        ),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            yield* ctx.setResult({ value: "parent-only" });
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -192,20 +186,18 @@ describe("graph refresh", () => {
       readonly result: { readonly value: number };
     }>;
 
-    class ChildNode extends NodeBase<ChildSpec> {
-      static readonly spec = serviceSpec<ChildSpec>({
+    class ChildNode extends NodeBase<ChildSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<ChildSpec>({
         tag: "services/explicit-refresh-child",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ChildSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: 0 })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              childRefreshes += 1;
-              yield* ctx.setResult({ value: childRefreshes });
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: 0 })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            childRefreshes += 1;
+            yield* ctx.setResult({ value: childRefreshes });
+          })
+        ),
       });
     }
 
@@ -218,24 +210,22 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class ParentNode extends NodeBase<ParentSpec> {
-      static readonly spec = resourceSpec<ParentSpec>({
+    class ParentNode extends NodeBase<ParentSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<ParentSpec>({
         tag: "resources/explicit-refresh-parent",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({
           child: dep(ChildNode, {}),
         })),
-        driver: Driver.Effect<ParentSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.succeed({ value: `parent:${ctx.deps.child.result.value}` })
-          ),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              const child = yield* ctx.refreshDep("child");
-              yield* ctx.setResult({ value: `parent:${child.result.value}` });
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.succeed({ value: `parent:${ctx.deps.child.result.value}` })
+        ),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            const child = yield* ctx.refreshDep("child");
+            yield* ctx.setResult({ value: `parent:${child.result.value}` });
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -266,15 +256,13 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class FailingRefreshNode extends NodeBase<FailingRefreshSpec> {
-      static readonly spec = resourceSpec<FailingRefreshSpec>({
+    class FailingRefreshNode extends NodeBase<FailingRefreshSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<FailingRefreshSpec>({
         tag: "resources/failing-refresh",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<FailingRefreshSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-          refresh: Driver.Refresh(() => Effect.fail({ _tag: "RefreshRejected" })),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        refresh: Driver.Refresh(() => Effect.fail({ _tag: "RefreshRejected" })),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -312,15 +300,13 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class DefectRefreshNode extends NodeBase<DefectRefreshSpec> {
-      static readonly spec = resourceSpec<DefectRefreshSpec>({
+    class DefectRefreshNode extends NodeBase<DefectRefreshSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<DefectRefreshSpec>({
         tag: "resources/refresh-defect",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<DefectRefreshSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-          refresh: Driver.Refresh(() => Effect.die(cause)),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        refresh: Driver.Refresh(() => Effect.die(cause)),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -353,22 +339,20 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class DisposingRefreshNode extends NodeBase<DisposingRefreshSpec> {
-      static readonly spec = resourceSpec<DisposingRefreshSpec>({
+    class DisposingRefreshNode extends NodeBase<DisposingRefreshSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<DisposingRefreshSpec>({
         tag: "resources/refresh-defect-disposer",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<DisposingRefreshSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              ctx.disposers.add(() => {
-                disposed += 1;
-              });
-              return yield* Effect.die(cause);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            ctx.disposers.add(() => {
+              disposed += 1;
+            });
+            return yield* Effect.die(cause);
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -398,22 +382,20 @@ describe("graph refresh", () => {
       readonly result: { value: string };
     }>;
 
-    class FailingPatchRefreshNode extends NodeBase<FailingPatchRefreshSpec> {
-      static readonly spec = resourceSpec<FailingPatchRefreshSpec>({
+    class FailingPatchRefreshNode extends NodeBase<FailingPatchRefreshSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<FailingPatchRefreshSpec>({
         tag: "resources/failing-patch-refresh",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<FailingPatchRefreshSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              yield* ctx.patchResult((current) => {
-                current.value = "leaked";
-              });
-              return yield* Effect.fail({ _tag: "RefreshRejected" });
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            yield* ctx.patchResult((current) => {
+              current.value = "leaked";
+            });
+            return yield* Effect.fail({ _tag: "RefreshRejected" });
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -444,21 +426,19 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class SlowRefreshNode extends NodeBase<SlowRefreshSpec> {
-      static readonly spec = resourceSpec<SlowRefreshSpec>({
+    class SlowRefreshNode extends NodeBase<SlowRefreshSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<SlowRefreshSpec>({
         tag: "resources/slow-refresh-operation",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SlowRefreshSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(refreshStarted, undefined);
-              yield* Deferred.await(refreshGate);
-              yield* ctx.setResult({ value: "fresh" });
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(refreshStarted, undefined);
+            yield* Deferred.await(refreshGate);
+            yield* ctx.setResult({ value: "fresh" });
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -505,22 +485,20 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class SlowRefreshNode extends NodeBase<SlowRefreshSpec> {
-      static readonly spec = resourceSpec<SlowRefreshSpec>({
+    class SlowRefreshNode extends NodeBase<SlowRefreshSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<SlowRefreshSpec>({
         tag: "resources/refresh-singleflight",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SlowRefreshSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              refreshCount += 1;
-              yield* Deferred.succeed(refreshStarted, undefined);
-              yield* Deferred.await(refreshGate);
-              yield* ctx.setResult({ value: `fresh:${refreshCount}` });
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            refreshCount += 1;
+            yield* Deferred.succeed(refreshStarted, undefined);
+            yield* Deferred.await(refreshGate);
+            yield* ctx.setResult({ value: `fresh:${refreshCount}` });
+          })
+        ),
       });
     }
     const request = {
@@ -558,21 +536,19 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class SlowRefreshNode extends NodeBase<SlowRefreshSpec> {
-      static readonly spec = resourceSpec<SlowRefreshSpec>({
+    class SlowRefreshNode extends NodeBase<SlowRefreshSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<SlowRefreshSpec>({
         tag: "resources/refresh-admission",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SlowRefreshSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(refreshStarted, undefined);
-              yield* Deferred.await(refreshGate);
-              yield* ctx.setResult({ value: "fresh" });
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(refreshStarted, undefined);
+            yield* Deferred.await(refreshGate);
+            yield* ctx.setResult({ value: "fresh" });
+          })
+        ),
       });
     }
     const request = {
@@ -611,20 +587,18 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class RefreshAgainNode extends NodeBase<RefreshAgainSpec> {
-      static readonly spec = resourceSpec<RefreshAgainSpec>({
+    class RefreshAgainNode extends NodeBase<RefreshAgainSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<RefreshAgainSpec>({
         tag: "resources/refresh-again",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<RefreshAgainSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              refreshCount += 1;
-              yield* ctx.setResult({ value: `fresh:${refreshCount}` });
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            refreshCount += 1;
+            yield* ctx.setResult({ value: `fresh:${refreshCount}` });
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -658,22 +632,20 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class FailingSingleflightNode extends NodeBase<FailingSingleflightSpec> {
-      static readonly spec = resourceSpec<FailingSingleflightSpec>({
+    class FailingSingleflightNode extends NodeBase<FailingSingleflightSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<FailingSingleflightSpec>({
         tag: "resources/failing-refresh-singleflight",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<FailingSingleflightSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-          refresh: Driver.Refresh(() =>
-            Effect.gen(function* () {
-              refreshCount += 1;
-              yield* Deferred.succeed(refreshStarted, undefined);
-              yield* Deferred.await(refreshGate);
-              return yield* Effect.fail({ _tag: "RefreshRejected" });
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        refresh: Driver.Refresh(() =>
+          Effect.gen(function* () {
+            refreshCount += 1;
+            yield* Deferred.succeed(refreshStarted, undefined);
+            yield* Deferred.await(refreshGate);
+            return yield* Effect.fail({ _tag: "RefreshRejected" });
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -721,30 +693,28 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class MultiRefreshNode extends NodeBase<MultiRefreshSpec> {
-      static readonly spec = resourceSpec<MultiRefreshSpec>({
+    class MultiRefreshNode extends NodeBase<MultiRefreshSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<MultiRefreshSpec>({
         tag: "resources/per-node-refresh-singleflight",
         key: (args) => Key.structure({ id: args.id }),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<MultiRefreshSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.succeed({
-              value: ctx.args.id,
-            })
-          ),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              const id = ctx.args.id;
-              refreshCounts.set(id, (refreshCounts.get(id) ?? 0) + 1);
-              activeRefreshes += 1;
-              maxActiveRefreshes = Math.max(maxActiveRefreshes, activeRefreshes);
-              yield* Deferred.succeed(id === "a" ? startedA : startedB, undefined);
-              yield* Deferred.await(id === "a" ? gateA : gateB);
-              yield* ctx.setResult({ value: `fresh:${id}` });
-              activeRefreshes -= 1;
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.succeed({
+            value: ctx.args.id,
+          })
+        ),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            const id = ctx.args.id;
+            refreshCounts.set(id, (refreshCounts.get(id) ?? 0) + 1);
+            activeRefreshes += 1;
+            maxActiveRefreshes = Math.max(maxActiveRefreshes, activeRefreshes);
+            yield* Deferred.succeed(id === "a" ? startedA : startedB, undefined);
+            yield* Deferred.await(id === "a" ? gateA : gateB);
+            yield* ctx.setResult({ value: `fresh:${id}` });
+            activeRefreshes -= 1;
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -807,34 +777,32 @@ describe("graph refresh", () => {
       };
     }>;
 
-    class RefreshOrderNode extends NodeBase<RefreshOrderSpec> {
-      static readonly spec = resourceSpec<RefreshOrderSpec>({
+    class RefreshOrderNode extends NodeBase<RefreshOrderSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<RefreshOrderSpec>({
         tag: "resources/refresh-order",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<RefreshOrderSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "initial" })),
-          refresh: Driver.Refresh((ctx) =>
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "initial" })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            order.push("refresh");
+            yield* ctx.patchResult((current) => {
+              current.value = "refresh";
+            });
+          })
+        ),
+        actions: {
+          slow: Driver.Action((ctx) =>
             Effect.gen(function* () {
-              order.push("refresh");
+              order.push("action");
+              yield* Deferred.succeed(actionStarted, undefined);
+              yield* Deferred.await(actionGate);
               yield* ctx.patchResult((current) => {
-                current.value = "refresh";
+                current.value = "action";
               });
             })
           ),
-          actions: {
-            slow: Driver.Action((ctx) =>
-              Effect.gen(function* () {
-                order.push("action");
-                yield* Deferred.succeed(actionStarted, undefined);
-                yield* Deferred.await(actionGate);
-                yield* ctx.patchResult((current) => {
-                  current.value = "action";
-                });
-              })
-            ),
-          },
-        }),
+        },
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -881,22 +849,20 @@ describe("graph refresh", () => {
       readonly result: { readonly value: number };
     }>;
 
-    class ChildNode extends NodeBase<ChildSpec> {
-      static readonly spec = serviceSpec<ChildSpec>({
+    class ChildNode extends NodeBase<ChildSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<ChildSpec>({
         tag: "services/refresh-dep-admission-child",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ChildSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: 0 })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              childRefreshes += 1;
-              yield* Deferred.succeed(childStarted, undefined);
-              yield* Deferred.await(childGate);
-              yield* ctx.setResult({ value: childRefreshes });
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: 0 })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            childRefreshes += 1;
+            yield* Deferred.succeed(childStarted, undefined);
+            yield* Deferred.await(childGate);
+            yield* ctx.setResult({ value: childRefreshes });
+          })
+        ),
       });
     }
 
@@ -909,22 +875,20 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class ParentNode extends NodeBase<ParentSpec> {
-      static readonly spec = resourceSpec<ParentSpec>({
+    class ParentNode extends NodeBase<ParentSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<ParentSpec>({
         tag: "resources/refresh-dep-admission-parent",
         key: (args) => Key.structure({ id: args.id }),
         dependencies: dependencies(() => ({
           child: dep(ChildNode, {}),
         })),
-        driver: Driver.Effect<ParentSpec>({
-          acquire: Driver.Acquire((ctx) => Effect.succeed({ value: `${ctx.args.id}:ready` })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              const child = yield* ctx.refreshDep("child");
-              yield* ctx.setResult({ value: `${ctx.args.id}:${child.result.value}` });
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) => Effect.succeed({ value: `${ctx.args.id}:ready` })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            const child = yield* ctx.refreshDep("child");
+            yield* ctx.setResult({ value: `${ctx.args.id}:${child.result.value}` });
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -965,15 +929,13 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class ChildNode extends NodeBase<ChildSpec> {
-      static readonly spec = serviceSpec<ChildSpec>({
+    class ChildNode extends NodeBase<ChildSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<ChildSpec>({
         tag: "services/refresh-dep-failure-child",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ChildSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
-          refresh: Driver.Refresh(() => Effect.fail({ _tag: "ChildRefreshRejected" })),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
+        refresh: Driver.Refresh(() => Effect.fail({ _tag: "ChildRefreshRejected" })),
       });
     }
 
@@ -986,21 +948,19 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class ParentNode extends NodeBase<ParentSpec> {
-      static readonly spec = resourceSpec<ParentSpec>({
+    class ParentNode extends NodeBase<ParentSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<ParentSpec>({
         tag: "resources/refresh-dep-failure-parent",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({
           child: dep(ChildNode, {}),
         })),
-        driver: Driver.Effect<ParentSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              yield* ctx.refreshDep("child");
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            yield* ctx.refreshDep("child");
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -1034,19 +994,17 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class ParentNode extends NodeBase<ParentSpec> {
-      static readonly spec = resourceSpec<ParentSpec>({
+    class ParentNode extends NodeBase<ParentSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<ParentSpec>({
         tag: "resources/refresh-dep-invalid-name",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ParentSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              yield* ctx.refreshDep("missing" as never);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            yield* ctx.refreshDep("missing" as never);
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -1073,14 +1031,12 @@ describe("graph refresh", () => {
       readonly result: string;
     }>;
 
-    class LeftNode extends NodeBase<LeftSpec> {
-      static readonly spec = serviceSpec<LeftSpec>({
+    class LeftNode extends NodeBase<LeftSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<LeftSpec>({
         tag: "services/refresh-aggregate-left",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<LeftSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("left")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("left")),
       });
     }
 
@@ -1091,14 +1047,12 @@ describe("graph refresh", () => {
       readonly result: string;
     }>;
 
-    class RightNode extends NodeBase<RightSpec> {
-      static readonly spec = serviceSpec<RightSpec>({
+    class RightNode extends NodeBase<RightSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<RightSpec>({
         tag: "services/refresh-aggregate-right",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<RightSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("right")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("right")),
       });
     }
 
@@ -1112,22 +1066,20 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class ParentNode extends NodeBase<ParentSpec> {
-      static readonly spec = resourceSpec<ParentSpec>({
+    class ParentNode extends NodeBase<ParentSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<ParentSpec>({
         tag: "resources/refresh-aggregate-parent",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({
           left: dep(LeftNode, {}),
           right: dep(RightNode, {}),
         })),
-        driver: Driver.Effect<ParentSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              yield* ctx.patchResult(() => ({ value: "refreshed" }));
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            yield* ctx.patchResult(() => ({ value: "refreshed" }));
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -1172,15 +1124,13 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class RefreshTimeoutNode extends NodeBase<RefreshTimeoutSpec> {
-      static readonly spec = resourceSpec<RefreshTimeoutSpec>({
+    class RefreshTimeoutNode extends NodeBase<RefreshTimeoutSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<RefreshTimeoutSpec>({
         tag: "resources/refresh-timeout",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<RefreshTimeoutSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-          refresh: Driver.Refresh(() => Effect.never),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        refresh: Driver.Refresh(() => Effect.never),
       });
     }
     const graph = makeInMemoryGraphSystem({

@@ -78,6 +78,8 @@ interface NodeSnapshotBase {
   readonly kind: string;
   readonly key: NodeKey;
   readonly label: string;
+  // Monotonic per-node revision that bumps on every committed cell-state write.
+  readonly revision: number;
   readonly status: NodeStatus;
   readonly resultValidity?: ResultValidity | undefined;
   readonly liveDemand: NodeLiveDemandSnapshot;

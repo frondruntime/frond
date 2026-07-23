@@ -11,6 +11,7 @@ export {
 export { RuntimeEvents, runtimeEventNodeId, runtimeEventNodeIds } from "./events";
 export type {
   DisplayableResultValidity,
+  HandleActions,
   RawRuntimeNodeRead,
   Runtime,
   RuntimeCancellationReason,

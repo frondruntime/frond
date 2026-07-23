@@ -1,5 +1,5 @@
 import type * as Frond from "@frondruntime/core";
-import type { NodeSpecArgs, NodeSpecLike, NodeSpecResult } from "@frondruntime/core";
+import type { NodeSpecArgs, NodeSpecLike } from "@frondruntime/core";
 import { useEffect, useMemo, useRef } from "react";
 import { getReactArgsFingerprint } from "./argsFingerprint";
 import { useRuntime } from "./context";
@@ -27,10 +27,7 @@ export function useNodeControls<TSpec extends NodeSpecLike>(
   // Biome cannot see that nodeId is the canonical identity for spec and args.
   // Including args would recreate controls for inline object literals with the same Frond key.
   // biome-ignore lint/correctness/useExhaustiveDependencies: nodeId is the stable Frond identity.
-  const handle = useMemo(
-    () => runtime.client.node<NodeSpecArgs<TSpec>, NodeSpecResult<TSpec>>(spec, args),
-    [runtime, nodeId]
-  );
+  const handle = useMemo(() => runtime.client.node(spec, args), [runtime, nodeId]);
   const argsFingerprint = useRef<NodeArgsFingerprint | undefined>(undefined);
 
   if (argsFingerprint.current === undefined) {
@@ -211,7 +208,13 @@ function makeReactNodesControls(
   entries: ReadonlyArray<ReactNodeMapEntry>
 ): ReactNodesControlsState {
   const controlEntries = entries.map((entry) => {
-    const handle = runtime.client.node<unknown, unknown>(entry.spec, entry.args);
+    // Map entries carry untyped specs; controls use lifecycle methods only.
+    const handle = (
+      runtime.client.node as (
+        spec: unknown,
+        args: unknown
+      ) => Frond.Runtime.RuntimeNodeHandle<unknown, unknown>
+    )(entry.spec, entry.args);
 
     return {
       key: entry.key,

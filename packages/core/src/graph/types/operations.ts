@@ -115,11 +115,11 @@ export type UnsafeUpdateNodeResult =
       readonly error: UnsafeUpdateNodeFailed;
     };
 
-export type ActionResult =
+export type ActionResult<TValue = unknown> =
   | {
       readonly _tag: "Success";
       readonly nodeId: NodeId;
-      readonly value: unknown;
+      readonly value: TValue;
     }
   | {
       readonly _tag: "Failure";

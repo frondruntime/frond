@@ -3,6 +3,10 @@ import { Effect } from "effect";
 export interface GraphCellStateReader<TState> {
   readonly get: Effect.Effect<TState>;
   readonly getSync: () => TState;
+  // Monotonic per-cell revision. Bumps on every committed write (replace /
+  // transition), giving an Object.is-free identity for external stores that
+  // integrate a node through `useSyncExternalStore` outside the React hooks.
+  readonly getRevisionSync: () => number;
 }
 
 export interface GraphCellState<TState> extends GraphCellStateReader<TState> {
@@ -13,19 +17,23 @@ export interface GraphCellState<TState> extends GraphCellStateReader<TState> {
 // Writes are owned by serialized cell-actor operations; getSync is for passive projection only.
 export function makeGraphCellState<TState>(initial: TState): GraphCellState<TState> {
   let current = initial;
+  let revision = 0;
 
   return {
     get: Effect.sync(() => current),
     replace: (next) =>
       Effect.sync(() => {
         current = next;
+        revision += 1;
       }),
     transition: (map) =>
       Effect.sync(() => {
         const [value, next] = map(current);
         current = next;
+        revision += 1;
         return value;
       }),
     getSync: () => current,
+    getRevisionSync: () => revision,
   };
 }

@@ -26,6 +26,7 @@ import {
   type NodeSpec,
   resourceSpec,
   serviceSpec,
+  unwrapEffect,
 } from "./graphTestFixtures";
 
 describe("runtime events", () => {
@@ -124,14 +125,12 @@ describe("runtime events", () => {
       readonly result: { value: string };
     }>;
 
-    class UnsafeNode extends NodeBase<UnsafeSpec> {
-      static readonly spec = serviceSpec<UnsafeSpec>({
+    class UnsafeNode extends NodeBase<UnsafeSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<UnsafeSpec>({
         tag: "services/runtime-events-unsafe-update",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<UnsafeSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
       });
     }
     const runtime = createRuntime();
@@ -235,14 +234,12 @@ describe("runtime events", () => {
       readonly result: string;
     }>;
 
-    class TraceNode extends NodeBase<TraceSpec> {
-      static readonly spec = serviceSpec<TraceSpec>({
+    class TraceNode extends NodeBase<TraceSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<TraceSpec>({
         tag: "services/runtime-trace",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<TraceSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
       });
     }
     const host = await Effect.runPromise(makeRuntimeHost({ runtimeId }));
@@ -312,19 +309,17 @@ describe("runtime events", () => {
       readonly result: string;
     }>;
 
-    class ScopedNode extends NodeBase<ScopedSpec> {
-      static readonly spec = serviceSpec<ScopedSpec>({
+    class ScopedNode extends NodeBase<ScopedSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<ScopedSpec>({
         tag: "services/runtime-scoped-finalizer",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ScopedSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          release: Driver.Release(() =>
-            Effect.sync(() => {
-              releases.push("release");
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        release: Driver.Release(() =>
+          Effect.sync(() => {
+            releases.push("release");
+          })
+        ),
       });
     }
 
@@ -369,19 +364,17 @@ describe("runtime events", () => {
       readonly result: string;
     }>;
 
-    class IdempotentNode extends NodeBase<IdempotentSpec> {
-      static readonly spec = serviceSpec<IdempotentSpec>({
+    class IdempotentNode extends NodeBase<IdempotentSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<IdempotentSpec>({
         tag: "services/runtime-idempotent-finalizer",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<IdempotentSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          release: Driver.Release(() =>
-            Effect.sync(() => {
-              releases.push("release");
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        release: Driver.Release(() =>
+          Effect.sync(() => {
+            releases.push("release");
+          })
+        ),
       });
     }
 
@@ -449,21 +442,19 @@ describe("runtime events", () => {
       readonly result: string;
     }>;
 
-    class SlowReleaseNode extends NodeBase<SlowReleaseSpec> {
-      static readonly spec = serviceSpec<SlowReleaseSpec>({
+    class SlowReleaseNode extends NodeBase<SlowReleaseSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<SlowReleaseSpec>({
         tag: "services/runtime-stop-slow-release",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SlowReleaseSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          release: Driver.Release(() =>
-            Effect.gen(function* () {
-              releaseRuns += 1;
-              yield* Deferred.succeed(releaseStarted, undefined);
-              yield* Deferred.await(releaseGate);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        release: Driver.Release(() =>
+          Effect.gen(function* () {
+            releaseRuns += 1;
+            yield* Deferred.succeed(releaseStarted, undefined);
+            yield* Deferred.await(releaseGate);
+          })
+        ),
       });
     }
 
@@ -504,25 +495,23 @@ describe("runtime events", () => {
       readonly result: string;
     }>;
 
-    class RetryNode extends NodeBase<RetrySpec> {
-      static readonly spec = serviceSpec<RetrySpec>({
+    class RetryNode extends NodeBase<RetrySpec, "effect"> {
+      static readonly spec = serviceSpec.effect<RetrySpec>({
         tag: "services/runtime-readiness-retry-events",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<RetrySpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              attempts += 1;
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            attempts += 1;
 
-              if (attempts === 1) {
-                return yield* Effect.fail(new Error("first attempt failed"));
-              }
+            if (attempts === 1) {
+              return yield* Effect.fail(new Error("first attempt failed"));
+            }
 
-              yield* Deferred.await(gate);
-              return "ready";
-            })
-          ),
-        }),
+            yield* Deferred.await(gate);
+            return "ready";
+          })
+        ),
       });
     }
     const runtime = createRuntime();
@@ -556,15 +545,13 @@ describe("runtime events", () => {
       readonly result: string;
     }>;
 
-    class ReleaseFailNode extends NodeBase<ReleaseFailSpec> {
-      static readonly spec = serviceSpec<ReleaseFailSpec>({
+    class ReleaseFailNode extends NodeBase<ReleaseFailSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<ReleaseFailSpec>({
         tag: "services/runtime-release-failure",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ReleaseFailSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          release: Driver.Release(() => Effect.fail(cause)),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        release: Driver.Release(() => Effect.fail(cause)),
       });
     }
     const runtime = createRuntime({
@@ -604,15 +591,13 @@ describe("runtime events", () => {
       readonly result: string;
     }>;
 
-    class ReleaseDefectNode extends NodeBase<ReleaseDefectSpec> {
-      static readonly spec = serviceSpec<ReleaseDefectSpec>({
+    class ReleaseDefectNode extends NodeBase<ReleaseDefectSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<ReleaseDefectSpec>({
         tag: "services/runtime-release-defect",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ReleaseDefectSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          release: Driver.Release(() => Effect.die(cause)),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        release: Driver.Release(() => Effect.die(cause)),
       });
     }
     const runtime = createRuntime();
@@ -640,17 +625,15 @@ describe("runtime events", () => {
       readonly result: string;
     }>;
 
-    class LiveStopFailureNode extends NodeBase<LiveStopFailureSpec> {
-      static readonly spec = resourceSpec<LiveStopFailureSpec>({
+    class LiveStopFailureNode extends NodeBase<LiveStopFailureSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<LiveStopFailureSpec>({
         tag: "resources/runtime-live-stop-release-failure",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<LiveStopFailureSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          live: Driver.Live({
-            start: () => Effect.succeed("subscription"),
-            stop: () => Effect.fail(cause),
-          }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        live: Driver.Live({
+          start: () => Effect.succeed("subscription"),
+          stop: () => Effect.fail(cause),
         }),
       });
     }
@@ -721,45 +704,45 @@ describe("runtime events", () => {
       };
     }>;
 
-    class QueuedActionNode extends NodeBase<QueuedActionSpec> {
-      static readonly spec = resourceSpec<QueuedActionSpec>({
+    class QueuedActionNode extends NodeBase<QueuedActionSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<QueuedActionSpec>({
         tag: "resources/runtime-action-start-boundary",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<QueuedActionSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          actions: {
-            block: Driver.Action(() =>
-              Effect.gen(function* () {
-                actionRuns += 1;
-                if (actionRuns === 1) {
-                  yield* Deferred.succeed(firstActionStarted, undefined);
-                  yield* Deferred.await(firstActionGate);
-                  return "first";
-                }
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        actions: {
+          block: Driver.Action(() =>
+            Effect.gen(function* () {
+              actionRuns += 1;
+              if (actionRuns === 1) {
+                yield* Deferred.succeed(firstActionStarted, undefined);
+                yield* Deferred.await(firstActionGate);
+                return "first";
+              }
 
-                yield* Deferred.succeed(secondActionStarted, undefined);
-                return "second";
-              })
-            ),
-          },
-        }),
+              yield* Deferred.succeed(secondActionStarted, undefined);
+              return "second";
+            })
+          ),
+        },
       });
     }
     const runtime = createRuntime();
     const node = runtime.client.node<Record<string, never>, string>(QueuedActionNode, {});
 
     await node.ensureReady();
-    const first = node.runAction("block", { run: 1 });
+    const first = unwrapEffect(node.action("block", { run: 1 }));
     await Effect.runPromise(Deferred.await(firstActionStarted));
-    const second = node.runAction(
-      "block",
-      { run: 2 },
-      {
-        source: "test",
-        reason: "action",
-        priority: "visible",
-      }
+    const second = unwrapEffect(
+      node.action(
+        "block",
+        { run: 2 },
+        {
+          source: "test",
+          reason: "action",
+          priority: "visible",
+        }
+      )
     );
     await Promise.resolve();
 
@@ -795,29 +778,27 @@ describe("runtime events", () => {
       };
     }>;
 
-    class QueuedDomainActionNode extends NodeBase<QueuedDomainActionSpec> {
-      static readonly spec = resourceSpec<QueuedDomainActionSpec>({
+    class QueuedDomainActionNode extends NodeBase<QueuedDomainActionSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<QueuedDomainActionSpec>({
         tag: "resources/runtime-domain-action-start-boundary",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<QueuedDomainActionSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          actions: {
-            block: Driver.Action(() =>
-              Effect.gen(function* () {
-                actionRuns += 1;
-                if (actionRuns === 1) {
-                  yield* Deferred.succeed(firstActionStarted, undefined);
-                  yield* Deferred.await(firstActionGate);
-                  return "first";
-                }
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        actions: {
+          block: Driver.Action(() =>
+            Effect.gen(function* () {
+              actionRuns += 1;
+              if (actionRuns === 1) {
+                yield* Deferred.succeed(firstActionStarted, undefined);
+                yield* Deferred.await(firstActionGate);
+                return "first";
+              }
 
-                yield* Deferred.succeed(secondActionStarted, undefined);
-                return "second";
-              })
-            ),
-          },
-        }),
+              yield* Deferred.succeed(secondActionStarted, undefined);
+              return "second";
+            })
+          ),
+        },
       });
     }
     const runtime = createRuntime();
@@ -829,9 +810,9 @@ describe("runtime events", () => {
       throw new Error("Expected ready node.");
     }
     const domainNode = ready.node as QueuedDomainActionNode;
-    const first = domainNode.actions.block({ run: 1 });
+    const first = unwrapEffect(domainNode.actions.block({ run: 1 }));
     await Effect.runPromise(Deferred.await(firstActionStarted));
-    const second = domainNode.actions.block({ run: 2 });
+    const second = unwrapEffect(domainNode.actions.block({ run: 2 }));
     await Promise.resolve();
 
     let events = (await runtime.query({ _tag: "RuntimeEvents" })).events;
@@ -865,35 +846,33 @@ describe("runtime events", () => {
       };
     }>;
 
-    class QueuedMaintenanceNode extends NodeBase<QueuedMaintenanceSpec> {
-      static readonly spec = serviceSpec<QueuedMaintenanceSpec>({
+    class QueuedMaintenanceNode extends NodeBase<QueuedMaintenanceSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<QueuedMaintenanceSpec>({
         tag: "services/runtime-maintenance-start-boundary",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<QueuedMaintenanceSpec>({
-          acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.args.filter)),
-          refresh: Driver.Refresh((ctx) =>
+        acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.args.filter)),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(refreshStarted, undefined);
+            yield* ctx.setResult("fresh");
+          })
+        ),
+        actions: {
+          block: Driver.Action(() =>
             Effect.gen(function* () {
-              yield* Deferred.succeed(refreshStarted, undefined);
-              yield* ctx.setResult("fresh");
+              yield* Deferred.succeed(actionStarted, undefined);
+              yield* Deferred.await(actionGate);
             })
           ),
-          actions: {
-            block: Driver.Action(() =>
-              Effect.gen(function* () {
-                yield* Deferred.succeed(actionStarted, undefined);
-                yield* Deferred.await(actionGate);
-              })
-            ),
-          },
-        }),
+        },
       });
     }
     const runtime = createRuntime();
     const node = runtime.client.node(QueuedMaintenanceNode, { filter: "all" });
 
     await node.ensureReady();
-    const action = node.runAction("block");
+    const action = unwrapEffect(node.action("block"));
     await Effect.runPromise(Deferred.await(actionStarted));
     const refresh = node.refresh();
     const argsUpdate = node.updateArgs({ filter: "active" });
@@ -925,15 +904,13 @@ describe("runtime events", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class FailingRefreshNode extends NodeBase<FailingRefreshSpec> {
-      static readonly spec = resourceSpec<FailingRefreshSpec>({
+    class FailingRefreshNode extends NodeBase<FailingRefreshSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<FailingRefreshSpec>({
         tag: "resources/runtime-refresh-failure",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<FailingRefreshSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-          refresh: Driver.Refresh(() => Effect.fail({ _tag: "RefreshRejected" })),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        refresh: Driver.Refresh(() => Effect.fail({ _tag: "RefreshRejected" })),
       });
     }
     const runtime = createRuntime({
@@ -981,15 +958,13 @@ describe("runtime events", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class FailingRefreshNode extends NodeBase<FailingRefreshSpec> {
-      static readonly spec = resourceSpec<FailingRefreshSpec>({
+    class FailingRefreshNode extends NodeBase<FailingRefreshSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<FailingRefreshSpec>({
         tag: "resources/runtime-refresh-diagnostics",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<FailingRefreshSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-          refresh: Driver.Refresh(() => Effect.fail({ _tag: "DiagnosticsRefreshRejected" })),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        refresh: Driver.Refresh(() => Effect.fail({ _tag: "DiagnosticsRefreshRejected" })),
       });
     }
     const runtime = createRuntime({
@@ -1033,22 +1008,20 @@ describe("runtime events", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class SlowRefreshNode extends NodeBase<SlowRefreshSpec> {
-      static readonly spec = resourceSpec<SlowRefreshSpec>({
+    class SlowRefreshNode extends NodeBase<SlowRefreshSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<SlowRefreshSpec>({
         tag: "resources/runtime-refresh-singleflight",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SlowRefreshSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              refreshCount += 1;
-              yield* Deferred.succeed(refreshStarted, undefined);
-              yield* Deferred.await(refreshGate);
-              yield* ctx.setResult({ value: `fresh:${refreshCount}` });
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            refreshCount += 1;
+            yield* Deferred.succeed(refreshStarted, undefined);
+            yield* Deferred.await(refreshGate);
+            yield* ctx.setResult({ value: `fresh:${refreshCount}` });
+          })
+        ),
       });
     }
     const runtime = createRuntime();
@@ -1094,15 +1067,13 @@ describe("runtime events", () => {
       readonly result: string;
     }>;
 
-    class ArgsFailureNode extends NodeBase<ArgsFailureSpec> {
-      static readonly spec = serviceSpec<ArgsFailureSpec>({
+    class ArgsFailureNode extends NodeBase<ArgsFailureSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<ArgsFailureSpec>({
         tag: "services/runtime-args-failure",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ArgsFailureSpec>({
-          acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.args.filter)),
-          refresh: Driver.Refresh(() => Effect.fail({ _tag: "RefreshRejected" })),
-        }),
+        acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.args.filter)),
+        refresh: Driver.Refresh(() => Effect.fail({ _tag: "RefreshRejected" })),
       });
     }
     const runtime = createRuntime({
@@ -1141,17 +1112,15 @@ describe("runtime events", () => {
       readonly result: string;
     }>;
 
-    class LiveFailureNode extends NodeBase<LiveFailureSpec> {
-      static readonly spec = serviceSpec<LiveFailureSpec>({
+    class LiveFailureNode extends NodeBase<LiveFailureSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<LiveFailureSpec>({
         tag: "services/runtime-live-failure",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<LiveFailureSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          live: Driver.Live({
-            start: () => Effect.fail(cause),
-            stop: () => Effect.void,
-          }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        live: Driver.Live({
+          start: () => Effect.fail(cause),
+          stop: () => Effect.void,
         }),
       });
     }
@@ -1193,22 +1162,20 @@ describe("runtime events", () => {
       readonly result: string;
     }>;
 
-    class AcquireCleanupFailureNode extends NodeBase<AcquireCleanupFailureSpec> {
-      static readonly spec = serviceSpec<AcquireCleanupFailureSpec>({
+    class AcquireCleanupFailureNode extends NodeBase<AcquireCleanupFailureSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<AcquireCleanupFailureSpec>({
         tag: "services/runtime-acquire-cleanup-failure",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<AcquireCleanupFailureSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.gen(function* () {
-              ctx.disposers.add(() => {
-                throw cleanupCause;
-              });
+        acquire: Driver.Acquire((ctx) =>
+          Effect.gen(function* () {
+            ctx.disposers.add(() => {
+              throw cleanupCause;
+            });
 
-              return yield* Effect.fail(acquireCause);
-            })
-          ),
-        }),
+            return yield* Effect.fail(acquireCause);
+          })
+        ),
       });
     }
     const runtime = createRuntime({
@@ -1254,15 +1221,13 @@ describe("runtime events", () => {
       readonly result: string;
     }>;
 
-    class StopReleaseFailureNode extends NodeBase<StopReleaseFailureSpec> {
-      static readonly spec = serviceSpec<StopReleaseFailureSpec>({
+    class StopReleaseFailureNode extends NodeBase<StopReleaseFailureSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<StopReleaseFailureSpec>({
         tag: "services/runtime-stop-release-failure",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<StopReleaseFailureSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          release: Driver.Release(() => Effect.fail(cause)),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        release: Driver.Release(() => Effect.fail(cause)),
       });
     }
     const runtime = createRuntime({
@@ -1345,17 +1310,15 @@ describe("runtime events", () => {
       };
     }>;
 
-    class ReportSinkFailureNode extends NodeBase<ReportSinkFailureSpec> {
-      static readonly spec = serviceSpec<ReportSinkFailureSpec>({
+    class ReportSinkFailureNode extends NodeBase<ReportSinkFailureSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<ReportSinkFailureSpec>({
         tag: "services/runtime-report-sink-failure",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ReportSinkFailureSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          actions: {
-            fail: Driver.Action(() => Effect.fail(new Error("reportable action failed"))),
-          },
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        actions: {
+          fail: Driver.Action(() => Effect.fail(new Error("reportable action failed"))),
+        },
       });
     }
     const runtime = createRuntime({
@@ -1371,7 +1334,7 @@ describe("runtime events", () => {
     const node = runtime.client.node<Record<string, never>, string>(ReportSinkFailureNode, {});
 
     await node.ensureReady();
-    await node.runAction("fail", {});
+    await unwrapEffect(node.action("fail", {}));
     const events = (await runtime.query({ _tag: "RuntimeEvents" })).events;
     const sinkFailure = events.find(
       (record) => record.event._tag === "RuntimeSinkFailureObserved"

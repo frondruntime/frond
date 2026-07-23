@@ -22,12 +22,10 @@ type AsyncAuthoringResult = {
 describe("driver authoring modes", () => {
   test("node tags fail loudly when malformed values bypass TypeScript", () => {
     expect(() =>
-      resourceSpec({
+      resourceSpec.async({
         tag: "drivers/malformed tag" as never,
         key: () => ({}),
-        driver: Driver.Async({
-          acquire: Driver.Acquire(() => ({ ok: true })),
-        }),
+        acquire: Driver.Acquire(() => ({ ok: true })),
       })
     ).toThrow(FrondNodeSpecError);
   });
@@ -45,30 +43,28 @@ describe("driver authoring modes", () => {
     }>;
 
     class AsyncAuthoringNode extends NodeBase<AsyncAuthoringSpec> {
-      static readonly spec = resourceSpec<AsyncAuthoringSpec>({
+      static readonly spec = resourceSpec.async<AsyncAuthoringSpec>({
         tag: "drivers/async-authoring",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Async<AsyncAuthoringSpec>({
-          acquire: Driver.Acquire(() => ({ count: 0, label: "initial" })),
-          refresh: Driver.Refresh(async (ctx) => {
-            ctx.patchResult((current) => {
-              current.label = "refreshed";
-            });
-          }),
-          release: Driver.Release(async () => {
-            released.push("released");
-          }),
-          actions: {
-            increment: Driver.Action(async (ctx, input) => {
-              ctx.patchResult((current) => {
-                current.count += input.by;
-              });
-
-              return { count: input.by };
-            }),
-          },
+        acquire: Driver.Acquire(() => ({ count: 0, label: "initial" })),
+        refresh: Driver.Refresh(async (ctx) => {
+          ctx.patchResult((current) => {
+            current.label = "refreshed";
+          });
         }),
+        release: Driver.Release(async () => {
+          released.push("released");
+        }),
+        actions: {
+          increment: Driver.Action(async (ctx, input) => {
+            ctx.patchResult((current) => {
+              current.count += input.by;
+            });
+
+            return { count: input.by };
+          }),
+        },
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -115,15 +111,13 @@ describe("driver authoring modes", () => {
     }>;
 
     class AsyncRefreshFailureNode extends NodeBase<AsyncRefreshFailureSpec> {
-      static readonly spec = resourceSpec<AsyncRefreshFailureSpec>({
+      static readonly spec = resourceSpec.async<AsyncRefreshFailureSpec>({
         tag: "drivers/async-refresh-failure",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Async<AsyncRefreshFailureSpec>({
-          acquire: Driver.Acquire(() => ({ count: 0, label: "initial" })),
-          refresh: Driver.Refresh(async () => {
-            throw cause;
-          }),
+        acquire: Driver.Acquire(() => ({ count: 0, label: "initial" })),
+        refresh: Driver.Refresh(async () => {
+          throw cause;
         }),
       });
     }

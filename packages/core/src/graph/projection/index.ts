@@ -48,6 +48,7 @@ export function projectNodeSnapshot(
           label: cell.label,
           liveDemand: projectLiveDemand([]),
           operation: idleOperation,
+          revision: cell.state.getRevisionSync(),
         }) satisfies NodeSnapshot
     ),
     Match.exhaustive
@@ -81,6 +82,7 @@ function projectedNodeSnapshot(
     operation: projection.operation,
     operationFailure: projection.operationFailure,
     resultValidity,
+    revision: cell.state.getRevisionSync(),
   };
 
   return Match.value(projection).pipe(

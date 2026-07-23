@@ -11,7 +11,8 @@ import type {
 } from "../graph/types/operations";
 import type { NodeStatus } from "../graph/types/reads";
 import type { ResultValidity } from "../graph/types/resultValidity";
-import type { DependenciesRecord, FrondNode, ResolvedDeps } from "../node";
+import { unwrapEffect } from "../interop";
+import type { DependenciesRecord, FrondNode, NodeSpecLike, ResolvedDeps } from "../node";
 import type { RuntimeNodeHandle, RuntimeNodeSnapshot, RuntimeSubscription } from "../runtime";
 import { FrondMobXProjectionError } from "./errors";
 import { mobxRuntimeMetadata } from "./metadata";
@@ -68,7 +69,12 @@ class RuntimeMobXNode<TArgs, TDeps extends DependenciesRecord, TResult, TNode ex
     options: MobXNodeOptions
   ) {
     this.runtime = runtime;
-    this.handle = runtime.client.node<TArgs, TResult>(spec, args);
+    // The MobX node is parametrized by args/result, not the spec, and does not
+    // use the handle's typed action surface (it exposes its own `runAction`), so
+    // the handle is created through the loose client entry.
+    this.handle = (
+      runtime.client.node as (spec: NodeSpecLike, args: TArgs) => RuntimeNodeHandle<TArgs, TResult>
+    )(spec as unknown as NodeSpecLike, args);
     this.nodeId = this.handle.nodeId;
     this.subscription =
       (options.observeRuntimeEvents ?? true)
@@ -119,7 +125,9 @@ class RuntimeMobXNode<TArgs, TDeps extends DependenciesRecord, TResult, TNode ex
   }
 
   async runAction(action: string, input?: unknown): Promise<ActionResult> {
-    const result = await this.handle.runAction(action, input, mobxRuntimeMetadata.action());
+    const result = await unwrapEffect(
+      this.handle.action(action, input, mobxRuntimeMetadata.action())
+    );
 
     await this.sync();
     return result;

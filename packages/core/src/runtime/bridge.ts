@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { createRuntimeClient } from "./client";
+import { createRuntimeClient, type RuntimeEffectBridgeRunner } from "./client";
 import { makeRuntimeHost } from "./host";
 import type {
   Runtime,
@@ -15,11 +15,6 @@ import type {
   RuntimeSnapshotPurpose,
   RuntimeWorkMetadata,
 } from "./types";
-
-export interface RuntimeEffectBridgeRunner {
-  readonly run: <A>(effect: Effect.Effect<A, unknown>) => Promise<A>;
-  readonly runSync: <A>(effect: Effect.Effect<A, unknown>) => A;
-}
 
 const defaultBridgeRunner: RuntimeEffectBridgeRunner = {
   run: (effect) => Effect.runPromise(effect),
@@ -70,6 +65,8 @@ export function bridgeRuntimeHost(
 
   return {
     ...runtimeHost,
-    client: createRuntimeClient(runtimeHost),
+    // The client is built over the Effect-native host directly (not the Promise
+    // facade above) and owns its own Effect→Promise bridging via the runner.
+    client: createRuntimeClient(host, runner),
   };
 }

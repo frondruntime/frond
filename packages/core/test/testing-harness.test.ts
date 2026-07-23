@@ -16,6 +16,7 @@ import {
   NodeBase,
   type NodeSpec,
   serviceSpec,
+  unwrapEffect,
 } from "./graphTestFixtures";
 
 describe("Frond testing harness", () => {
@@ -46,7 +47,7 @@ describe("Frond testing harness", () => {
     }>;
 
     class FailingHarnessNode extends NodeBase<FailingHarnessSpec> {
-      static readonly spec = serviceSpec<FailingHarnessSpec>({
+      static readonly spec = serviceSpec.fromDriver<FailingHarnessSpec>({
         tag: "testing/resources/failing-harness",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
@@ -99,14 +100,12 @@ describe("Frond testing harness", () => {
       readonly result: string;
     }>;
 
-    class DomainHarnessNode extends NodeBase<DomainHarnessSpec> {
-      static readonly spec = serviceSpec<DomainHarnessSpec>({
+    class DomainHarnessNode extends NodeBase<DomainHarnessSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<DomainHarnessSpec>({
         tag: "testing/resources/domain-harness",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<DomainHarnessSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
       });
 
       upper(): string {
@@ -132,14 +131,12 @@ describe("Frond testing harness", () => {
       readonly result: string;
     }>;
 
-    class LeftHarnessNode extends NodeBase<LeftHarnessSpec> {
-      static readonly spec = serviceSpec<LeftHarnessSpec>({
+    class LeftHarnessNode extends NodeBase<LeftHarnessSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<LeftHarnessSpec>({
         tag: "testing/resources/left-harness",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<LeftHarnessSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("left")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("left")),
       });
     }
 
@@ -150,14 +147,12 @@ describe("Frond testing harness", () => {
       readonly result: number;
     }>;
 
-    class RightHarnessNode extends NodeBase<RightHarnessSpec> {
-      static readonly spec = serviceSpec<RightHarnessSpec>({
+    class RightHarnessNode extends NodeBase<RightHarnessSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<RightHarnessSpec>({
         tag: "testing/resources/right-harness",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<RightHarnessSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed(42)),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed(42)),
       });
     }
 
@@ -184,7 +179,7 @@ describe("Frond testing harness", () => {
     }>;
 
     class RefreshHarnessNode extends NodeBase<RefreshHarnessSpec> {
-      static readonly spec = serviceSpec<RefreshHarnessSpec>({
+      static readonly spec = serviceSpec.fromDriver<RefreshHarnessSpec>({
         tag: "testing/resources/refresh-harness",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
@@ -226,7 +221,7 @@ describe("Frond testing harness", () => {
     }>;
 
     class WaitHarnessNode extends NodeBase<WaitHarnessSpec> {
-      static readonly spec = serviceSpec<WaitHarnessSpec>({
+      static readonly spec = serviceSpec.fromDriver<WaitHarnessSpec>({
         tag: "testing/resources/wait-harness",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
@@ -263,14 +258,12 @@ describe("Frond testing harness", () => {
     }>;
 
     const readyNode = (tag: string) =>
-      class extends NodeBase<ReadyHarnessSpec> {
-        static readonly spec = serviceSpec<ReadyHarnessSpec>({
+      class extends NodeBase<ReadyHarnessSpec, "effect"> {
+        static readonly spec = serviceSpec.effect<ReadyHarnessSpec>({
           tag,
           key: () => Key.singleton(),
           dependencies: dependencies(() => ({})),
-          driver: Driver.Effect<ReadyHarnessSpec>({
-            acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          }),
+          acquire: Driver.Acquire(() => Effect.succeed("ready")),
         });
       };
     const FirstReadyNode = readyNode("testing/resources/wait-count-first");
@@ -304,7 +297,7 @@ describe("Frond testing harness", () => {
     }>;
 
     class ActionHarnessNode extends NodeBase<ActionHarnessSpec> {
-      static readonly spec = serviceSpec<ActionHarnessSpec>({
+      static readonly spec = serviceSpec.fromDriver<ActionHarnessSpec>({
         tag: "testing/resources/action-harness",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
@@ -326,15 +319,19 @@ describe("Frond testing harness", () => {
     deferred.acquire.resolveNext(1);
     await readiness;
 
-    const first = handle.runAction(
-      "increment",
-      { amount: 1 },
-      { source: "test", reason: "action", priority: "visible" }
+    const first = unwrapEffect(
+      handle.action(
+        "increment",
+        { amount: 1 },
+        { source: "test", reason: "action", priority: "visible" }
+      )
     );
-    const second = handle.runAction(
-      "increment",
-      { amount: 2 },
-      { source: "test", reason: "action", priority: "visible" }
+    const second = unwrapEffect(
+      handle.action(
+        "increment",
+        { amount: 2 },
+        { source: "test", reason: "action", priority: "visible" }
+      )
     );
 
     const firstCall = await deferred.actions.increment.waitForCall(0);
@@ -359,7 +356,7 @@ describe("Frond testing harness", () => {
     }>;
 
     class ReleaseHarnessNode extends NodeBase<ReleaseHarnessSpec> {
-      static readonly spec = serviceSpec<ReleaseHarnessSpec>({
+      static readonly spec = serviceSpec.fromDriver<ReleaseHarnessSpec>({
         tag: "testing/resources/release-harness",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
@@ -401,14 +398,12 @@ describe("Frond testing harness", () => {
       readonly result: string;
     }>;
 
-    class BaseDependencyNode extends NodeBase<BaseDependencySpec> {
-      static readonly spec = serviceSpec<BaseDependencySpec>({
+    class BaseDependencyNode extends NodeBase<BaseDependencySpec, "effect"> {
+      static readonly spec = serviceSpec.effect<BaseDependencySpec>({
         tag: "testing/resources/base-dependency",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<BaseDependencySpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("base")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("base")),
       });
     }
 
@@ -421,16 +416,12 @@ describe("Frond testing harness", () => {
       readonly result: string;
     }>;
 
-    class ConsumerNode extends NodeBase<ConsumerSpec> {
-      static readonly spec = serviceSpec<ConsumerSpec>({
+    class ConsumerNode extends NodeBase<ConsumerSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<ConsumerSpec>({
         tag: "testing/resources/consumer",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({ dependency: dep(BaseDependencyNode, {}) })),
-        driver: Driver.Effect<ConsumerSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.succeed(`consumer:${ctx.deps.dependency.result}`)
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) => Effect.succeed(`consumer:${ctx.deps.dependency.result}`)),
       });
     }
 

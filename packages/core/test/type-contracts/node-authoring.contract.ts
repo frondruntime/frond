@@ -9,6 +9,7 @@ import type {
   DriverContext,
   LiveResourceStopReason,
   NodeSpecArgs,
+  NodeSpecInstance,
   NodeSpecResolvedDeps,
 } from "../../src";
 import {
@@ -23,6 +24,7 @@ import {
   resourceSpec,
   serviceSpec,
   tag,
+  unwrapEffect,
 } from "../../src";
 import type { GraphNodeCellView, GraphNodeState } from "../../src/graph/planning/plan";
 import { createFrondTestHarness, mockSpec, readySpec } from "../../src/testing";
@@ -43,12 +45,10 @@ type TransportResult = {
 };
 
 class TransportNode extends NodeBase<TransportSpec> {
-  static readonly spec = serviceSpec<TransportSpec>({
+  static readonly spec = serviceSpec.async<TransportSpec>({
     tag: tag("types/transport"),
     key: () => Key.singleton(),
-    driver: Driver.Async<TransportSpec>({
-      acquire: Driver.Acquire((): TransportResult => ({ token: "token" })),
-    }),
+    acquire: Driver.Acquire((): TransportResult => ({ token: "token" })),
   });
 
   get bearer(): string {
@@ -66,25 +66,23 @@ type CounterSpec = import("../../src").NodeSpec<{
 }>;
 
 class CounterNode extends NodeBase<CounterSpec> {
-  static readonly spec = serviceSpec<CounterSpec>({
+  static readonly spec = serviceSpec.async<CounterSpec>({
     tag: tag("types/counter"),
     key: () => Key.singleton(),
-    driver: Driver.Async<CounterSpec>({
-      acquire: Driver.Acquire(() => ({ count: 1 })),
-      actions: {
-        bump: Driver.Action(
-          (
-            _ctx: AsyncDriverContext<
-              NodeBase<CounterSpec>,
-              NodeSpecArgs<CounterSpec>,
-              NodeSpecResolvedDeps<CounterSpec>,
-              { readonly count: number }
-            >,
-            input: { readonly by: number }
-          ) => ({ count: input.by })
-        ),
-      },
-    }),
+    acquire: Driver.Acquire(() => ({ count: 1 })),
+    actions: {
+      bump: Driver.Action(
+        (
+          _ctx: AsyncDriverContext<
+            NodeBase<CounterSpec>,
+            NodeSpecArgs<CounterSpec>,
+            NodeSpecResolvedDeps<CounterSpec>,
+            { readonly count: number }
+          >,
+          input: { readonly by: number }
+        ) => ({ count: input.by })
+      ),
+    },
   });
 
   get count(): number {
@@ -136,7 +134,7 @@ type ProfileNodeContext = AsyncDriverContext<
 const profileActions = {
   rename: Driver.Action((_ctx: ProfileNodeContext, input: { readonly name: string }) => {
     _ctx.node.result satisfies ProfileResult;
-    _ctx.refreshDep("transport") satisfies Promise<TransportNode>;
+    _ctx.refreshDep("transport") satisfies Promise<NodeSpecInstance<typeof TransportNode>>;
     // @ts-expect-error driver dependency refresh is limited to declared dependency names
     _ctx.refreshDep("missing");
     input.name satisfies string;
@@ -145,7 +143,7 @@ const profileActions = {
 };
 
 class ProfileNode extends NodeBase<ProfileSpec> {
-  static readonly spec = resourceSpec<ProfileSpec>({
+  static readonly spec = resourceSpec.async<ProfileSpec, typeof profileActions>({
     tag: tag("types/profile"),
     key: (args) => Key.structure({ id: args.id }),
     dependencies: dependencies((args: ProfileArgs) => {
@@ -154,23 +152,21 @@ class ProfileNode extends NodeBase<ProfileSpec> {
         transport: dep(TransportNode, Args.none),
       };
     }),
-    driver: Driver.Async<ProfileSpec, typeof profileActions>({
-      acquire: Driver.Acquire((ctx: ProfileAcquireContext): Promise<ProfileResult> => {
-        ctx.args.id satisfies string;
-        ctx.deps.transport.bearer satisfies string;
-        // @ts-expect-error acquire runs before the ready author node exists
-        ctx.node;
-        // @ts-expect-error acquire does not schedule dependency refresh
-        ctx.refreshDep;
-        ctx.setResult({ name: "Ada" });
-        return Promise.resolve({ name: "Ada" });
-      }),
-      refresh: Driver.Refresh(async (ctx) => {
-        const transport = await ctx.refreshDep("transport");
-        transport.bearer satisfies string;
-      }),
-      actions: profileActions,
+    acquire: Driver.Acquire((ctx: ProfileAcquireContext): Promise<ProfileResult> => {
+      ctx.args.id satisfies string;
+      ctx.deps.transport.bearer satisfies string;
+      // @ts-expect-error acquire runs before the ready author node exists
+      ctx.node;
+      // @ts-expect-error acquire does not schedule dependency refresh
+      ctx.refreshDep;
+      ctx.setResult({ name: "Ada" });
+      return Promise.resolve({ name: "Ada" });
     }),
+    refresh: Driver.Refresh(async (ctx) => {
+      const transport = await ctx.refreshDep("transport");
+      transport.bearer satisfies string;
+    }),
+    actions: profileActions,
   });
 
   rename(name: string): Promise<{ readonly ok: true }> {
@@ -186,6 +182,7 @@ class ProfileNode extends NodeBase<ProfileSpec> {
 const harness = createFrondTestHarness();
 const counter = await harness.startNode(CounterNode, Args.none);
 counter.count satisfies number;
+// Async node: the action facade is Promise-native.
 counter.actions.bump({ by: 2 }) satisfies Promise<{ readonly count: number }>;
 counter.bump(2) satisfies Promise<{ readonly count: number }>;
 // @ts-expect-error generated action input is checked
@@ -197,14 +194,21 @@ const handle = harness.node(ProfileNode, { id: "profile-3" });
 type HandleArgsCheck = Expect<Equal<typeof handle.args, ProfileArgs>>;
 const handleArgsCheck: HandleArgsCheck = true;
 handleArgsCheck satisfies true;
+// The untyped handle primitive is an Effect; bridge to a Promise with unwrapEffect.
+unwrapEffect(handle.action("rename", { name: "Ada" })) satisfies Promise<unknown>;
+handle.action("rename", { name: "Ada" }) satisfies Effect.Effect<unknown, unknown>;
+// Monotonic revision for external-store getSnapshot stability.
+handle.readVersion() satisfies number;
 const started = await harness.startNode(ProfileNode, { id: "profile-4" });
 started.rename("Dorothy") satisfies Promise<{ readonly ok: true }>;
 
 const mocked = mockSpec(ProfileNode, {
-  driver: Driver.Async<ProfileSpec, typeof profileActions>({
+  driver: resourceSpec.async<ProfileSpec, typeof profileActions>({
+    tag: tag("types/profile-mock"),
+    key: (args) => Key.structure({ id: args.id }),
     acquire: Driver.Acquire((): ProfileResult => ({ name: "Mocked" })),
     actions: profileActions,
-  }),
+  }).driver,
 });
 const ready = readySpec(ProfileNode, { name: "Ready" });
 harness.node(mocked, { id: "mocked" });
@@ -229,7 +233,12 @@ type EffectProfileContext = DriverContext<
   ProfileResult
 >;
 
-Driver.Effect<ProfileSpec>({
+resourceSpec.effect<ProfileSpec>({
+  tag: tag("types/profile-effect-refresh"),
+  key: (args) => Key.structure({ id: args.id }),
+  dependencies: dependencies(() => ({
+    transport: dep(TransportNode, Args.none),
+  })),
   acquire: Driver.Acquire(() => Effect.succeed({ name: "Ada" })),
   refresh: Driver.Refresh((ctx: EffectProfileContext) =>
     Effect.gen(function* () {
@@ -241,37 +250,43 @@ Driver.Effect<ProfileSpec>({
   ),
 });
 
-class EffectNode extends NodeBase<EffectSpec> {
-  static readonly spec = serviceSpec<EffectSpec>({
+class EffectNode extends NodeBase<EffectSpec, "effect"> {
+  static readonly spec = serviceSpec.effect<EffectSpec>({
     tag: tag("types/effect"),
     key: () => Key.singleton(),
-    driver: Driver.Effect<EffectSpec>({
-      acquire: Driver.Acquire(() => Effect.succeed({ ok: true as const })),
-      actions: {
-        ping: Driver.Action((_ctx, input: { readonly message: string }) =>
-          Effect.succeed(input.message.length)
-        ),
-      },
-    }),
+    acquire: Driver.Acquire(() => Effect.succeed({ ok: true as const })),
+    actions: {
+      ping: Driver.Action((_ctx, input: { readonly message: string }) =>
+        Effect.succeed(input.message.length)
+      ),
+    },
   });
 }
 
 const effectStarted = await harness.startNode(EffectNode, Args.none);
-effectStarted.actions.ping({ message: "effect" }) satisfies Promise<number>;
+// Effect node: the action facade is Effect-native; unwrapEffect bridges to a Promise.
+unwrapEffect(effectStarted.actions.ping({ message: "effect" })) satisfies Promise<number>;
+effectStarted.actions.ping({ message: "effect" }) satisfies Effect.Effect<number, unknown>;
 // @ts-expect-error inferred effect action input is checked
 effectStarted.actions.ping({ message: 1 });
 
-Driver.Async<CounterSpec>({
+serviceSpec.async<CounterSpec>({
+  tag: tag("types/counter-async-guard"),
+  key: () => Key.singleton(),
   // @ts-expect-error async drivers must not return Effect values
   acquire: Driver.Acquire(() => Effect.succeed("not async authoring")),
 });
 
-Driver.Effect<CounterSpec>({
+serviceSpec.effect<CounterSpec>({
+  tag: tag("types/counter-effect-guard"),
+  key: () => Key.singleton(),
   // @ts-expect-error effect drivers must return Effect values
   acquire: Driver.Acquire(() => "not effect authoring"),
 });
 
-Driver.Async<CounterSpec>({
+serviceSpec.async<CounterSpec>({
+  tag: tag("types/counter-bare-action"),
+  key: () => Key.singleton(),
   acquire: Driver.Acquire(() => ({ count: 1 })),
   actions: {
     // @ts-expect-error bare action functions are not accepted
@@ -279,13 +294,11 @@ Driver.Async<CounterSpec>({
   },
 });
 
-serviceSpec<CounterSpec>({
+serviceSpec.async<CounterSpec>({
   tag: tag("types/raw-key"),
   // @ts-expect-error raw keys are not accepted
   key: () => "singleton",
-  driver: Driver.Async<CounterSpec>({
-    acquire: Driver.Acquire(() => ({ count: 1 })),
-  }),
+  acquire: Driver.Acquire(() => ({ count: 1 })),
 });
 
 type LiveSpec = import("../../src").NodeSpec<{
@@ -315,12 +328,16 @@ const liveContractResource = Driver.Live({
   },
 });
 
-Driver.Async<LiveSpec>({
+serviceSpec.async<LiveSpec>({
+  tag: tag("types/live-ok"),
+  key: () => Key.singleton(),
   acquire: Driver.Acquire(() => "ready"),
   live: liveContractResource,
 });
 
-Driver.Async<LiveSpec>({
+serviceSpec.async<LiveSpec>({
+  tag: tag("types/live-bad"),
+  key: () => Key.singleton(),
   acquire: Driver.Acquire(() => "ready"),
   // @ts-expect-error live hooks must be declared with Driver.Live
   live: async () => undefined,
@@ -354,15 +371,13 @@ type PlainSpec = import("../../src").NodeSpec<{
 }>;
 
 class PlainNode extends NodeBase<PlainSpec> {
-  static readonly spec = nodeSpec<PlainSpec>({
+  static readonly spec = nodeSpec.async<PlainSpec>({
     tag: tag("types/plain-node"),
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Async<PlainSpec>({
-      acquire: Driver.Acquire(
-        (): Promise<{ readonly count: number }> => Promise.resolve({ count: 1 })
-      ),
-    }),
+    acquire: Driver.Acquire(
+      (): Promise<{ readonly count: number }> => Promise.resolve({ count: 1 })
+    ),
   });
 
   get count(): number {
@@ -380,17 +395,15 @@ type FacadeSpec = import("../../src").NodeSpec<{
 }>;
 
 class FacadeNode extends NodeBase<FacadeSpec> {
-  static readonly spec = facadeSpec<FacadeSpec>({
+  static readonly spec = facadeSpec.async<FacadeSpec>({
     tag: tag("types/facade"),
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({
       profile: dep(ProfileNode, { id: "profile-5" }),
     })),
-    driver: Driver.Async<FacadeSpec>({
-      acquire: Driver.Acquire(({ deps }): { readonly ok: true } => {
-        deps.profile.rename("Facade") satisfies Promise<{ readonly ok: true }>;
-        return { ok: true as const };
-      }),
+    acquire: Driver.Acquire(({ deps }): { readonly ok: true } => {
+      deps.profile.rename("Facade") satisfies Promise<{ readonly ok: true }>;
+      return { ok: true as const };
     }),
   });
 
@@ -410,12 +423,10 @@ type SearchSpec = import("../../src").NodeSpec<{
 }>;
 
 class SearchNode extends NodeBase<SearchSpec> {
-  static readonly spec = resourceSpec<SearchSpec>({
+  static readonly spec = resourceSpec.async<SearchSpec>({
     tag: tag("types/search"),
     key: (args) => Key.structure({ query: args.query }),
-    driver: Driver.Async<SearchSpec>({
-      acquire: Driver.Acquire(({ args }) => [args.query]),
-    }),
+    acquire: Driver.Acquire(({ args }) => [args.query]),
   });
 }
 

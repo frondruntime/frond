@@ -1,3 +1,10 @@
+import type { Effect } from "effect";
+import type {
+  ActionContracts,
+  ActionInputArgs,
+  ActionOutput,
+  DriverMode,
+} from "../../driver/types";
 import type { NodeLiveLeaseId, NodeLiveSource } from "../../graph/types/liveness";
 import type {
   ActionResult,
@@ -9,13 +16,20 @@ import type {
 } from "../../graph/types/operations";
 import type { NodeRead } from "../../graph/types/reads";
 import type {
+  NodeSpecActions,
+  NodeSpecArgs,
+  NodeSpecLike,
+  NodeSpecMode,
+  NodeSpecResult,
+} from "../../node/types";
+import type {
   RuntimeSignal,
   RuntimeSignalSubscriber,
   RuntimeSignalSubscription,
 } from "../../signals";
 import type { RuntimeSnapshotPurpose, RuntimeWorkMetadata } from "../work";
 import type { RuntimeCommand, RuntimeControl, RuntimeInput, RuntimeQuery } from "./commands";
-import type { RuntimeStatus } from "./ids";
+import type { RuntimeError, RuntimeStatus } from "./ids";
 import type { RuntimeQueryResult } from "./queries";
 import type { RawRuntimeNodeRead, RuntimeNodeRead, RuntimeNodeSnapshotLookup } from "./reads";
 import type { RuntimeObserver, RuntimeSubscription } from "./service";
@@ -61,9 +75,37 @@ export interface Runtime {
  * surfaces that intentionally bypass normal node requests.
  */
 export interface RuntimeClient {
-  readonly node: <TArgs, TResult>(spec: unknown, args: TArgs) => RuntimeNodeHandle<TArgs, TResult>;
+  readonly node: <TSpec extends NodeSpecLike>(
+    spec: TSpec,
+    args: NodeSpecArgs<TSpec>
+  ) => RuntimeNodeHandle<
+    NodeSpecArgs<TSpec>,
+    NodeSpecResult<TSpec>,
+    NodeSpecActions<TSpec>,
+    NodeSpecMode<TSpec>
+  >;
   readonly __unsafe: RuntimeClientUnsafe;
 }
+
+/**
+ * A node handle's typed, mode-native action surface.
+ *
+ * Each action follows the node's authored driver mode: an effect-driver node's
+ * actions return an `Effect`, an async-driver node's return a `Promise`. Both
+ * resolve to the `ActionResult` tagged union (Success/Failure) typed to the
+ * action's output — unlike the node facade's actions, the handle does not lift a
+ * Failure into the error channel; inspect `result._tag`. Cross the boundary with
+ * `unwrapEffect` / `wrapPromise`.
+ */
+export type HandleActions<TActions extends ActionContracts, TMode extends DriverMode> = {
+  readonly [TName in keyof TActions & string]: TMode extends "effect"
+    ? (
+        ...input: ActionInputArgs<TActions[TName]>
+      ) => Effect.Effect<ActionResult<ActionOutput<TActions[TName]>>, RuntimeError>
+    : (
+        ...input: ActionInputArgs<TActions[TName]>
+      ) => Promise<ActionResult<ActionOutput<TActions[TName]>>>;
+};
 
 /**
  * Stable handle for one node identity.
@@ -72,19 +114,32 @@ export interface RuntimeClient {
  * explicit live leases. It is not a ready author node; call `read`/`boot` or a
  * React/MobX adapter to project current state.
  */
-export interface RuntimeNodeHandle<TArgs, TResult> {
+export interface RuntimeNodeHandle<
+  TArgs,
+  TResult,
+  TActions extends ActionContracts = Record<string, never>,
+  TMode extends DriverMode = "async",
+> {
   readonly nodeId: NodeRead["nodeId"];
   readonly args: TArgs;
   readonly read: () => RuntimeNodeRead<TResult>;
+  // Monotonic revision of this node's committed state. Stable across calls when
+  // nothing changed, so it is the `getSnapshot` for a `useSyncExternalStore`
+  // integration outside the React hooks, in place of hashing `read()` by hand.
+  readonly readVersion: () => number;
   readonly boot: (metadata?: RuntimeWorkMetadata | undefined) => RuntimeNodeRead<TResult>;
   readonly subscribe: (listener: () => void) => () => void;
   readonly ensure: (metadata?: RuntimeWorkMetadata | undefined) => Promise<NodeRead>;
   readonly ensureReady: (metadata?: RuntimeWorkMetadata | undefined) => Promise<NodeRead>;
-  readonly runAction: (
+  // Typed, mode-native action surface: `handle.actions.<name>(input)`.
+  readonly actions: HandleActions<TActions, TMode>;
+  // Untyped Effect primitive for dynamic action names and metadata-bearing calls
+  // (adapters, devtools). Always Effect-native; `unwrapEffect` for a Promise.
+  readonly action: (
     action: string,
     input?: unknown,
     metadata?: RuntimeWorkMetadata | undefined
-  ) => Promise<ActionResult>;
+  ) => Effect.Effect<ActionResult, RuntimeError>;
   readonly refresh: (metadata?: RuntimeWorkMetadata | undefined) => Promise<RefreshResult>;
   readonly updateArgs: (
     args: TArgs,

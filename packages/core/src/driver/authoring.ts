@@ -47,7 +47,7 @@ type DriverHookDescriptor<TKind extends string, TRun> = {
 
 type AsyncNode<TSpec extends NodeSpec<{ readonly result?: unknown }>> = NodeBase<TSpec>;
 
-type AsyncActionImplementations<TSpec extends NodeSpec<{ readonly result?: unknown }>> = {
+export type AsyncActionImplementations<TSpec extends NodeSpec<{ readonly result?: unknown }>> = {
   readonly [TName in keyof NodeSpecActions<TSpec> & string]: DriverActionDescriptor<
     (
       ctx: import("./types").AsyncDriverContext<
@@ -61,7 +61,10 @@ type AsyncActionImplementations<TSpec extends NodeSpec<{ readonly result?: unkno
   >;
 };
 
-type EffectActionImplementations<TSpec extends NodeSpec<{ readonly result?: unknown }>, R> = {
+export type EffectActionImplementations<
+  TSpec extends NodeSpec<{ readonly result?: unknown }>,
+  R,
+> = {
   readonly [TName in keyof NodeSpecActions<TSpec> & string]: DriverActionDescriptor<
     (
       ctx: DriverContext<
@@ -182,7 +185,8 @@ export function Async<
   NodeSpecArgs<TSpec>,
   NodeSpecResolvedDeps<TSpec>,
   NodeSpecResult<TSpec>,
-  NodeSpecActions<TSpec>
+  NodeSpecActions<TSpec>,
+  "async"
 > {
   return createAsyncDriver({
     resultValidity: input.resultValidity,
@@ -207,7 +211,8 @@ export function Async<
     NodeSpecArgs<TSpec>,
     NodeSpecResolvedDeps<TSpec>,
     NodeSpecResult<TSpec>,
-    NodeSpecActions<TSpec>
+    NodeSpecActions<TSpec>,
+    "async"
   >;
 }
 
@@ -229,7 +234,8 @@ export function Effect<
   NodeSpecArgs<TSpec>,
   NodeSpecResolvedDeps<TSpec>,
   NodeSpecResult<TSpec>,
-  NodeSpecActions<TSpec>
+  NodeSpecActions<TSpec>,
+  "effect"
 > {
   return createEffectDriver({
     resultValidity: input.resultValidity,
@@ -255,7 +261,8 @@ export function Effect<
     NodeSpecArgs<TSpec>,
     NodeSpecResolvedDeps<TSpec>,
     NodeSpecResult<TSpec>,
-    NodeSpecActions<TSpec>
+    NodeSpecActions<TSpec>,
+    "effect"
   >;
 }
 

@@ -27,36 +27,34 @@ type FineRatesSpec = NodeSpec<{
   readonly result: RatesResult;
 }>;
 
-class FineRatesNode extends NodeBase<FineRatesSpec> {
-  static readonly spec = resourceSpec<FineRatesSpec>({
+class FineRatesNode extends NodeBase<FineRatesSpec, "effect"> {
+  static readonly spec = resourceSpec.effect<FineRatesSpec>({
     tag: tag("e2e/fine-liveness/rates"),
     key: () => Key.singleton(),
-    driver: Driver.Effect<FineRatesSpec>({
-      acquire: Driver.Acquire(() =>
-        Effect.succeed({
-          rates: observable.map<Pair, number>([
-            ["BTC/USD", 63_000],
-            ["ETH/USD", 3_100],
-            ["SOL/USD", 148],
-          ]),
-        })
-      ),
-      live: Driver.Live<NodeBase<FineRatesSpec>, FineLiveResource>({
-        start: (_ctx, demand) =>
-          Effect.sync(() => {
-            fineLiveStarts.push(demand);
-            return { current: demand } satisfies FineLiveResource;
-          }),
-        update: (_ctx, resource, demand) =>
-          Effect.sync(() => {
-            fineLiveUpdates.push(demand);
-            resource.current = demand;
-          }),
-        stop: (_ctx, resource) =>
-          Effect.sync(() => {
-            fineLiveStops.push(resource.current);
-          }),
-      }),
+    acquire: Driver.Acquire(() =>
+      Effect.succeed({
+        rates: observable.map<Pair, number>([
+          ["BTC/USD", 63_000],
+          ["ETH/USD", 3_100],
+          ["SOL/USD", 148],
+        ]),
+      })
+    ),
+    live: Driver.Live<NodeBase<FineRatesSpec>, FineLiveResource>({
+      start: (_ctx, demand) =>
+        Effect.sync(() => {
+          fineLiveStarts.push(demand);
+          return { current: demand } satisfies FineLiveResource;
+        }),
+      update: (_ctx, resource, demand) =>
+        Effect.sync(() => {
+          fineLiveUpdates.push(demand);
+          resource.current = demand;
+        }),
+      stop: (_ctx, resource) =>
+        Effect.sync(() => {
+          fineLiveStops.push(resource.current);
+        }),
     }),
   });
 

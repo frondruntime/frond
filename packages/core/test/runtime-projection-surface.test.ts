@@ -16,6 +16,7 @@ import {
   resourceSpec,
   resultCommit,
   serviceSpec,
+  unwrapEffect,
 } from "./graphTestFixtures";
 import { makeInspectionSnapshotForbiddenRuntime } from "./projectionTestFixtures";
 
@@ -185,27 +186,25 @@ describe("runtime projection surface", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class SyncClockNode extends NodeBase<SyncClockSpec> {
-      static readonly spec = resourceSpec<SyncClockSpec>({
+    class SyncClockNode extends NodeBase<SyncClockSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<SyncClockSpec>({
         tag: "projection-surface/sync-clock",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SyncClockSpec>({
-          resultValidity: {
-            _tag: "TimeBound",
-            expireAfter: "10 seconds",
-          },
-          acquire: Driver.Acquire(() =>
-            Effect.succeed(
-              resultCommit(
-                { value: "sync-clock" },
-                {
-                  loadedAt,
-                }
-              )
+        resultValidity: {
+          _tag: "TimeBound",
+          expireAfter: "10 seconds",
+        },
+        acquire: Driver.Acquire(() =>
+          Effect.succeed(
+            resultCommit(
+              { value: "sync-clock" },
+              {
+                loadedAt,
+              }
             )
-          ),
-        }),
+          )
+        ),
       });
     }
     const runtime = createRuntime({
@@ -301,19 +300,17 @@ describe("runtime projection surface", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class PendingNode extends NodeBase<PendingSpec> {
-      static readonly spec = serviceSpec<PendingSpec>({
+    class PendingNode extends NodeBase<PendingSpec, "effect"> {
+      static readonly spec = serviceSpec.effect<PendingSpec>({
         tag: "projection-surface/pending",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<PendingSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(acquireStarted, undefined);
-              return yield* Deferred.await(acquireGate);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(acquireStarted, undefined);
+            return yield* Deferred.await(acquireGate);
+          })
+        ),
       });
     }
     const runtime = createRuntime();
@@ -351,22 +348,20 @@ describe("runtime projection surface", () => {
       };
     }>;
 
-    class BusyNode extends NodeBase<BusySpec> {
-      static readonly spec = serviceSpec<BusySpec>({
+    class BusyNode extends NodeBase<BusySpec, "effect"> {
+      static readonly spec = serviceSpec.effect<BusySpec>({
         tag: "projection-surface/busy",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<BusySpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "idle" })),
-          actions: {
-            wait: Driver.Action(() =>
-              Effect.gen(function* () {
-                yield* Deferred.succeed(actionStarted, undefined);
-                yield* Deferred.await(actionGate);
-              })
-            ),
-          },
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "idle" })),
+        actions: {
+          wait: Driver.Action(() =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(actionStarted, undefined);
+              yield* Deferred.await(actionGate);
+            })
+          ),
+        },
       });
     }
     const busy = runtime.client.node<Record<string, never>, { readonly value: string }>(
@@ -375,7 +370,7 @@ describe("runtime projection surface", () => {
     );
 
     await busy.ensureReady();
-    const action = busy.runAction("wait");
+    const action = unwrapEffect(busy.action("wait"));
     await Effect.runPromise(Deferred.await(actionStarted));
 
     expect(busy.read()).toMatchObject({
@@ -409,7 +404,7 @@ describe("runtime projection surface", () => {
     );
 
     await handle.ensureReady();
-    await handle.runAction("expire");
+    await unwrapEffect(handle.action("expire"));
 
     const beforeEvents = await eventSequences(runtime);
     const read = handle.read();
@@ -474,14 +469,12 @@ type ProjectionReadySpec = NodeSpec<{
   readonly result: { readonly value: string };
 }>;
 
-class ProjectionReadyNode extends NodeBase<ProjectionReadySpec> {
-  static readonly spec = serviceSpec<ProjectionReadySpec>({
+class ProjectionReadyNode extends NodeBase<ProjectionReadySpec, "effect"> {
+  static readonly spec = serviceSpec.effect<ProjectionReadySpec>({
     tag: "projection-surface/ready",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<ProjectionReadySpec>({
-      acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
-    }),
+    acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
   });
 }
 
@@ -492,14 +485,12 @@ type ProjectionFailingSpec = NodeSpec<{
   readonly result: { readonly value: string };
 }>;
 
-class ProjectionFailingNode extends NodeBase<ProjectionFailingSpec> {
-  static readonly spec = serviceSpec<ProjectionFailingSpec>({
+class ProjectionFailingNode extends NodeBase<ProjectionFailingSpec, "effect"> {
+  static readonly spec = serviceSpec.effect<ProjectionFailingSpec>({
     tag: "projection-surface/failing",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<ProjectionFailingSpec>({
-      acquire: Driver.Acquire(() => Effect.fail(new Error("projection failure"))),
-    }),
+    acquire: Driver.Acquire(() => Effect.fail(new Error("projection failure"))),
   });
 }
 
@@ -510,16 +501,14 @@ type InvalidKeySpec = NodeSpec<{
   readonly result: string;
 }>;
 
-class InvalidKeyNode extends NodeBase<InvalidKeySpec> {
-  static readonly spec = serviceSpec<InvalidKeySpec>({
+class InvalidKeyNode extends NodeBase<InvalidKeySpec, "effect"> {
+  static readonly spec = serviceSpec.effect<InvalidKeySpec>({
     tag: "projection-surface/invalid-key",
     key: () => {
       throw new Error("invalid key");
     },
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<InvalidKeySpec>({
-      acquire: Driver.Acquire(() => Effect.succeed("unused")),
-    }),
+    acquire: Driver.Acquire(() => Effect.succeed("unused")),
   });
 }
 
@@ -530,14 +519,12 @@ type ConstructorFailureSpec = NodeSpec<{
   readonly result: string;
 }>;
 
-class ConstructorFailureNode extends NodeBase<ConstructorFailureSpec> {
-  static readonly spec = serviceSpec<ConstructorFailureSpec>({
+class ConstructorFailureNode extends NodeBase<ConstructorFailureSpec, "effect"> {
+  static readonly spec = serviceSpec.effect<ConstructorFailureSpec>({
     tag: "projection-surface/constructor-failure",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<ConstructorFailureSpec>({
-      acquire: Driver.Acquire(() => Effect.succeed("unused")),
-    }),
+    acquire: Driver.Acquire(() => Effect.succeed("unused")),
   });
 
   constructor() {
@@ -553,27 +540,25 @@ type ProjectionTimeBoundSpec = NodeSpec<{
   readonly result: { readonly value: string };
 }>;
 
-class ProjectionTimeBoundNode extends NodeBase<ProjectionTimeBoundSpec> {
-  static readonly spec = resourceSpec<ProjectionTimeBoundSpec>({
+class ProjectionTimeBoundNode extends NodeBase<ProjectionTimeBoundSpec, "effect"> {
+  static readonly spec = resourceSpec.effect<ProjectionTimeBoundSpec>({
     tag: "projection-surface/time-bound",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<ProjectionTimeBoundSpec>({
-      resultValidity: {
-        _tag: "TimeBound",
-        staleAfter: "10 millis",
-      },
-      acquire: Driver.Acquire(() =>
-        Effect.succeed(
-          resultCommit(
-            { value: "time-bound" },
-            {
-              loadedAt: 100,
-            }
-          )
+    resultValidity: {
+      _tag: "TimeBound",
+      staleAfter: "10 millis",
+    },
+    acquire: Driver.Acquire(() =>
+      Effect.succeed(
+        resultCommit(
+          { value: "time-bound" },
+          {
+            loadedAt: 100,
+          }
         )
-      ),
-    }),
+      )
+    ),
   });
 }
 
@@ -588,23 +573,21 @@ type ProjectionManualExpirationSpec = NodeSpec<{
   };
 }>;
 
-class ProjectionManualExpirationNode extends NodeBase<ProjectionManualExpirationSpec> {
-  static readonly spec = resourceSpec<ProjectionManualExpirationSpec>({
+class ProjectionManualExpirationNode extends NodeBase<ProjectionManualExpirationSpec, "effect"> {
+  static readonly spec = resourceSpec.effect<ProjectionManualExpirationSpec>({
     tag: "projection-surface/manual-expiration",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<ProjectionManualExpirationSpec>({
-      resultValidity: { _tag: "Manual" },
-      acquire: Driver.Acquire(() => {
-        manualExpirationAcquireCount += 1;
+    resultValidity: { _tag: "Manual" },
+    acquire: Driver.Acquire(() => {
+      manualExpirationAcquireCount += 1;
 
-        return Effect.succeed({
-          value: manualExpirationAcquireCount === 1 ? "current" : "reacquired",
-        });
-      }),
-      actions: {
-        expire: Driver.Action((ctx) => ctx.setResultValidity({ _tag: "Expired", expiredAt: 10 })),
-      },
+      return Effect.succeed({
+        value: manualExpirationAcquireCount === 1 ? "current" : "reacquired",
+      });
     }),
+    actions: {
+      expire: Driver.Action((ctx) => ctx.setResultValidity({ _tag: "Expired", expiredAt: 10 })),
+    },
   });
 }

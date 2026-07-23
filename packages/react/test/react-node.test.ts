@@ -28,14 +28,12 @@ type ReactProfileSpec = NodeSpec<{
   readonly result: Profile;
 }>;
 
-class ReactProfileNode extends NodeBase<ReactProfileSpec> {
-  static readonly spec = resourceSpec<ReactProfileSpec>({
+class ReactProfileNode extends NodeBase<ReactProfileSpec, "effect"> {
+  static readonly spec = resourceSpec.effect<ReactProfileSpec>({
     tag: "react/resources/profile",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<ReactProfileSpec>({
-      acquire: Driver.Acquire(() => Effect.succeed({ timezone: "UTC" })),
-    }),
+    acquire: Driver.Acquire(() => Effect.succeed({ timezone: "UTC" })),
   });
 
   get timezone(): string {
@@ -50,37 +48,33 @@ type ReactArgsRollbackSpec = NodeSpec<{
   readonly result: Profile;
 }>;
 
-class ReactArgsRollbackNode extends NodeBase<ReactArgsRollbackSpec> {
-  static readonly spec = resourceSpec<ReactArgsRollbackSpec>({
+class ReactArgsRollbackNode extends NodeBase<ReactArgsRollbackSpec, "effect"> {
+  static readonly spec = resourceSpec.effect<ReactArgsRollbackSpec>({
     tag: "react/resources/args-rollback",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<ReactArgsRollbackSpec>({
-      acquire: Driver.Acquire((ctx) =>
-        Effect.succeed({
-          timezone: ctx.args.filter,
-        })
-      ),
-      refresh: Driver.Refresh(() => Effect.fail({ _tag: "RefreshRejected" })),
-    }),
+    acquire: Driver.Acquire((ctx) =>
+      Effect.succeed({
+        timezone: ctx.args.filter,
+      })
+    ),
+    refresh: Driver.Refresh(() => Effect.fail({ _tag: "RefreshRejected" })),
   });
 }
 
 // Refresh succeeds for any filter except "fail" — exercises the rollback race
 // where the older updateArgs fails after the newer one has already succeeded.
-class ReactArgsSelectiveNode extends NodeBase<ReactArgsRollbackSpec> {
-  static readonly spec = resourceSpec<ReactArgsRollbackSpec>({
+class ReactArgsSelectiveNode extends NodeBase<ReactArgsRollbackSpec, "effect"> {
+  static readonly spec = resourceSpec.effect<ReactArgsRollbackSpec>({
     tag: "react/resources/args-selective",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<ReactArgsRollbackSpec>({
-      acquire: Driver.Acquire((ctx) => Effect.succeed({ timezone: ctx.args.filter })),
-      refresh: Driver.Refresh((ctx) =>
-        ctx.args.filter === "fail"
-          ? Effect.fail({ _tag: "RefreshRejected" })
-          : ctx.setResult({ timezone: ctx.args.filter })
-      ),
-    }),
+    acquire: Driver.Acquire((ctx) => Effect.succeed({ timezone: ctx.args.filter })),
+    refresh: Driver.Refresh((ctx) =>
+      ctx.args.filter === "fail"
+        ? Effect.fail({ _tag: "RefreshRejected" })
+        : ctx.setResult({ timezone: ctx.args.filter })
+    ),
   });
 }
 
@@ -91,24 +85,36 @@ describe("React node store", () => {
     let unsubscribed = 0;
     const wrappedRuntime: RuntimeInstance = {
       ...runtime,
-      client: createRuntimeClient({
-        resolveNodeIdSync: runtime.resolveNodeIdSync,
-        getStatusSync: runtime.getStatusSync,
-        readNodeSnapshotSync: runtime.readNodeSnapshotSync,
-        readNodeSnapshot: runtime.readNodeSnapshot,
-        observe: (observer) => {
-          observed += 1;
-          const subscription = runtime.observe(observer);
+      client: createRuntimeClient(
+        {
+          resolveNodeIdSync: runtime.resolveNodeIdSync,
+          getStatusSync: runtime.getStatusSync,
+          readNodeSnapshotSync: runtime.readNodeSnapshotSync,
+          readNodeSnapshot: (nodeId) =>
+            Effect.tryPromise({
+              try: () => runtime.readNodeSnapshot(nodeId),
+              catch: (error) => error,
+            }),
+          observe: (observer) =>
+            Effect.sync(() => {
+              observed += 1;
+              const subscription = runtime.observe(observer);
 
-          return {
-            unsubscribe: () => {
-              unsubscribed += 1;
-              subscription.unsubscribe();
-            },
-          };
-        },
-        submit: runtime.submit,
-      }),
+              return {
+                unsubscribe: () => {
+                  unsubscribed += 1;
+                  subscription.unsubscribe();
+                },
+              };
+            }),
+          submit: (command) =>
+            Effect.tryPromise({ try: () => runtime.submit(command), catch: (error) => error }),
+        } as never,
+        {
+          run: (effect) => Effect.runPromise(effect),
+          runSync: (effect) => Effect.runSync(effect),
+        }
+      ),
       observe: (observer: Parameters<RuntimeInstance["observe"]>[0]) => {
         observed += 1;
         const subscription = runtime.observe(observer);
@@ -177,19 +183,17 @@ describe("React node store", () => {
       readonly result: Profile;
     }>;
 
-    class SlowDisposeNode extends NodeBase<SlowDisposeSpec> {
-      static readonly spec = resourceSpec<SlowDisposeSpec>({
+    class SlowDisposeNode extends NodeBase<SlowDisposeSpec, "effect"> {
+      static readonly spec = resourceSpec.effect<SlowDisposeSpec>({
         tag: "react/resources/slow-dispose",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SlowDisposeSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(started, undefined);
-              return yield* Deferred.await(gate);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined);
+            return yield* Deferred.await(gate);
+          })
+        ),
       });
     }
     const runtime = createRuntime();
@@ -431,19 +435,17 @@ test("nodes store throws one stable composite attempt until children become read
     readonly result: Profile;
   }>;
 
-  class SlowNodeA extends NodeBase<SlowNodeASpec> {
-    static readonly spec = resourceSpec<SlowNodeASpec>({
+  class SlowNodeA extends NodeBase<SlowNodeASpec, "effect"> {
+    static readonly spec = resourceSpec.effect<SlowNodeASpec>({
       tag: "react/resources/slow-a",
       key: () => Key.singleton(),
       dependencies: dependencies(() => ({})),
-      driver: Driver.Effect<SlowNodeASpec>({
-        acquire: Driver.Acquire(() =>
-          Effect.gen(function* () {
-            yield* Deferred.succeed(startedA, undefined);
-            return yield* Deferred.await(gateA);
-          })
-        ),
-      }),
+      acquire: Driver.Acquire(() =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(startedA, undefined);
+          return yield* Deferred.await(gateA);
+        })
+      ),
     });
   }
 
@@ -454,19 +456,17 @@ test("nodes store throws one stable composite attempt until children become read
     readonly result: Profile;
   }>;
 
-  class SlowNodeB extends NodeBase<SlowNodeBSpec> {
-    static readonly spec = resourceSpec<SlowNodeBSpec>({
+  class SlowNodeB extends NodeBase<SlowNodeBSpec, "effect"> {
+    static readonly spec = resourceSpec.effect<SlowNodeBSpec>({
       tag: "react/resources/slow-b",
       key: () => Key.singleton(),
       dependencies: dependencies(() => ({})),
-      driver: Driver.Effect<SlowNodeBSpec>({
-        acquire: Driver.Acquire(() =>
-          Effect.gen(function* () {
-            yield* Deferred.succeed(startedB, undefined);
-            return yield* Deferred.await(gateB);
-          })
-        ),
-      }),
+      acquire: Driver.Acquire(() =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(startedB, undefined);
+          return yield* Deferred.await(gateB);
+        })
+      ),
     });
   }
 

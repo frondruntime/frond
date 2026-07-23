@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import type { RuntimeActionExecutor } from "../../node";
+import type { RuntimeActionEffectExecutor, RuntimeActionExecutor } from "../../node";
 import type { ActionResult, NodeId } from "../types";
 
 export type NodeActionRunner = (
@@ -14,4 +14,20 @@ export function bridgeNodeActionRunner(
   nodeId: NodeId
 ): RuntimeActionExecutor {
   return (action, input) => Effect.runPromise(runAction(nodeId, action, input));
+}
+
+/**
+ * Exposes graph-native action execution as an Effect to Effect-native node
+ * callers, without collapsing through `runPromise`.
+ *
+ * Boundary: this keeps the action Effect-native end to end so the effect action
+ * channel composes with the caller's fiber. The returned Effect resolves to the
+ * `ActionResult` tagged union; the node facade maps Success/Failure onto the
+ * value/error channels.
+ */
+export function bridgeNodeActionEffectRunner(
+  runAction: NodeActionRunner,
+  nodeId: NodeId
+): RuntimeActionEffectExecutor {
+  return (action, input) => runAction(nodeId, action, input);
 }

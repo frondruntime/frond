@@ -13,7 +13,10 @@ import {
   effectBoundaryFailed,
   effectCauseHasOnlyExpectedFailures,
 } from "../driverExecution/effectBoundary";
-import { bridgeNodeActionRunner } from "../driverExecution/nodeActionBridge";
+import {
+  bridgeNodeActionEffectRunner,
+  bridgeNodeActionRunner,
+} from "../driverExecution/nodeActionBridge";
 import {
   interruptDriverOperation,
   makeOperationDisposers,
@@ -368,6 +371,7 @@ function constructAndCompleteAcquireSuccess(
         deps,
         result: resultState.result,
         action: bridgeNodeActionRunner(env.state.executeNodeAction, cell.nodeId),
+        actionEffect: bridgeNodeActionEffectRunner(env.state.executeNodeAction, cell.nodeId),
         reportResultObserved: makeResultObservedReporter(env.state, {
           nodeId: cell.nodeId,
           tag: cell.tag,

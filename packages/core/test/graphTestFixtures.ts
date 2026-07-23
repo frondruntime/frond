@@ -1,5 +1,5 @@
 export { Context, Deferred, Effect } from "effect";
-export { Driver, Key } from "../src";
+export { Driver, Key, unwrapEffect, wrapPromise } from "../src";
 export {
   AcquireFailed,
   ActionFailed,
@@ -53,14 +53,12 @@ type TransportNodeSpec = NodeSpec<{
   readonly result: string;
 }>;
 
-export class TransportNode extends NodeBase<TransportNodeSpec> {
-  static readonly spec = serviceSpec<TransportNodeSpec>({
+export class TransportNode extends NodeBase<TransportNodeSpec, "effect"> {
+  static readonly spec = serviceSpec.effect<TransportNodeSpec>({
     tag: "services/transport",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<TransportNodeSpec>({
-      acquire: Driver.Acquire(() => Effect.succeed("transport")),
-    }),
+    acquire: Driver.Acquire(() => Effect.succeed("transport")),
   });
 }
 
@@ -73,16 +71,14 @@ type ProfileNodeSpec = NodeSpec<{
   readonly result: string;
 }>;
 
-export class ProfileNode extends NodeBase<ProfileNodeSpec> {
-  static readonly spec = resourceSpec<ProfileNodeSpec>({
+export class ProfileNode extends NodeBase<ProfileNodeSpec, "effect"> {
+  static readonly spec = resourceSpec.effect<ProfileNodeSpec>({
     tag: "resources/profile",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({
       transport: dep(TransportNode, {}),
     })),
-    driver: Driver.Effect<ProfileNodeSpec>({
-      acquire: Driver.Acquire((ctx) => Effect.succeed(`profile:${ctx.deps.transport.result}`)),
-    }),
+    acquire: Driver.Acquire((ctx) => Effect.succeed(`profile:${ctx.deps.transport.result}`)),
   });
 }
 
@@ -107,36 +103,34 @@ type ActionProfileNodeSpec = NodeSpec<{
   };
 }>;
 
-export class ActionProfileNode extends NodeBase<ActionProfileNodeSpec> {
-  static readonly spec = resourceSpec<ActionProfileNodeSpec>({
+export class ActionProfileNode extends NodeBase<ActionProfileNodeSpec, "effect"> {
+  static readonly spec = resourceSpec.effect<ActionProfileNodeSpec>({
     tag: "resources/action-profile",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({
       transport: dep(TransportNode, {}),
     })),
-    driver: Driver.Effect<ActionProfileNodeSpec>({
-      acquire: Driver.Acquire((ctx) =>
-        Effect.succeed({ name: ctx.deps.transport.result, timezone: "UTC" })
-      ),
-      refresh: Driver.Refresh((ctx) =>
+    acquire: Driver.Acquire((ctx) =>
+      Effect.succeed({ name: ctx.deps.transport.result, timezone: "UTC" })
+    ),
+    refresh: Driver.Refresh((ctx) =>
+      Effect.gen(function* () {
+        yield* ctx.patchResult((current) => {
+          current.timezone = "REFRESHED";
+        });
+      })
+    ),
+    actions: {
+      updateTimezone: Driver.Action((ctx, input) =>
         Effect.gen(function* () {
           yield* ctx.patchResult((current) => {
-            current.timezone = "REFRESHED";
+            current.timezone = input.timezone;
           });
+
+          return yield* Effect.promise(async () => ({ timezone: input.timezone }));
         })
       ),
-      actions: {
-        updateTimezone: Driver.Action((ctx, input) =>
-          Effect.gen(function* () {
-            yield* ctx.patchResult((current) => {
-              current.timezone = input.timezone;
-            });
-
-            return yield* Effect.promise(async () => ({ timezone: input.timezone }));
-          })
-        ),
-        failTimezone: Driver.Action(() => Effect.fail({ _tag: "TimezoneRejected" })),
-      },
-    }),
+      failTimezone: Driver.Action(() => Effect.fail({ _tag: "TimezoneRejected" })),
+    },
   });
 }
