@@ -132,12 +132,19 @@ export type NodeSpecActions<TSpec> =
 
 export type NodeSpecInstance<TSpec> = TSpec extends { readonly prototype: infer TNode }
   ? TNode extends object
-    ? Omit<TNode, "actions"> & {
-        // The node's own type parameter is the spec shape, which carries no
-        // driver, so `NodeBase.actions` can't know the mode. Inject it here,
-        // where the class (`typeof Foo`) — and thus its authored mode — is known.
+    ? TNode extends {
         readonly actions: NodeActions<NodeSpecActions<TSpec>, NodeSpecMode<TSpec>>;
       }
+      ? // The class already declares the authored mode (`NodeBase<Spec, "effect">`
+        // for effect drivers, the async default otherwise), so keep the nominal
+        // class type: private members and `instanceof` narrowing survive.
+        TNode
+      : Omit<TNode, "actions"> & {
+          // The node's own type parameter is the spec shape, which carries no
+          // driver, so `NodeBase.actions` can't know the mode. Inject it here,
+          // where the class (`typeof Foo`) — and thus its authored mode — is known.
+          readonly actions: NodeActions<NodeSpecActions<TSpec>, NodeSpecMode<TSpec>>;
+        }
     : TNode
   : never;
 

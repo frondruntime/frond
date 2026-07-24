@@ -72,7 +72,7 @@ type NodeSpecMeta<TSpec extends NodeSpec<{ readonly result?: unknown }>> = {
  */
 export type AsyncNodeSpecInput<
   TSpec extends NodeSpec<{ readonly result?: unknown }>,
-  TActions = AsyncActionImplementations<TSpec>,
+  TActions extends AsyncActionImplementations<TSpec> = AsyncActionImplementations<TSpec>,
 > = NodeSpecMeta<TSpec> & AsyncInput<TSpec, TActions>;
 
 /**
@@ -82,7 +82,7 @@ export type AsyncNodeSpecInput<
 export type EffectNodeSpecInput<
   TSpec extends NodeSpec<{ readonly result?: unknown }>,
   R extends never = never,
-  TActions = EffectActionImplementations<TSpec, R>,
+  TActions extends EffectActionImplementations<TSpec, R> = EffectActionImplementations<TSpec, R>,
 > = NodeSpecMeta<TSpec> & EffectInput<TSpec, R, TActions>;
 
 /**
@@ -95,14 +95,14 @@ export type EffectNodeSpecInput<
 export interface NodeSpecFactory {
   readonly async: <
     TSpec extends NodeSpec<{ readonly result?: unknown }>,
-    TActions = AsyncActionImplementations<TSpec>,
+    TActions extends AsyncActionImplementations<TSpec> = AsyncActionImplementations<TSpec>,
   >(
     input: AsyncNodeSpecInput<TSpec, TActions>
   ) => NodeDescriptor<TSpec, "async">;
   readonly effect: <
     TSpec extends NodeSpec<{ readonly result?: unknown }>,
     R extends never = never,
-    TActions = EffectActionImplementations<TSpec, R>,
+    TActions extends EffectActionImplementations<TSpec, R> = EffectActionImplementations<TSpec, R>,
   >(
     input: EffectNodeSpecInput<TSpec, R, TActions>
   ) => NodeDescriptor<TSpec, "effect">;
@@ -129,7 +129,7 @@ function makeNodeSpecFactory(kind: NodeKind): NodeSpecFactory {
   return {
     async: <
       TSpec extends NodeSpec<{ readonly result?: unknown }>,
-      TActions = AsyncActionImplementations<TSpec>,
+      TActions extends AsyncActionImplementations<TSpec> = AsyncActionImplementations<TSpec>,
     >(
       input: AsyncNodeSpecInput<TSpec, TActions>
     ): NodeDescriptor<TSpec, "async"> =>
@@ -137,7 +137,10 @@ function makeNodeSpecFactory(kind: NodeKind): NodeSpecFactory {
     effect: <
       TSpec extends NodeSpec<{ readonly result?: unknown }>,
       R extends never = never,
-      TActions = EffectActionImplementations<TSpec, R>,
+      TActions extends EffectActionImplementations<TSpec, R> = EffectActionImplementations<
+        TSpec,
+        R
+      >,
     >(
       input: EffectNodeSpecInput<TSpec, R, TActions>
     ): NodeDescriptor<TSpec, "effect"> =>

@@ -274,6 +274,33 @@ harness.node(ready, { id: "ready" });
 // @ts-expect-error dependency args are checked against dependency spec args
 dep(TransportNode, { id: "wrong" });
 
+const wrongReturnProfileActions = {
+  rename: Driver.Action((_ctx: ProfileNodeContext, _input: { readonly name: string }) => ({
+    ok: false as const,
+  })),
+};
+
+// @ts-expect-error out-of-line action maps are checked against the declared action contracts
+resourceSpec.async<ProfileSpec, typeof wrongReturnProfileActions>({
+  tag: tag("types/profile-wrong-return"),
+  key: (args) => Key.structure({ id: args.id }),
+  acquire: Driver.Acquire((): ProfileResult => ({ name: "Ada" })),
+  actions: wrongReturnProfileActions,
+});
+
+const phantomProfileActions = {
+  ...profileActions,
+  phantom: Driver.Action((_ctx: ProfileNodeContext) => ({ ok: true as const })),
+};
+
+resourceSpec.async<ProfileSpec, typeof phantomProfileActions>({
+  tag: tag("types/profile-phantom-action"),
+  key: (args) => Key.structure({ id: args.id }),
+  acquire: Driver.Acquire((): ProfileResult => ({ name: "Ada" })),
+  // @ts-expect-error undeclared action keys never register in the driver registry
+  actions: phantomProfileActions,
+});
+
 type EffectSpec = import("../../src").NodeSpec<{
   readonly args: Args.None;
   readonly key: Key.Singleton;
@@ -284,7 +311,7 @@ type EffectSpec = import("../../src").NodeSpec<{
 }>;
 
 type EffectProfileContext = DriverContext<
-  NodeBase<ProfileSpec>,
+  NodeBase<ProfileSpec, "effect">,
   ProfileArgs,
   NodeSpecResolvedDeps<ProfileSpec>,
   ProfileResult
@@ -326,6 +353,40 @@ unwrapEffect(effectStarted.actions.ping({ message: "effect" })) satisfies Promis
 effectStarted.actions.ping({ message: "effect" }) satisfies Effect.Effect<number, unknown>;
 // @ts-expect-error inferred effect action input is checked
 effectStarted.actions.ping({ message: 1 });
+
+// Nominal identity: a class that declares its authored mode keeps its own type
+// through NodeSpecInstance, so dep-injected instances stay assignable to the
+// class and instanceof narrowing still works.
+type EffectInstanceIdentity = Expect<Equal<NodeSpecInstance<typeof EffectNode>, EffectNode>>;
+const effectInstanceIdentity: EffectInstanceIdentity = true;
+effectInstanceIdentity satisfies true;
+declare const effectInstance: NodeSpecInstance<typeof EffectNode>;
+const effectInstanceAsClass: EffectNode = effectInstance;
+effectInstanceAsClass satisfies EffectNode;
+effectInstance.actions.ping({ message: "effect" }) satisfies Effect.Effect<number, unknown>;
+
+// Same identity for an async node with the default mode.
+type ProfileInstanceIdentity = Expect<Equal<NodeSpecInstance<typeof ProfileNode>, ProfileNode>>;
+const profileInstanceIdentity: ProfileInstanceIdentity = true;
+profileInstanceIdentity satisfies true;
+declare const profileInstance: NodeSpecInstance<typeof ProfileNode>;
+const profileInstanceAsClass: ProfileNode = profileInstance;
+profileInstanceAsClass satisfies ProfileNode;
+profileInstance.actions.rename({ name: "Ada" }) satisfies Promise<{ readonly ok: true }>;
+
+serviceSpec.effect<EffectSpec>({
+  tag: tag("types/effect-node-actions"),
+  key: () => Key.singleton(),
+  acquire: Driver.Acquire(() => Effect.succeed({ ok: true as const })),
+  actions: {
+    ping: Driver.Action((ctx, input: { readonly message: string }) => {
+      // Effect-mode hooks see the effect-native node: the action facade hands
+      // back Effects, not Promises.
+      ctx.node.actions.ping({ message: input.message }) satisfies Effect.Effect<number, unknown>;
+      return Effect.succeed(input.message.length);
+    }),
+  },
+});
 
 serviceSpec.async<CounterSpec>({
   tag: tag("types/counter-async-guard"),
@@ -460,6 +521,8 @@ class FacadeNode extends NodeBase<FacadeSpec> {
     })),
     acquire: Driver.Acquire(({ deps }): { readonly ok: true } => {
       deps.profile.rename("Facade") satisfies Promise<{ readonly ok: true }>;
+      // Dep-injected instances keep the nominal class type.
+      deps.profile satisfies ProfileNode;
       return { ok: true as const };
     }),
   });

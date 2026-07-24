@@ -268,8 +268,12 @@ export type FrondNode<
   TDeps extends object = never,
   TResult = never,
   TActions extends ActionContracts = Record<string, never>,
+  TMode extends DriverMode = "async",
 > = [TDeps] extends [never]
-  ? NodeBase<TSpecOrArgs extends NodeSpec ? TSpecOrArgs : NodeSpec<{ readonly result: unknown }>>
+  ? NodeBase<
+      TSpecOrArgs extends NodeSpec ? TSpecOrArgs : NodeSpec<{ readonly result: unknown }>,
+      TMode
+    >
   : TSpecOrArgs extends KeyInput
     ? NodeBase<
         NodeSpec<{
@@ -277,7 +281,8 @@ export type FrondNode<
           readonly deps: TDeps;
           readonly result: TResult;
           readonly actions: TActions;
-        }>
+        }>,
+        TMode
       >
     : never;
 
