@@ -53,12 +53,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bun --conditions=source test"
   },
-  "peerDependencies": {
-    "effect": "^4.0.0-0"
-  },
-  "devDependencies": {
-    "effect": "4.0.0-beta.90"
-  },
   "author": {
     "name": "Roman Dubinin",
     "url": "https://romanonthego.dev"
