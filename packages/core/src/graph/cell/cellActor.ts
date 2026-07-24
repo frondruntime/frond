@@ -1,8 +1,21 @@
 import { Deferred, Effect, Exit, Fiber, Ref, Scope, Semaphore } from "effect";
 import type { RuntimeCancellationReason } from "../../cancellation";
 
+export interface GraphCellSubmitOptions {
+  // When true, interrupting the fiber that awaits this task interrupts the worker
+  // running the operation, which triggers the operation's own interruption
+  // handling (e.g. an action's onInterrupt -> abortController.abort()). Only safe
+  // for single-owner operations: a task shared by multiple awaiters (join
+  // admission, deduped readiness) must NOT be interruptible, or one awaiter
+  // leaving would abort work the others still need.
+  readonly interruptible?: boolean | undefined;
+}
+
 export interface GraphCellActor {
-  readonly submit: <A>(operation: GraphCellOperation<A>) => Effect.Effect<GraphCellTask<A>>;
+  readonly submit: <A>(
+    operation: GraphCellOperation<A>,
+    options?: GraphCellSubmitOptions | undefined
+  ) => Effect.Effect<GraphCellTask<A>>;
   readonly run: <A>(operation: GraphCellOperation<A>) => Effect.Effect<A>;
   readonly shutdown: <A>(options?: {
     readonly reason?: RuntimeCancellationReason | undefined;
@@ -34,7 +47,10 @@ export function makeGraphCellActor(): Effect.Effect<GraphCellActor> {
     const activeOperation = yield* Ref.make<ActiveGraphCellOperation | undefined>(undefined);
     const closed = yield* Ref.make(false);
 
-    const submit = <A>(operation: GraphCellOperation<A>): Effect.Effect<GraphCellTask<A>> =>
+    const submit = <A>(
+      operation: GraphCellOperation<A>,
+      options?: GraphCellSubmitOptions | undefined
+    ): Effect.Effect<GraphCellTask<A>> =>
       Effect.gen(function* () {
         const reply = yield* Deferred.make<A>();
         // Contract: each graph cell serializes driver work, lifecycle mutation,
@@ -81,7 +97,20 @@ export function makeGraphCellActor(): Effect.Effect<GraphCellActor> {
               yield* Deferred.succeed(start, undefined).pipe(Effect.asVoid);
             }
 
-            yield* Fiber.await(worker);
+            // For a single-owner operation, propagate awaiter interruption to the
+            // worker so the operation's own interruption handling runs (an action
+            // aborts its AbortSignal). Shared tasks pass interruptible=false and
+            // keep running for their other awaiters.
+            const awaitWorker =
+              options?.interruptible === true
+                ? Fiber.await(worker).pipe(
+                    Effect.onInterrupt(() =>
+                      interrupt({ _tag: "Interrupted", detail: "operation awaiter interrupted" })
+                    )
+                  )
+                : Fiber.await(worker);
+
+            yield* awaitWorker;
             return yield* Deferred.await(reply);
           })
         );

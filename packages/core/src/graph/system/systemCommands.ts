@@ -101,7 +101,11 @@ export function makeGraphSystemCommands(options: {
       const action = cell.descriptor.driver.actions.read(request.action);
 
       if (action._tag === "Missing" || action.admission.policy === "queue") {
-        return yield* actor.submit(runActionOperation(options.graphEnv, cell, request));
+        // Queue actions each own their actor task (one awaiter), so awaiter
+        // interruption can safely abort the in-flight action.
+        return yield* actor.submit(runActionOperation(options.graphEnv, cell, request), {
+          interruptible: true,
+        });
       }
 
       const admissionKey = readActionAdmissionKey(cell, request, action.admission);
@@ -137,7 +141,12 @@ export function makeGraphSystemCommands(options: {
         );
       }
 
-      const task = yield* actor.submit(runActionOperation(options.graphEnv, cell, request));
+      // Reject actions have a single awaiter (concurrent requests are rejected
+      // above), so they may be interrupted. Join actions are shared across
+      // awaiters and must not be — one joiner leaving cannot abort the rest.
+      const task = yield* actor.submit(runActionOperation(options.graphEnv, cell, request), {
+        interruptible: action.admission.policy === "reject",
+      });
       const awaitAction = yield* Effect.cached(
         task.await.pipe(
           Effect.ensuring(Effect.sync(() => activeActionAdmissions.delete(admissionKey.key)))
