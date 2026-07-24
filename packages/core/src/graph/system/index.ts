@@ -47,6 +47,7 @@ export function makeInMemoryGraphSystemFromConfig(
   const state: GraphPlanState = {
     nodes: new Map(),
     edges: new Map(),
+    evictedRevisionByNodeId: new Map(),
     specByTag: new Map(),
     specOverrides: config.specOverrides,
     driverTimeouts: config.driverTimeouts,

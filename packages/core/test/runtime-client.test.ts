@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Cause } from "effect";
 import type { NodeId } from "../src/graph";
 import { FrondNodeConstructionUnavailable } from "../src/node";
 import { FrondRuntimeClosed, FrondRuntimeInvariantViolation } from "../src/runtime";
@@ -104,9 +105,20 @@ describe("runtime client", () => {
     await expect(handle.ensureReady()).rejects.toThrow(
       "Expected runtime submission GraphNodeReadyEnsured, received RuntimeStarted."
     );
-    await expect(
-      unwrapEffect(handle.action("updateTimezone", { timezone: "CET" }))
-    ).rejects.toBeInstanceOf(FrondRuntimeInvariantViolation);
+
+    // The invariant violation is an Effect defect, so `unwrapEffect` rejects with
+    // the failure cause rather than surfacing the raw thrown value.
+    const rejection: unknown = await unwrapEffect(
+      handle.action("updateTimezone", { timezone: "CET" })
+    ).then(
+      () => undefined,
+      (cause: unknown) => cause
+    );
+
+    expect(Cause.isCause(rejection)).toBe(true);
+    expect(Cause.squash(rejection as Cause.Cause<unknown>)).toBeInstanceOf(
+      FrondRuntimeInvariantViolation
+    );
   });
 
   test("runtime client node handle ensures readiness and reads snapshots", async () => {
@@ -1376,5 +1388,79 @@ describe("runtime client", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(failures).toEqual([{ command: "GraphRefreshNode", cause: failure }]);
+  });
+
+  test("handle created from a bare effect-mode descriptor dispatches effect-mode actions", async () => {
+    type BareSpec = NodeSpec<{
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: string;
+      readonly actions: { readonly ping: ActionContract<void, string> };
+    }>;
+
+    // A bare descriptor carries the driver at the top level (`{ driver }`), not
+    // under a static `spec`, matching the second shape `NodeSpecMode` recovers.
+    const bareDescriptor = serviceSpec.effect<BareSpec>({
+      tag: "services/runtime-client-bare-effect-descriptor",
+      key: () => Key.singleton(),
+      dependencies: dependencies(() => ({})),
+      acquire: Driver.Acquire(() => Effect.succeed("ready")),
+      actions: {
+        ping: Driver.Action(() => Effect.succeed("pong")),
+      },
+    });
+    const nodeId = 'services/runtime-client-bare-effect-descriptor:{"type":"singleton"}' as NodeId;
+    const runtime = {
+      resolveNodeIdSync: () => nodeId,
+      getStatusSync: () => "running" as const,
+      readNodeSnapshotSync: () => ({ _tag: "Missing", nodeId }) as const,
+      readNodeSnapshot: () => Effect.succeed({ _tag: "Missing", nodeId } as const),
+      observe: () => Effect.succeed({ unsubscribe: () => undefined }),
+      submit: () =>
+        Effect.succeed({
+          _tag: "GraphActionCompleted",
+          result: { _tag: "Success", nodeId, value: "pong" },
+        } satisfies RuntimeSubmission),
+    };
+    const handle = createRuntimeClient(runtime as never, bridgeRunner).node(
+      bareDescriptor as never,
+      {}
+    );
+
+    const dispatched = (handle.actions as { readonly ping: () => unknown }).ping();
+
+    // Effect mode is recovered from the bare descriptor, so the action facade
+    // returns the Effect itself, not its Promise projection.
+    expect(Effect.isEffect(dispatched)).toBe(true);
+    expect(dispatched instanceof Promise).toBe(false);
+    await expect(
+      Effect.runPromise(dispatched as Effect.Effect<unknown, unknown>)
+    ).resolves.toMatchObject({
+      _tag: "Success",
+      value: "pong",
+    });
+  });
+
+  test("readVersion stays monotonic across evict and recreate for the same node id", async () => {
+    const runtime = createRuntime();
+    const profile = runtime.client.node<Record<string, never>, MutableProfile>(
+      ActionProfileNode,
+      {}
+    );
+
+    await profile.ensureReady();
+    await unwrapEffect(profile.action("updateTimezone", { timezone: "CET" }));
+    const beforeEviction = profile.readVersion();
+
+    expect(beforeEviction).toBeGreaterThan(0);
+
+    await profile.evict();
+    await profile.ensureReady();
+    await unwrapEffect(profile.action("updateTimezone", { timezone: "EET" }));
+
+    // The recreated cell seeds its revision past the evicted one, so a
+    // useSyncExternalStore consumer can never observe an ABA'd version.
+    expect(profile.readVersion()).toBeGreaterThan(beforeEviction);
   });
 });

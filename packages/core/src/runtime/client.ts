@@ -367,9 +367,17 @@ const HANDLE_ACTION_PROTOCOL_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 function driverModeOfSpec(spec: unknown): DriverMode {
-  const mode = (
-    spec as { readonly spec?: { readonly driver?: { readonly mode?: DriverMode } } } | undefined
-  )?.spec?.driver?.mode;
+  // Mirror the type-level `NodeSpecMode`: recover the mode from a node class
+  // (`{ spec: { driver } }`) first, then from a bare descriptor (`{ driver }`),
+  // so a bare effect-mode descriptor dispatches Effect-native actions instead of
+  // silently degrading to the Promise projection.
+  const carrier = spec as
+    | {
+        readonly spec?: { readonly driver?: { readonly mode?: DriverMode } };
+        readonly driver?: { readonly mode?: DriverMode };
+      }
+    | undefined;
+  const mode = carrier?.spec?.driver?.mode ?? carrier?.driver?.mode;
 
   return mode === "effect" ? "effect" : "async";
 }
