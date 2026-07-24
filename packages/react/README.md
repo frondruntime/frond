@@ -42,10 +42,32 @@ const ProfilePanel = observer(({ userId }: { userId: string }) => {
 
 `useNode` suspends while readiness is pending and throws readiness failures to the nearest error boundary. The render path only receives a ready authored node instance.
 
+## Read Without Suspense
+
+```tsx
+const ProfileBadge = observer(({ userId }: { userId: string }) => {
+  const read = FrondReact.useNodeRead(ProfileNode, { userId });
+
+  switch (read._tag) {
+    case "Ready":
+      return <h1>{read.result?.displayName}</h1>;
+    case "Pending":
+      return <Spinner />;
+    case "Error":
+      return <RetryBanner error={read.error} />;
+    default:
+      return null; // Unwired | Idle
+  }
+});
+```
+
+`useNodeRead` never throws to Suspense or an error boundary. It returns the runtime read as a tagged union - `Unwired | Idle | Pending | Ready | Error` - for components that must render every state inline instead of delegating to a boundary. It still drives the same cold-start readiness boot and subscribes to changes, so the node makes progress exactly as it would under `useNode`/`useNodeState`.
+
 ## Runtime Lifecycle Hooks
 
 - `useNode` - ready node or Suspense/error.
 - `useNodeState` - ready node plus operation state, result validity, and last operation failure.
+- `useNodeRead` - non-throwing tagged read for rendering every state inline.
 - `useNodes` - keyed map of ready nodes.
 - `useNodeControls` / `useNodesControls` - refresh, evict, and release without rendering the node.
 - `Preload` - acquire nodes before rendering children.

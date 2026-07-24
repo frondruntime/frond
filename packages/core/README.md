@@ -57,6 +57,20 @@ const read = session.read();
 
 Only ready reads expose the authored node instance. Pending, error, invalid, unavailable, and unwired reads expose lifecycle data, not partial node objects.
 
+For subscriptions outside the React adapter, a handle pairs `subscribe` with `readVersion`: `session.readVersion()` returns the revision of the node's committed state, stable across calls when nothing changed, so it serves as the `getSnapshot` half of a `useSyncExternalStore`-style integration instead of hashing `read()` by hand. The revision stays monotonic across evictions within one runtime: a re-created node continues past its predecessor's revision, so no previously observed version can recur.
+
+## Interop
+
+Node actions are mode-native: an effect-mode node's actions return `Effect`, an async-mode node's actions return `Promise`. `unwrapEffect` and `wrapPromise` cross that boundary in either direction.
+
+```ts
+// Call an effect-mode action from Promise/React code.
+await Frond.unwrapEffect(session.actions.refreshToken({ force: true }));
+
+// Call an async-mode action (or any outside Promise) from an Effect pipeline.
+yield* Frond.wrapPromise(() => profile.actions.rename({ name }));
+```
+
 ## Testing
 
 ```ts
