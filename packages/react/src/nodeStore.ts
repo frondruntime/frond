@@ -7,12 +7,17 @@ import { projectReactNodeRead } from "./nodeReadProjection";
 import { makeRevivableStoreSubscriptions } from "./storeSubscriptions";
 import type { ReactNodeRuntime, ReactNodeSpec, ReactNodeState } from "./types";
 
-interface ReactNodeStore<TArgs, TDeps extends object, TResult, TNode extends object> {
+interface ReactNodeStore<
+  TArgs extends Frond.Key.KeyInput,
+  TDeps extends object,
+  TResult,
+  TNode extends object,
+> {
   readonly subscribe: (listener: () => void) => () => void;
   readonly getVersion: () => number;
   readonly read: () => ReactNodeState<TArgs, TDeps, TResult, TNode>;
   readonly peek: () => Frond.Runtime.RuntimeNodeRead<TResult>;
-  readonly updateArgs: (args: TArgs) => Promise<void>;
+  readonly updateArgs: (args: TArgs, fingerprint?: string | undefined) => Promise<void>;
   readonly dispose: () => void;
 }
 
@@ -23,7 +28,12 @@ type ReadinessAttempt = {
   readonly settled: boolean;
 };
 
-export function makeReactNodeStore<TArgs, TDeps extends object, TResult, TNode extends object>(
+export function makeReactNodeStore<
+  TArgs extends Frond.Key.KeyInput,
+  TDeps extends object,
+  TResult,
+  TNode extends object,
+>(
   runtime: ReactNodeRuntime,
   request: {
     readonly spec: ReactNodeSpec<TArgs, TDeps, TResult, TNode>;
@@ -38,7 +48,7 @@ export function makeReactNodeStore<TArgs, TDeps extends object, TResult, TNode e
   // The store drives read/boot/subscribe/updateArgs, not the typed action
   // surface, so it uses the client through its loose entry.
   const handle = (
-    runtime.client.node as (
+    runtime.client.node as unknown as (
       spec: unknown,
       args: unknown
     ) => Frond.Runtime.RuntimeNodeHandle<TArgs, TResult>
@@ -49,6 +59,7 @@ export function makeReactNodeStore<TArgs, TDeps extends object, TResult, TNode e
       unsubscribe ??= handle.subscribe(() => {
         sync();
       });
+      sync();
     },
     detach: () => {
       unsubscribe?.();
@@ -58,8 +69,11 @@ export function makeReactNodeStore<TArgs, TDeps extends object, TResult, TNode e
   const emit = subscriptions.emit;
   const isDisposed = subscriptions.isDisposed;
 
-  const scheduleReadinessAttempt = (attempt: Promise<unknown>): void => {
-    if (isDisposed()) {
+  const scheduleReadinessAttempt = (
+    attempt: Promise<unknown>,
+    options: { readonly allowDisposed?: boolean | undefined } = {}
+  ): void => {
+    if (isDisposed() && options.allowDisposed !== true) {
       return;
     }
 
@@ -79,7 +93,7 @@ export function makeReactNodeStore<TArgs, TDeps extends object, TResult, TNode e
       settled: false,
     };
     void nextReadiness.finally(() => {
-      if (isDisposed() || scheduledGeneration !== generation) {
+      if (scheduledGeneration !== generation) {
         return;
       }
 
@@ -89,7 +103,10 @@ export function makeReactNodeStore<TArgs, TDeps extends object, TResult, TNode e
             ? { ...readinessAttempt, settled: true }
             : undefined;
       }
-      emit();
+
+      if (!isDisposed()) {
+        emit();
+      }
     });
   };
 
@@ -121,8 +138,8 @@ export function makeReactNodeStore<TArgs, TDeps extends object, TResult, TNode e
    * effect would run after commit, but a cold `useNode()` render needs to throw
    * before commit so the nearest Suspense boundary can own the loading state.
    */
-  const scheduleBoot = (): void => {
-    if (isDisposed()) {
+  const scheduleBoot = (options: { readonly allowDisposed?: boolean | undefined } = {}): void => {
+    if (isDisposed() && options.allowDisposed !== true) {
       return;
     }
 
@@ -130,10 +147,14 @@ export function makeReactNodeStore<TArgs, TDeps extends object, TResult, TNode e
 
     Match.value(read).pipe(
       Match.tag("Pending", ({ attempt }) => {
-        scheduleReadinessAttempt(attempt);
+        scheduleReadinessAttempt(attempt, { allowDisposed: options.allowDisposed });
       }),
       Match.orElse(() => undefined)
     );
+  };
+
+  const scheduleBootForRead = (): void => {
+    scheduleBoot({ allowDisposed: true });
   };
 
   const sync = (): void => {
@@ -204,7 +225,7 @@ export function makeReactNodeStore<TArgs, TDeps extends object, TResult, TNode e
       handle,
       handleRead,
       ensureReady,
-      scheduleBoot,
+      scheduleBoot: scheduleBootForRead,
       scheduleReadinessAttempt,
       currentReadinessPromise,
       markReadinessPresentedByPendingRead,
@@ -286,12 +307,12 @@ export function makeReactNodeStore<TArgs, TDeps extends object, TResult, TNode e
     getVersion: subscriptions.getVersion,
     read,
     peek,
-    updateArgs: async (nextArgs) => {
+    updateArgs: async (nextArgs, precomputedFingerprint) => {
       if (isDisposed()) {
         return;
       }
 
-      const nextArgsFingerprint = getReactArgsFingerprint(nextArgs);
+      const nextArgsFingerprint = precomputedFingerprint ?? getReactArgsFingerprint(nextArgs);
 
       if (nextArgsFingerprint === argsFingerprint) {
         return;
@@ -301,9 +322,24 @@ export function makeReactNodeStore<TArgs, TDeps extends object, TResult, TNode e
 
       argsFingerprint = nextArgsFingerprint;
       const updateGeneration = generation;
-      const result = await handle.updateArgs(nextArgs, ReactRuntimeMetadata.argsUpdate());
+      const rollbackFingerprint = () => {
+        if (argsFingerprint === nextArgsFingerprint) {
+          argsFingerprint = previousArgsFingerprint;
+        }
+      };
 
-      if (isDisposed() || updateGeneration !== generation) {
+      let result: Frond.Graph.UpdateNodeArgsResult;
+      try {
+        result = await handle.updateArgs(nextArgs, ReactRuntimeMetadata.argsUpdate());
+      } catch {
+        rollbackFingerprint();
+
+        if (updateGeneration === generation) {
+          sync();
+        } else {
+          emit();
+        }
+
         return;
       }
 
@@ -311,8 +347,12 @@ export function makeReactNodeStore<TArgs, TDeps extends object, TResult, TNode e
       // updateArgs may have set a newer fingerprint while we were awaiting;
       // clobbering it with our stale `previous` would lose that user intent
       // and force a redundant re-dispatch on the next render.
-      if (result._tag === "Failure" && argsFingerprint === nextArgsFingerprint) {
-        argsFingerprint = previousArgsFingerprint;
+      if (result._tag === "Failure") {
+        rollbackFingerprint();
+      }
+
+      if (updateGeneration !== generation) {
+        return;
       }
 
       sync();

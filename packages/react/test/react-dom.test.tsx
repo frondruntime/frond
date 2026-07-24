@@ -18,17 +18,20 @@ import { createFrondTestHarness, readySpec } from "@frondruntime/core/testing";
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { Deferred, Effect } from "effect";
 import {
+  Activity,
   Component,
   createElement,
   type ErrorInfo,
   type ReactNode,
   StrictMode,
   Suspense,
+  useEffect,
   useState,
 } from "react";
 import {
   FrondProvider,
   getErrorRecovery,
+  getErrorReport,
   Preload,
   useNode,
   useNodeControls,
@@ -37,6 +40,7 @@ import {
   useNodesControls,
 } from "../src";
 import { assertStableKeySet } from "../src/nodeInputMap";
+import { makeReactNodeStore } from "../src/nodeStore";
 import { TestFrondProvider } from "../src/testing";
 
 type Profile = {
@@ -98,6 +102,219 @@ describe("React DOM adapter", () => {
     expect(await view.findByText("override")).toBeTruthy();
   });
 
+  test("TestFrondProvider owned harness survives StrictMode replay and tears down on final unmount", async () => {
+    const stoppedEvents: Array<string | undefined> = [];
+    const sink = {
+      name: "strict-provider-stop-sink",
+      handle: (record) =>
+        Effect.sync(() => {
+          if (record.event._tag === "RuntimeStopped") {
+            stoppedEvents.push(record.event.reason);
+          }
+        }),
+    } satisfies Runtime.RuntimeSink;
+
+    class StrictProviderNode extends NodeBase<StringSpec> {
+      static readonly spec = resourceSpec.effect<StringSpec>({
+        tag: "react-dom/resources/strict-provider",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+      });
+    }
+
+    const CommandView = () => {
+      const controls = useNodeControls(StrictProviderNode, {});
+      const [label, setLabel] = useState("idle");
+
+      return createElement(
+        "button",
+        {
+          type: "button",
+          onClick: () => {
+            void controls.ensureReady().then(
+              () => setLabel("ready"),
+              (cause) => setLabel(cause instanceof Runtime.FrondRuntimeClosed ? "closed" : "failed")
+            );
+          },
+        },
+        label
+      );
+    };
+
+    const view = render(
+      createElement(
+        StrictMode,
+        undefined,
+        createElement(TestFrondProvider, { options: { sinks: [sink] } }, createElement(CommandView))
+      )
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(stoppedEvents).toHaveLength(0);
+
+    fireEvent.click(view.getByText("idle"));
+
+    expect(await view.findByText("ready")).toBeTruthy();
+    expect(stoppedEvents).toHaveLength(0);
+
+    view.unmount();
+
+    await waitFor(() => expect(stoppedEvents).toEqual(["test teardown"]));
+  });
+
+  test("TestFrondProvider final teardown does not depend on a timer", async () => {
+    const stoppedEvents: Array<string | undefined> = [];
+    const sink = {
+      name: "timer-free-provider-stop-sink",
+      handle: (record) =>
+        Effect.sync(() => {
+          if (record.event._tag === "RuntimeStopped") {
+            stoppedEvents.push(record.event.reason);
+          }
+        }),
+    } satisfies Runtime.RuntimeSink;
+    const view = render(
+      createElement(TestFrondProvider, { options: { sinks: [sink] } }, createElement("span"))
+    );
+    const timerSpy = spyOn(globalThis, "setTimeout");
+
+    view.unmount();
+
+    const timerCalls = [...timerSpy.mock.calls];
+    timerSpy.mockRestore();
+    expect(timerCalls).toHaveLength(0);
+    await waitFor(() => expect(stoppedEvents).toEqual(["test teardown"]));
+  });
+
+  test("TestFrondProvider keeps its owned harness while Activity is hidden", async () => {
+    const stoppedEvents: Array<string | undefined> = [];
+    let acquireCount = 0;
+    const sink = {
+      name: "activity-provider-stop-sink",
+      handle: (record) =>
+        Effect.sync(() => {
+          if (record.event._tag === "RuntimeStopped") {
+            stoppedEvents.push(record.event.reason);
+          }
+        }),
+    } satisfies Runtime.RuntimeSink;
+
+    class ActivityProviderNode extends NodeBase<StringSpec> {
+      static readonly spec = resourceSpec.effect<StringSpec>({
+        tag: "react-dom/resources/activity-provider",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        acquire: Driver.Acquire(() =>
+          Effect.sync(() => {
+            acquireCount += 1;
+            return `ready-${acquireCount}`;
+          })
+        ),
+      });
+    }
+
+    const NodeView = () => {
+      const node = useNode(ActivityProviderNode, {});
+      return createElement("output", undefined, node.result);
+    };
+    const Shell = () => {
+      const [mode, setMode] = useState<"visible" | "hidden">("visible");
+      return createElement(
+        "div",
+        undefined,
+        createElement(
+          "button",
+          { type: "button", onClick: () => setMode(mode === "visible" ? "hidden" : "visible") },
+          mode
+        ),
+        createElement(
+          Activity,
+          { mode },
+          createElement(
+            TestFrondProvider,
+            { options: { sinks: [sink] } },
+            createElement(Suspense, { fallback: "loading" }, createElement(NodeView))
+          )
+        )
+      );
+    };
+    const view = render(createElement(Shell));
+
+    expect(await view.findByText("ready-1")).toBeTruthy();
+    fireEvent.click(view.getByText("visible"));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    expect(stoppedEvents).toHaveLength(0);
+
+    fireEvent.click(view.getByText("hidden"));
+    expect(await view.findByText("ready-1")).toBeTruthy();
+    expect(acquireCount).toBe(1);
+
+    view.unmount();
+    await waitFor(() => expect(stoppedEvents).toEqual(["test teardown"]));
+  });
+
+  test("TestFrondProvider keeps owned runtime across equal options object identities", async () => {
+    let acquireCount = 0;
+
+    class StableOptionsProviderNode extends NodeBase<StringSpec> {
+      static readonly spec = resourceSpec.effect<StringSpec>({
+        tag: "react-dom/resources/stable-options-provider",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        acquire: Driver.Acquire(() =>
+          Effect.sync(() => {
+            acquireCount += 1;
+            return `ready-${acquireCount}`;
+          })
+        ),
+      });
+    }
+
+    const ProviderNodeView = ({ tick }: { readonly tick: number }) => {
+      const node = useNode(StableOptionsProviderNode, {});
+
+      return createElement("output", undefined, `${node.result}:${tick}`);
+    };
+
+    const ProviderShell = () => {
+      const [tick, setTick] = useState(0);
+
+      return createElement(
+        TestFrondProvider,
+        { options: { waitTimeoutMs: 500 } },
+        createElement(
+          Suspense,
+          { fallback: createElement("span", undefined, "loading") },
+          createElement(ProviderNodeView, { tick })
+        ),
+        createElement(
+          "button",
+          {
+            type: "button",
+            onClick: () => setTick((current) => current + 1),
+          },
+          "rerender"
+        )
+      );
+    };
+
+    const view = render(createElement(ProviderShell));
+
+    expect(await view.findByText("ready-1:0")).toBeTruthy();
+
+    fireEvent.click(view.getByText("rerender"));
+
+    expect(await view.findByText("ready-1:1")).toBeTruthy();
+    expect(acquireCount).toBe(1);
+  });
+
   test("suspends cold nodes and renders the ready graph-owned node", async () => {
     const gate = await Effect.runPromise(Deferred.make<Profile>());
 
@@ -149,6 +366,125 @@ describe("React DOM adapter", () => {
       runtime.resolveNodeIdSync({ spec: DomProfileNode, args: {} })
     );
     expect(renderedNode?.result).toEqual({ timezone: "UTC" });
+  });
+
+  test("renders a ready node with canonical args larger than the key size cap", async () => {
+    type LargeArgsSpec = NodeSpec<{
+      readonly args: { readonly payload: string };
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: string;
+    }>;
+
+    class LargeArgsNode extends NodeBase<LargeArgsSpec> {
+      static readonly spec = resourceSpec.effect<LargeArgsSpec>({
+        tag: "react-dom/resources/large-args",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.args.payload.length.toString())),
+      });
+    }
+    const View = () => {
+      const node = useNode(LargeArgsNode, { payload: "x".repeat(3_000) });
+      return createElement("output", undefined, node.result);
+    };
+    const runtime = createRuntime();
+    await runtime.submit({ _tag: "RuntimeStart" });
+    const view = render(
+      createElement(
+        FrondProvider,
+        { runtime },
+        createElement(Suspense, { fallback: "loading" }, createElement(View))
+      )
+    );
+
+    expect(await view.findByText("3000")).toBeTruthy();
+    const snapshot = await runtime.getSnapshot();
+    expect(
+      snapshot.graph.nodes.find((node) => node.tag === "react-dom/resources/large-args")?.status
+    ).toEqual({ _tag: "Wired", run: { _tag: "Ready" } });
+  });
+
+  test("inline callback args are rejected before args reconciliation can loop", async () => {
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      type InlineCallbackSpec = ProfileSpec<
+        { readonly id: string },
+        Key.Structure<{ readonly id: string }>
+      >;
+
+      class InlineCallbackNode extends NodeBase<InlineCallbackSpec> {
+        static readonly spec = resourceSpec.effect<InlineCallbackSpec>({
+          tag: "react-dom/resources/inline-callback-args",
+          key: (args) => Key.structure({ id: args.id }),
+          dependencies: dependencies(() => ({})),
+          acquire: Driver.Acquire(() => Effect.succeed({ timezone: "UTC" })),
+        });
+      }
+      let renderCount = 0;
+
+      const ProfileView = () => {
+        const [tick, setTick] = useState(0);
+        renderCount += 1;
+        useEffect(() => {
+          if (tick < 5) {
+            setTick(tick + 1);
+          }
+        }, [tick]);
+
+        const args = {
+          id: "profile",
+          onSelect: () => tick,
+        } as { readonly id: string };
+        useNode(InlineCallbackNode, args);
+
+        return createElement("output", undefined, "ready");
+      };
+
+      const runtime = createRuntime();
+      await runtime.submit({ _tag: "RuntimeStart" });
+
+      const view = render(
+        createElement(
+          FrondProvider,
+          { runtime },
+          createElement(
+            TestErrorBoundary,
+            {
+              fallback: (_reset, error) => {
+                const report = getErrorReport(error);
+
+                return createElement(
+                  "output",
+                  undefined,
+                  `${report.rootTag}:${report.rootMessage}`
+                );
+              },
+            },
+            createElement(
+              Suspense,
+              { fallback: createElement("span", undefined, "loading") },
+              createElement(ProfileView)
+            )
+          )
+        )
+      );
+
+      expect(
+        await view.findByText(
+          "KeyUnsupportedJsonValueError:Invalid key input at $.onSelect: only JSON-shaped values are supported."
+        )
+      ).toBeTruthy();
+      expect(renderCount).toBeLessThan(10);
+
+      const events = (await runtime.query({ _tag: "RuntimeEvents" })).events;
+      expect(
+        events.filter((record) => record.event._tag === "GraphNodeArgsUpdateStarted")
+      ).toHaveLength(0);
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   test("StrictMode cold Suspense boot joins one graph readiness acquire", async () => {
@@ -366,6 +702,59 @@ describe("React DOM adapter", () => {
     });
 
     expect(await view.findByText("active:active:idle")).toBeTruthy();
+  });
+
+  test("subscribe resync delivers non-readiness changes missed while unsubscribed", async () => {
+    let refreshCount = 0;
+
+    class AttachWindowNode extends NodeBase<ProfileSpec> {
+      static readonly spec = resourceSpec.effect<ProfileSpec>({
+        tag: "react-dom/resources/attach-window",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        acquire: Driver.Acquire(() => Effect.succeed({ timezone: "initial" })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            refreshCount += 1;
+            yield* ctx.setResult({ timezone: `fresh-${refreshCount}` });
+          })
+        ),
+      });
+
+      get timezone(): string {
+        return this.result.timezone;
+      }
+    }
+
+    const runtime = createRuntime();
+    await runtime.submit({ _tag: "RuntimeStart" });
+    const handle = runtime.client.node<EmptyArgs, Profile>(AttachWindowNode, {});
+    await handle.ensureReady();
+    const store = makeReactNodeStore(runtime, {
+      spec: AttachWindowNode,
+      args: {},
+      nodeId: runtime.resolveNodeIdSync({ spec: AttachWindowNode, args: {} }),
+    });
+
+    expect(store.read().node.timezone).toBe("initial");
+    const versionBeforeMissedRefresh = store.getVersion();
+
+    await act(async () => {
+      await handle.refresh();
+    });
+
+    expect(store.getVersion()).toBe(versionBeforeMissedRefresh);
+
+    let deliveredTimezone: string | undefined;
+    const unsubscribe = store.subscribe(() => {
+      deliveredTimezone = store.read().node.timezone;
+    });
+
+    expect(deliveredTimezone).toBe("fresh-1");
+    expect(store.getVersion()).toBeGreaterThan(versionBeforeMissedRefresh);
+
+    unsubscribe();
+    store.dispose();
   });
 
   test("useNodeState does not re-dispatch args reconciliation on a no-op re-render", async () => {
@@ -1178,6 +1567,87 @@ describe("React DOM adapter", () => {
     expect(evictResult).toMatchObject({ nodeIds: [expect.any(String)] });
 
     expect(await view.findByText("ready-2")).toBeTruthy();
+  });
+
+  test("Activity reveal after hidden external evict suspends and re-boots instead of erroring", async () => {
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      let acquired = 0;
+
+      class ActivityRevivalNode extends NodeBase<ProfileSpec> {
+        static readonly spec = resourceSpec.effect<ProfileSpec>({
+          tag: "react-dom/resources/activity-revival",
+          key: () => Key.singleton(),
+          dependencies: dependencies(() => ({})),
+          acquire: Driver.Acquire(() =>
+            Effect.sync(() => {
+              acquired += 1;
+              return { timezone: `ready-${acquired}` };
+            })
+          ),
+        });
+
+        get timezone(): string {
+          return this.result.timezone;
+        }
+      }
+
+      const ProfileView = () => {
+        const profile = useNode(ActivityRevivalNode, {});
+
+        return createElement("output", undefined, profile.timezone);
+      };
+
+      const runtime = createRuntime();
+      await runtime.submit({ _tag: "RuntimeStart" });
+      const handle = runtime.client.node<EmptyArgs, Profile>(ActivityRevivalNode, {});
+
+      const App = () => {
+        const [mode, setMode] = useState<"visible" | "hidden">("visible");
+
+        return createElement(
+          "div",
+          undefined,
+          createElement("button", { type: "button", onClick: () => setMode("hidden") }, "hide"),
+          createElement("button", { type: "button", onClick: () => setMode("visible") }, "reveal"),
+          createElement(
+            TestErrorBoundary,
+            { fallback: () => createElement("output", undefined, "boundary-error") },
+            createElement(
+              Activity,
+              { mode },
+              createElement(
+                Suspense,
+                { fallback: createElement("span", undefined, "loading") },
+                createElement(ProfileView)
+              )
+            )
+          )
+        );
+      };
+
+      const view = render(createElement(FrondProvider, { runtime }, createElement(App)));
+
+      expect(await view.findByText("ready-1")).toBeTruthy();
+
+      await act(async () => {
+        fireEvent.click(view.getByText("hide"));
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        await handle.evict();
+      });
+
+      fireEvent.click(view.getByText("reveal"));
+
+      expect(await view.findByText("ready-2")).toBeTruthy();
+      expect(view.queryByText("boundary-error")).toBeNull();
+      expect(acquired).toBe(2);
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   test("controls reconcile same-identity args before imperative refresh", async () => {

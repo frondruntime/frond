@@ -15,6 +15,11 @@ export interface RuntimeSyncClock {
 
 export interface RuntimeSink {
   readonly name: string;
+  /**
+   * Sink delivery is deterministic and inline: runtime submissions await this
+   * Effect before they settle. Keep handlers quick, or fork internal work when
+   * exporting to slow transports.
+   */
   readonly handle: (record: RuntimeEventRecord) => Effect.Effect<void, unknown>;
 }
 

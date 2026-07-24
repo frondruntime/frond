@@ -1,4 +1,3 @@
-import { Match } from "effect";
 import { KeyNonFiniteNumberError, KeyTooLongError, KeyUnsupportedJsonValueError } from "./errors";
 
 export type JsonValue =
@@ -14,89 +13,84 @@ export type KeyInput = JsonValue;
 
 export const MAX_CANONICAL_KEY_LENGTH = 2048;
 
+/**
+ * Canonicalizes a graph key and enforces the bounded identity contract.
+ *
+ * Keys and args share the same JSON-shaped input rules. Only keys are capped
+ * at {@link MAX_CANONICAL_KEY_LENGTH}; use {@link canonicalArgs} for raw args.
+ */
 export function canonicalKey(keyInput: unknown): string {
-  const canonical = `v1:${encodeKeyValue(keyInput, "$")}`;
+  const canonical = canonicalizeKeyInput(keyInput);
 
   assertCanonicalLength(canonical);
 
   return canonical;
 }
 
-type EncodeKeyValue =
-  | { readonly _tag: "Undefined" }
-  | { readonly _tag: "Null" }
-  | { readonly _tag: "String"; readonly value: string }
-  | { readonly _tag: "Boolean"; readonly value: boolean }
-  | { readonly _tag: "Number"; readonly value: number }
-  | { readonly _tag: "Array"; readonly value: ReadonlyArray<unknown> }
-  | { readonly _tag: "Object"; readonly value: { readonly [key: string]: unknown } }
-  | { readonly _tag: "Unsupported" };
+/**
+ * Validates and canonicalizes raw node args without applying the key length cap.
+ *
+ * Args may be arbitrarily large, but must remain JSON-shaped. This can throw
+ * {@link KeyNonFiniteNumberError} or {@link KeyUnsupportedJsonValueError}; it
+ * never throws {@link KeyTooLongError}.
+ */
+export function canonicalArgs(args: unknown): string {
+  return canonicalizeKeyInput(args);
+}
 
-function classifyKeyValue(value: unknown): EncodeKeyValue {
-  return Match.value(value).pipe(
-    Match.when(undefined, () => ({ _tag: "Undefined" }) as const),
-    Match.when(null, () => ({ _tag: "Null" }) as const),
-    Match.when(
-      (candidate: unknown): candidate is string => typeof candidate === "string",
-      (stringValue) => ({ _tag: "String", value: stringValue }) as const
-    ),
-    Match.when(
-      (candidate: unknown): candidate is boolean => typeof candidate === "boolean",
-      (booleanValue) => ({ _tag: "Boolean", value: booleanValue }) as const
-    ),
-    Match.when(
-      (candidate: unknown): candidate is number => typeof candidate === "number",
-      (numberValue) => ({ _tag: "Number", value: numberValue }) as const
-    ),
-    Match.when(
-      (candidate: unknown): candidate is ReadonlyArray<unknown> => Array.isArray(candidate),
-      (arrayValue) => ({ _tag: "Array", value: arrayValue }) as const
-    ),
-    Match.when(isPlainObject, (objectValue) => ({ _tag: "Object", value: objectValue }) as const),
-    Match.orElse(() => ({ _tag: "Unsupported" }) as const)
-  );
+function canonicalizeKeyInput(value: unknown): string {
+  return `v1:${encodeKeyValue(value, "$")}`;
 }
 
 // Single pass: validate and stringify together so each value (and each object's
 // keys) is visited and sorted exactly once. Throws the same typed errors at the
 // same paths as a separate validate-then-stringify pass.
 function encodeKeyValue(value: unknown, path: string): string {
-  return Match.value(classifyKeyValue(value)).pipe(
-    Match.tag("Undefined", () => "undefined"),
-    Match.tag("Null", () => "null"),
-    Match.tag("String", ({ value: stringValue }) => JSON.stringify(stringValue)),
-    Match.tag("Boolean", ({ value: booleanValue }) => (booleanValue ? "true" : "false")),
-    Match.tag("Number", ({ value: numberValue }) => {
-      assertFiniteNumber(numberValue, path);
+  if (value === undefined) {
+    return "undefined";
+  }
 
-      return JSON.stringify(numberValue);
-    }),
-    Match.tag("Array", ({ value: arrayValue }) => encodeArray(arrayValue, path)),
-    Match.tag("Object", ({ value: objectValue }) => encodeObject(objectValue, path)),
-    Match.tag("Unsupported", () => {
-      throw new KeyUnsupportedJsonValueError({
-        _tag: "KeyUnsupportedJsonValueError",
-        message: `Invalid key input at ${path}: only JSON-shaped values are supported.`,
-        path,
-      });
-    }),
-    Match.exhaustive
-  );
+  if (value === null) {
+    return "null";
+  }
+
+  if (typeof value === "string") {
+    return JSON.stringify(value);
+  }
+
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+
+  if (typeof value === "number") {
+    assertFiniteNumber(value, path);
+
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return encodeArray(value, path);
+  }
+
+  if (isPlainObject(value)) {
+    return encodeObject(value, path);
+  }
+
+  throw new KeyUnsupportedJsonValueError({
+    _tag: "KeyUnsupportedJsonValueError",
+    message: `Invalid key input at ${path}: only JSON-shaped values are supported.`,
+    path,
+  });
 }
 
 function isPlainObject(value: unknown): value is { readonly [key: string]: unknown } {
-  return Match.value(value).pipe(
-    Match.when(
-      (candidate: unknown): candidate is object =>
-        typeof candidate === "object" && candidate !== null,
-      (objectValue) => {
-        const prototype = Object.getPrototypeOf(objectValue);
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
 
-        return prototype === Object.prototype || prototype === null;
-      }
-    ),
-    Match.orElse(() => false)
-  );
+  const prototype = Object.getPrototypeOf(value);
+
+  return prototype === Object.prototype || prototype === null;
 }
 
 function assertFiniteNumber(value: number, path: string): void {

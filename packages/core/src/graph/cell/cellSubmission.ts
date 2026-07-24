@@ -1,8 +1,8 @@
 import { Effect, Match, Semaphore } from "effect";
-import type { GraphNodeCell, GraphPlanState } from "../planning/plan";
 import type { NodeId } from "../types";
-import type { GraphCellActor, GraphCellTask } from "./cellActor";
+import type { GraphCellOperation, GraphCellTask } from "./cellActor";
 import { lookupGraphNodeCell } from "./cellLookup";
+import type { GraphNodeCell, GraphPlanState } from "./cellModel";
 
 export type CellSubmission<A> =
   | {
@@ -18,10 +18,13 @@ export function submitToCellActor<A>(
   options: {
     readonly state: GraphPlanState;
     readonly planningSemaphore: ReturnType<typeof Semaphore.makeUnsafe>;
-    readonly getActor: (cell: GraphNodeCell) => Effect.Effect<GraphCellActor>;
+    readonly submit: <A>(
+      cell: GraphNodeCell,
+      operation: GraphCellOperation<A>
+    ) => Effect.Effect<GraphCellTask<A>>;
   },
   nodeId: NodeId,
-  submit: (cell: GraphNodeCell, actor: GraphCellActor) => Effect.Effect<GraphCellTask<A>>
+  operation: (cell: GraphNodeCell) => GraphCellOperation<A>
 ): Effect.Effect<CellSubmission<A>> {
   return Semaphore.withPermit(
     options.planningSemaphore,
@@ -29,8 +32,7 @@ export function submitToCellActor<A>(
       Match.tag("Missing", ({ nodeId }) => Effect.succeed({ _tag: "Missing", nodeId } as const)),
       Match.tag("Found", ({ cell }) =>
         Effect.gen(function* () {
-          const actor = yield* options.getActor(cell);
-          const task = yield* submit(cell, actor);
+          const task = yield* options.submit(cell, operation(cell));
           return { _tag: "Submitted", task } as const;
         })
       ),

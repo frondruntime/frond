@@ -9,6 +9,7 @@ import type {
 } from "../graph/types/operations";
 import type { NodeStatus } from "../graph/types/reads";
 import type { ResultValidity } from "../graph/types/resultValidity";
+import type { KeyInput } from "../keys";
 import type { DependenciesRecord, FrondNode, NodeSpec, NodeSpecClass, ResolvedDeps } from "../node";
 import type {
   Runtime,
@@ -44,7 +45,7 @@ export interface MobXNode<TArgs, TDeps extends DependenciesRecord, TResult, TNod
 }
 
 export type MobXNodeSpec<
-  TArgs,
+  TArgs extends KeyInput,
   TDeps extends DependenciesRecord,
   TResult,
   TNode extends object,
@@ -62,6 +63,10 @@ export interface MobXNodeOptions {
   readonly observeRuntimeEvents?: boolean | undefined;
 }
 
-export type MobXNodeRuntime = Pick<Runtime, "client" | "readNodeSnapshot" | "observe">;
+export type MobXNodeRuntime = Pick<Runtime, "client" | "readNodeSnapshot" | "observe"> & {
+  readonly recordMobXProjectionFailure?:
+    | ((nodeId: NodeId, cause: unknown) => Promise<void>)
+    | undefined;
+};
 
 export type MobXNodeSubscription = RuntimeSubscription;

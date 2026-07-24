@@ -7,10 +7,10 @@ import {
   type EffectInput,
 } from "../driver/authoring";
 import type { Driver, DriverMode } from "../driver/types";
+import type { NodeBase } from "./runtime";
 import type {
   DependenciesRecord,
   DependencyResolver,
-  NodeBase,
   NodeDescriptor,
   NodeKind,
   NodeSpec,
@@ -18,7 +18,6 @@ import type {
   NodeSpecArgs,
   NodeSpecDeclaredDeps,
   NodeSpecKey,
-  NodeSpecLike,
   NodeSpecResolvedDeps,
   NodeSpecResult,
   NodeTag,
@@ -82,7 +81,7 @@ export type AsyncNodeSpecInput<
  */
 export type EffectNodeSpecInput<
   TSpec extends NodeSpec<{ readonly result?: unknown }>,
-  R = never,
+  R extends never = never,
   TActions = EffectActionImplementations<TSpec, R>,
 > = NodeSpecMeta<TSpec> & EffectInput<TSpec, R, TActions>;
 
@@ -102,7 +101,7 @@ export interface NodeSpecFactory {
   ) => NodeDescriptor<TSpec, "async">;
   readonly effect: <
     TSpec extends NodeSpec<{ readonly result?: unknown }>,
-    R = never,
+    R extends never = never,
     TActions = EffectActionImplementations<TSpec, R>,
   >(
     input: EffectNodeSpecInput<TSpec, R, TActions>
@@ -137,7 +136,7 @@ function makeNodeSpecFactory(kind: NodeKind): NodeSpecFactory {
       buildDescriptor<TSpec, "async">(kind, input, Async<TSpec, TActions>(input)),
     effect: <
       TSpec extends NodeSpec<{ readonly result?: unknown }>,
-      R = never,
+      R extends never = never,
       TActions = EffectActionImplementations<TSpec, R>,
     >(
       input: EffectNodeSpecInput<TSpec, R, TActions>
@@ -229,16 +228,6 @@ function buildDescriptor<
   });
 
   return descriptor;
-}
-
-export function assertNodeSpec(value: unknown): asserts value is NodeSpecLike {
-  if (
-    (typeof value !== "function" && typeof value !== "object") ||
-    value === null ||
-    (value as { readonly spec?: unknown }).spec === undefined
-  ) {
-    throw new FrondNodeSpecError("Frond graph node request must use a Frond node spec.");
-  }
 }
 
 export function validateNodeTag(value: unknown): NodeTag {

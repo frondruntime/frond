@@ -21,7 +21,6 @@ import {
 } from "../src/graph";
 import { KeyNonFiniteNumberError } from "../src/keys";
 import { FrondRuntimeReadError, type RuntimeEvent, type RuntimeEventRecord } from "../src/runtime";
-import { RuntimeEvents } from "../src/runtime/events";
 import { Signals } from "../src/signals";
 
 const cycleFirst = 'diagnostics/cycle-first:v1:"singleton"' as NodeId;
@@ -29,6 +28,53 @@ const cycleSecond = 'diagnostics/cycle-second:v1:"singleton"' as NodeId;
 const invalidKeyNode = "diagnostics/invalid-key:__invalid__:nan" as NodeId;
 
 describe("Frond diagnostics report", () => {
+  test("hostile Error fields do not collapse the full report cause chain", () => {
+    class HostileFieldError extends Error {
+      constructor(cause: unknown) {
+        super("hidden", { cause });
+        delete (this as { message?: string | undefined }).message;
+        delete (this as { stack?: string | undefined }).stack;
+      }
+
+      override get name(): string {
+        throw new Error("name getter exploded");
+      }
+
+      override get message(): string {
+        throw new Error("message getter exploded");
+      }
+
+      override get stack(): string {
+        throw new Error("stack getter exploded");
+      }
+    }
+
+    const inner = new TypeError("inner survived");
+    const failure = new AcquireFailed({
+      nodeId: 'diagnostics/request:v1:"singleton"' as NodeId,
+      tag: "diagnostics/request",
+      cause: new HostileFieldError(inner),
+    });
+    const error = new FrondRuntimeReadError({
+      message: "Frond node readiness failed.",
+      nodeId: 'diagnostics/request:v1:"singleton"' as NodeId,
+      kind: "readiness",
+      cause: failure,
+    });
+    const report = createErrorReport(error);
+    const causeChain = report.contexts.causeChain as ReadonlyArray<{
+      readonly tag?: string | undefined;
+      readonly name?: string | undefined;
+      readonly valueKind?: string | undefined;
+      readonly message?: string | undefined;
+    }>;
+
+    expect(causeChain.map((frame) => frame.valueKind)).not.toContain("projection-failure");
+    expect(causeChain.map((frame) => frame.tag ?? frame.name)).toContain("AcquireFailed");
+    expect(causeChain.map((frame) => frame.name)).toContain("TypeError");
+    expect(causeChain.at(-1)?.message).toBe("inner survived");
+  });
+
   test("cycle report uses stable invalid graph message and fingerprint", () => {
     const cycle = new CycleDetected({
       nodeId: cycleFirst,
@@ -143,13 +189,12 @@ describe("Frond diagnostics report", () => {
         }),
       ],
     });
-    const record = makeRuntimeEventRecord(
-      RuntimeEvents.graphNodeReadyEnsured(
-        parentNodeId,
-        { _tag: "Wired", run: { _tag: "Error", error: aggregate } },
-        100
-      )
-    );
+    const record = makeRuntimeEventRecord({
+      _tag: "GraphNodeReadyEnsured",
+      nodeId: parentNodeId,
+      status: { _tag: "Wired", run: { _tag: "Error", error: aggregate } },
+      at: 100,
+    });
     const [report] = createRuntimeEventReports(record);
     const aggregateContext = report?.contexts.dependencyFailures as
       | {
@@ -200,16 +245,17 @@ describe("Frond diagnostics report", () => {
     const error = new Error("Backend returned HTTP 500");
     error.name = "DiagnosticsBackendError";
     const nodeId = 'diagnostics/request:v1:{"id":123}' as NodeId;
-    const runtimeEvent = RuntimeEvents.graphRefreshFailed(
+    const runtimeFailureEvent = {
+      _tag: "GraphRefreshFailed",
       nodeId,
-      new RefreshFailed({
+      error: new RefreshFailed({
         nodeId,
         tag: "diagnostics/request",
         cause: error,
       }),
-      100
-    );
-    const record = makeRuntimeEventRecord(runtimeEvent);
+      at: 100,
+    };
+    const record = makeRuntimeEventRecord(runtimeFailureEvent);
     const [report] = createRuntimeEventReports(record);
 
     expect(report?.message).toBe("Frond operation failed: DiagnosticsBackendError");
@@ -248,21 +294,20 @@ describe("Frond diagnostics report", () => {
 
   test("expired refresh reports group by typed root cause without runtime or node id", () => {
     const nodeId = 'diagnostics/request:v1:{"id":123}' as NodeId;
-    const record = makeRuntimeEventRecord(
-      RuntimeEvents.graphRefreshFailed(
+    const record = makeRuntimeEventRecord({
+      _tag: "GraphRefreshFailed",
+      nodeId,
+      error: new RefreshFailed({
         nodeId,
-        new RefreshFailed({
+        tag: "diagnostics/request",
+        cause: new ResultExpired({
           nodeId,
           tag: "diagnostics/request",
-          cause: new ResultExpired({
-            nodeId,
-            tag: "diagnostics/request",
-            resultValidity: { _tag: "Expired", loadedAt: 100, staleAt: 150, expiredAt: 200 },
-          }),
+          resultValidity: { _tag: "Expired", loadedAt: 100, staleAt: 150, expiredAt: 200 },
         }),
-        100
-      )
-    );
+      }),
+      at: 100,
+    });
     const [report] = createRuntimeEventReports(record);
 
     expect(report?.message).toBe("Frond operation failed: ResultExpired");
@@ -277,7 +322,7 @@ describe("Frond diagnostics report", () => {
   });
 
   test("runtime event reports return empty output for non-failure events", () => {
-    const record = makeRuntimeEventRecord(RuntimeEvents.runtimeStarted(100));
+    const record = makeRuntimeEventRecord({ _tag: "RuntimeStarted", at: 100 });
 
     expect(createRuntimeEventReports(record)).toEqual([]);
   });
@@ -291,17 +336,16 @@ describe("Frond diagnostics report", () => {
       },
     });
     const nodeId = 'diagnostics/request:v1:{"id":123}' as NodeId;
-    const record = makeRuntimeEventRecord(
-      RuntimeEvents.graphRefreshFailed(
+    const record = makeRuntimeEventRecord({
+      _tag: "GraphRefreshFailed",
+      nodeId,
+      error: new RefreshFailed({
         nodeId,
-        new RefreshFailed({
-          nodeId,
-          tag: "diagnostics/request",
-          cause: new Error("Backend returned HTTP 500"),
-        }),
-        100
-      )
-    );
+        tag: "diagnostics/request",
+        cause: new Error("Backend returned HTTP 500"),
+      }),
+      at: 100,
+    });
 
     await Effect.runPromise(sink.handle(record));
 
@@ -320,7 +364,9 @@ describe("Frond diagnostics report", () => {
       },
     });
 
-    await Effect.runPromise(sink.handle(makeRuntimeEventRecord(RuntimeEvents.runtimeStarted(100))));
+    await Effect.runPromise(
+      sink.handle(makeRuntimeEventRecord({ _tag: "RuntimeStarted", at: 100 }))
+    );
 
     expect(reports).toEqual([]);
   });
@@ -333,17 +379,16 @@ describe("Frond diagnostics report", () => {
       },
     });
     const nodeId = 'diagnostics/request:v1:{"id":123}' as NodeId;
-    const record = makeRuntimeEventRecord(
-      RuntimeEvents.graphRefreshFailed(
+    const record = makeRuntimeEventRecord({
+      _tag: "GraphRefreshFailed",
+      nodeId,
+      error: new RefreshFailed({
         nodeId,
-        new RefreshFailed({
-          nodeId,
-          tag: "diagnostics/request",
-          cause: new Error("Backend returned HTTP 500"),
-        }),
-        100
-      )
-    );
+        tag: "diagnostics/request",
+        cause: new Error("Backend returned HTTP 500"),
+      }),
+      at: 100,
+    });
 
     await expect(Effect.runPromise(sink.handle(record))).rejects.toMatchObject({
       _tag: "RuntimeReportSinkHandlerFailed",
@@ -358,14 +403,13 @@ describe("Frond diagnostics report", () => {
       recordedAt: 105,
       signal: Signals.signal({ channel: "app.analytics", name: "button_clicked" }),
     };
-    const record = makeRuntimeEventRecord(
-      RuntimeEvents.runtimeSignalSubscriberFailureObserved(
-        "subscriber",
-        signalRecord,
-        new Error("subscriber failed"),
-        110
-      )
-    );
+    const record = makeRuntimeEventRecord({
+      _tag: "RuntimeSignalSubscriberFailureObserved",
+      subscriber: "subscriber",
+      signal: signalRecord,
+      cause: new Error("subscriber failed"),
+      at: 110,
+    });
     const [report] = createRuntimeEventReports(record);
 
     expect(report?.contexts.runtimeEvent).toMatchObject({
@@ -384,23 +428,22 @@ describe("Frond diagnostics report", () => {
   test("release cleanup report uses operation context, not readiness", () => {
     const nodeId = 'diagnostics/release:v1:"singleton"' as NodeId;
     const root = new TypeError("release died");
-    const record = makeRuntimeEventRecord(
-      RuntimeEvents.graphNodeReleased(
+    const record = makeRuntimeEventRecord({
+      _tag: "GraphNodeReleased",
+      nodeId,
+      reason: "test release",
+      at: 100,
+      failure: new DisposerFailed({
         nodeId,
-        "test release",
-        100,
-        new DisposerFailed({
-          nodeId,
-          tag: "diagnostics/release",
-          cause: new EffectBoundaryFailed({
-            boundary: "driver-release",
-            cause: root,
-            effectCause: root,
-            pretty: "TypeError: release died",
-          }),
-        })
-      )
-    );
+        tag: "diagnostics/release",
+        cause: new EffectBoundaryFailed({
+          boundary: "driver-release",
+          cause: root,
+          effectCause: root,
+          pretty: "TypeError: release died",
+        }),
+      }),
+    });
     const [report] = createRuntimeEventReports(record);
 
     expect(report?.message).toBe("Frond operation failed: TypeError");

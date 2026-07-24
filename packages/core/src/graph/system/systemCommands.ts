@@ -1,8 +1,10 @@
-import { Clock, Effect, Match, Semaphore } from "effect";
+import { Clock, Deferred, Effect, Match, Semaphore } from "effect";
 import type { ActionAdmission } from "../../driver";
 import { canonicalKey } from "../../keys";
-import type { GraphCellActor, GraphCellTask } from "../cell/cellActor";
+import type { GraphCellActorRegistry } from "../cell/actorRegistry";
+import type { GraphCellTask } from "../cell/cellActor";
 import { type GraphNodeCellLookup, lookupGraphNodeCell } from "../cell/cellLookup";
+import type { GraphNodeCell, GraphPlanState } from "../cell/cellModel";
 import {
   ensureReadyOperation,
   refreshOperation,
@@ -19,12 +21,8 @@ import {
   makeMissingNodeUpdateArgsFailure,
   makeMissingUnsafeUpdateNodeFailure,
 } from "../operations/operationFailures";
-import {
-  ensurePlannedNode,
-  type GraphNodeCell,
-  type GraphPlanState,
-  resolveEffectiveNodeId,
-} from "../planning/plan";
+import { resolveEffectiveNodeId } from "../planning/identity";
+import { ensurePlannedNode } from "../planning/plan";
 import {
   type ActionRequest,
   type ActionResult,
@@ -37,6 +35,7 @@ import {
   type UnsafeUpdateNodeRequest,
   type UpdateNodeArgsRequest,
 } from "../types";
+import { registerAdmittedTask } from "./admissionRegistration";
 import type { RefreshAdmissionController } from "./refreshAdmission";
 
 export interface GraphSystemCommands {
@@ -57,9 +56,7 @@ export interface GraphSystemCommands {
 export function makeGraphSystemCommands(options: {
   readonly state: GraphPlanState;
   readonly planningSemaphore: ReturnType<typeof Semaphore.makeUnsafe>;
-  readonly actorRegistry: {
-    readonly getActor: (cell: GraphNodeCell) => Effect.Effect<GraphCellActor>;
-  };
+  readonly actorRegistry: GraphCellActorRegistry;
   readonly graphEnv: GraphOperationEnvironment;
   readonly refreshAdmission: RefreshAdmissionController;
 }): GraphSystemCommands {
@@ -67,8 +64,8 @@ export function makeGraphSystemCommands(options: {
 
   function runAction(request: ActionRequest) {
     return Effect.gen(function* () {
-      const submission = yield* submitToTargetCell(request.target, (cell, actor) =>
-        submitActionWithAdmission(cell, actor, request)
+      const submission = yield* submitToTargetCell(request.target, (cell) =>
+        submitActionWithAdmission(cell, request)
       );
 
       return yield* Match.value(submission).pipe(
@@ -94,7 +91,6 @@ export function makeGraphSystemCommands(options: {
 
   function submitActionWithAdmission(
     cell: GraphNodeCell,
-    actor: GraphCellActor,
     request: ActionRequest
   ): Effect.Effect<GraphCellTask<ActionResult>> {
     return Effect.gen(function* () {
@@ -103,15 +99,17 @@ export function makeGraphSystemCommands(options: {
       if (action._tag === "Missing" || action.admission.policy === "queue") {
         // Queue actions each own their actor task (one awaiter), so awaiter
         // interruption can safely abort the in-flight action.
-        return yield* actor.submit(runActionOperation(options.graphEnv, cell, request), {
-          interruptible: true,
-        });
+        return yield* options.actorRegistry.submit(
+          cell,
+          runActionOperation(options.graphEnv, cell, request),
+          { interruptible: true }
+        );
       }
 
       const admissionKey = readActionAdmissionKey(cell, request, action.admission);
 
       if (admissionKey._tag === "Failure") {
-        return immediateActionTaskWithCompletion(
+        return yield* immediateActionTaskWithCompletion(
           cell,
           request,
           makeActionFailure(cell, request, admissionKey.cause)
@@ -125,7 +123,7 @@ export function makeGraphSystemCommands(options: {
           return active;
         }
 
-        return immediateActionTaskWithCompletion(
+        return yield* immediateActionTaskWithCompletion(
           cell,
           request,
           makeActionFailure(
@@ -144,19 +142,15 @@ export function makeGraphSystemCommands(options: {
       // Reject actions have a single awaiter (concurrent requests are rejected
       // above), so they may be interrupted. Join actions are shared across
       // awaiters and must not be — one joiner leaving cannot abort the rest.
-      const task = yield* actor.submit(runActionOperation(options.graphEnv, cell, request), {
-        interruptible: action.admission.policy === "reject",
+      return yield* registerAdmittedTask({
+        active: activeActionAdmissions,
+        key: admissionKey.key,
+        start: (onComplete) =>
+          options.actorRegistry.submit(cell, runActionOperation(options.graphEnv, cell, request), {
+            onComplete,
+            interruptible: action.admission.policy === "reject",
+          }),
       });
-      const awaitAction = yield* Effect.cached(
-        task.await.pipe(
-          Effect.ensuring(Effect.sync(() => activeActionAdmissions.delete(admissionKey.key)))
-        )
-      );
-      const tracked = {
-        await: awaitAction,
-      };
-      activeActionAdmissions.set(admissionKey.key, tracked);
-      return tracked;
     });
   }
 
@@ -164,20 +158,20 @@ export function makeGraphSystemCommands(options: {
     cell: GraphNodeCell,
     request: ActionRequest,
     result: ActionResult
-  ): GraphCellTask<ActionResult> {
-    return {
-      await: Effect.gen(function* () {
-        const completedAt = yield* Clock.currentTimeMillis;
-        yield* options.graphEnv.state.notifyActionCompleted({
-          nodeId: cell.nodeId,
-          action: request.action,
-          input: request.input,
-          result,
-          completedAt,
-        });
-        return result;
-      }),
-    };
+  ): Effect.Effect<GraphCellTask<ActionResult>> {
+    return Effect.gen(function* () {
+      const reply = yield* Deferred.make<ActionResult>();
+      const completedAt = yield* Clock.currentTimeMillis;
+      yield* options.graphEnv.state.notifyActionCompleted({
+        nodeId: cell.nodeId,
+        action: request.action,
+        input: request.input,
+        result,
+        completedAt,
+      });
+      yield* Deferred.succeed(reply, result).pipe(Effect.asVoid);
+      return { await: Deferred.await(reply) };
+    });
   }
 
   function ensureReadyNode(request: Parameters<GraphSystemService["ensureReadyNode"]>[0]) {
@@ -190,8 +184,10 @@ export function makeGraphSystemCommands(options: {
             Match.tag("Missing", () => Effect.succeed({ _tag: "Missing", handle } as const)),
             Match.tag("Found", ({ cell }) =>
               Effect.gen(function* () {
-                const actor = yield* options.actorRegistry.getActor(cell);
-                const task = yield* actor.submit(ensureReadyOperation(options.graphEnv, cell));
+                const task = yield* options.actorRegistry.submit(
+                  cell,
+                  ensureReadyOperation(options.graphEnv, cell)
+                );
                 return { _tag: "Submitted", task } as const;
               })
             ),
@@ -230,10 +226,9 @@ export function makeGraphSystemCommands(options: {
         return yield* options.refreshAdmission.submit({
           request,
           cellLookup: lookup,
-          start: (cell) =>
-            Effect.gen(function* () {
-              const actor = yield* options.actorRegistry.getActor(cell);
-              return yield* actor.submit(refreshOperation(options.graphEnv, cell, request));
+          start: (cell, onComplete) =>
+            options.actorRegistry.submit(cell, refreshOperation(options.graphEnv, cell, request), {
+              onComplete,
             }),
         });
       })
@@ -264,8 +259,8 @@ export function makeGraphSystemCommands(options: {
             ),
             Match.tag("Found", ({ cell }) =>
               Effect.gen(function* () {
-                const actor = yield* options.actorRegistry.getActor(cell);
-                const task = yield* actor.submit(
+                const task = yield* options.actorRegistry.submit(
+                  cell,
                   updateArgsOperation(options.graphEnv, cell, request)
                 );
                 return { _tag: "Submitted", task } as const;
@@ -298,10 +293,10 @@ export function makeGraphSystemCommands(options: {
         {
           state: options.state,
           planningSemaphore: options.planningSemaphore,
-          getActor: options.actorRegistry.getActor,
+          submit: options.actorRegistry.submit,
         },
         request.nodeId,
-        (cell, actor) => actor.submit(unsafeUpdateNodeOperation(cell, request))
+        (cell) => unsafeUpdateNodeOperation(cell, request)
       );
 
       return yield* Match.value(submission).pipe(
@@ -324,8 +319,10 @@ export function makeGraphSystemCommands(options: {
           ),
           Match.tag("Found", ({ cell }) =>
             Effect.gen(function* () {
-              const actor = yield* options.actorRegistry.getActor(cell);
-              const task = yield* actor.submit(releaseOperation(options.graphEnv, cell, reason));
+              const task = yield* options.actorRegistry.submit(
+                cell,
+                releaseOperation(options.graphEnv, cell, reason)
+              );
               return { _tag: "Submitted", task } as const;
             })
           ),
@@ -343,7 +340,7 @@ export function makeGraphSystemCommands(options: {
 
   function submitToTargetCell<A>(
     target: ActionRequest["target"],
-    submit: (cell: GraphNodeCell, actor: GraphCellActor) => Effect.Effect<GraphCellTask<A>>
+    submit: (cell: GraphNodeCell) => Effect.Effect<GraphCellTask<A>>
   ): Effect.Effect<
     | {
         readonly _tag: "Submitted";
@@ -364,8 +361,7 @@ export function makeGraphSystemCommands(options: {
             ),
             Match.tag("Found", ({ cell }) =>
               Effect.gen(function* () {
-                const actor = yield* options.actorRegistry.getActor(cell);
-                const task = yield* submit(cell, actor);
+                const task = yield* submit(cell);
                 return { _tag: "Submitted", task } as const;
               })
             ),

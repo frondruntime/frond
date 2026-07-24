@@ -1,5 +1,5 @@
-import type { GraphNodeCell, GraphPlanState } from "../planning/plan";
 import type { NodeId } from "../types";
+import type { GraphNodeCell, GraphPlanState } from "./cellModel";
 
 export type GraphNodeCellLookup =
   | {

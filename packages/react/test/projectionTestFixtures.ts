@@ -19,9 +19,7 @@ export function makeInspectionSnapshotForbiddenRuntime(options: RuntimeOptions =
   const runtime = {
     ...source,
     getSnapshotSync: forbiddenSnapshot,
-    getSnapshotSyncFor: forbiddenSnapshot,
     getSnapshot: async () => forbiddenSnapshot(),
-    getSnapshotFor: async () => forbiddenSnapshot(),
   } satisfies RuntimeInstance;
 
   // The client is now Effect-native: bridge the Promise facade back into the

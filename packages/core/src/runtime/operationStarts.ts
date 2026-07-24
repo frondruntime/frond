@@ -6,7 +6,6 @@ import type {
   GraphOperationStarted,
 } from "../graph/types/subscriptions";
 import { FrondRuntimeInvariantViolation } from "./errors";
-import { RuntimeEvents } from "./events";
 import type { RuntimeEvent } from "./types";
 import type { RuntimeWorkContext } from "./work";
 
@@ -177,17 +176,24 @@ const operationStartEvent = {
   action: (started: GraphOperationStarted, pending: PendingRuntimeOperationStart | undefined) => {
     const action = pending?._tag === "Action" ? pending.action : actionStarted(started).action;
     const input = pending?._tag === "Action" ? pending.input : actionStarted(started).input;
-    return RuntimeEvents.graphActionStarted(
-      started.nodeId,
+    return {
+      _tag: "GraphActionStarted",
+      nodeId: started.nodeId,
       action,
       input,
-      started.operation.startedAt
-    );
+      at: started.operation.startedAt,
+    };
   },
-  refresh: (started: GraphOperationStarted) =>
-    RuntimeEvents.graphRefreshStarted(started.nodeId, started.operation.startedAt),
-  args: (started: GraphOperationStarted) =>
-    RuntimeEvents.graphNodeArgsUpdateStarted(started.nodeId, started.operation.startedAt),
+  refresh: (started: GraphOperationStarted) => ({
+    _tag: "GraphRefreshStarted",
+    nodeId: started.nodeId,
+    at: started.operation.startedAt,
+  }),
+  args: (started: GraphOperationStarted) => ({
+    _tag: "GraphNodeArgsUpdateStarted",
+    nodeId: started.nodeId,
+    at: started.operation.startedAt,
+  }),
 } satisfies Record<
   NodeOperationKind,
   (
@@ -226,20 +232,22 @@ function runtimeEventForActionCompletion(
   input: unknown
 ): RuntimeEvent {
   return completed.result._tag === "Success"
-    ? RuntimeEvents.graphActionSucceeded(
-        completed.nodeId,
+    ? {
+        _tag: "GraphActionSucceeded",
+        nodeId: completed.nodeId,
         action,
         input,
-        completed.result.value,
-        completed.completedAt
-      )
-    : RuntimeEvents.graphActionFailed(
-        completed.nodeId,
+        value: completed.result.value,
+        at: completed.completedAt,
+      }
+    : {
+        _tag: "GraphActionFailed",
+        nodeId: completed.nodeId,
         action,
         input,
-        completed.result.error,
-        completed.completedAt
-      );
+        error: completed.result.error,
+        at: completed.completedAt,
+      };
 }
 
 function actionCompletionFailureEventTag(value: unknown): RuntimeEvent["_tag"] {

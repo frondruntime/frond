@@ -3,6 +3,7 @@ import type { NodeId } from "../src/graph";
 import { FrondNodeConstructionUnavailable } from "../src/node";
 import { FrondRuntimeClosed, FrondRuntimeInvariantViolation } from "../src/runtime";
 import type { RuntimeSubmission } from "../src/runtime/types";
+import { createUnsafeRuntimeClient } from "../src/runtime/unsafeClient";
 import { Signals } from "../src/signals";
 import { waitForRuntimeNodeRead } from "../src/testing";
 import {
@@ -18,6 +19,7 @@ import {
   EffectBoundaryFailed,
   GraphInvariantViolation,
   Key,
+  KeyNonFiniteNumberError,
   type MutableProfile,
   NodeBase,
   type NodeSpec,
@@ -49,6 +51,41 @@ function effectHost(runtime: ReturnType<typeof createRuntime>) {
 }
 
 describe("runtime client", () => {
+  test("updateArgs returns canonical args validation failures through its typed result", async () => {
+    type Args = { readonly filter: string };
+    type ArgsSpec = NodeSpec<{
+      readonly args: Args;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: string;
+    }>;
+
+    class ArgsNode extends NodeBase<ArgsSpec> {
+      static readonly spec = serviceSpec.effect<ArgsSpec>({
+        tag: "services/runtime-client-invalid-update-args",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.args.filter)),
+      });
+    }
+    const runtime = createRuntime();
+    const node = runtime.client.node<Args, string>(ArgsNode, { filter: "all" });
+
+    const result = await node.updateArgs({ filter: Number.NaN as unknown as string });
+
+    expect(result).toMatchObject({
+      _tag: "Failure",
+      nodeId: node.nodeId,
+      error: {
+        _tag: "UpdateNodeArgsFailed",
+        cause: { _tag: "KeyNonFiniteNumberError", path: "$.filter" },
+      },
+    });
+    expect(result._tag === "Failure" ? result.error.cause : undefined).toBeInstanceOf(
+      KeyNonFiniteNumberError
+    );
+  });
+
   test("runtime client reports unexpected submission tags with expected tag context", async () => {
     const nodeId = 'resources/action-profile:{"type":"singleton"}' as NodeId;
     const runtime = {
@@ -313,6 +350,11 @@ describe("runtime client", () => {
     const first = await profile.acquireLiveLease("manual", { pair: "BTC/USD" });
     const second = await profile.acquireLiveLease("manual", { pair: "BTC/USD" });
     const third = await profile.acquireLiveLease("mobx", { pair: "ETH/USD" });
+
+    if (first._tag !== "Held" || second._tag !== "Held" || third._tag !== "Held") {
+      throw new Error("Expected live leases to be held.");
+    }
+
     const liveSnapshot = await profile.snapshot();
 
     if (liveSnapshot._tag !== "Found") {
@@ -325,7 +367,7 @@ describe("runtime client", () => {
       scopes: [{ pair: "BTC/USD" }, { pair: "ETH/USD" }],
     });
 
-    await first.dispose();
+    await first.lease.dispose();
     const stillLiveSnapshot = await profile.snapshot();
 
     if (stillLiveSnapshot._tag !== "Found") {
@@ -346,9 +388,9 @@ describe("runtime client", () => {
       snapshot: { ...liveSnapshot.snapshot, revision: 0 },
     });
 
-    await second.dispose();
-    await third.dispose();
-    await third.dispose();
+    await second.lease.dispose();
+    await third.lease.dispose();
+    await third.lease.dispose();
 
     const idleSnapshot = await profile.snapshot();
     const events = (await runtime.query({ _tag: "RuntimeEvents" })).events;
@@ -375,6 +417,62 @@ describe("runtime client", () => {
     ]);
   });
 
+  test("runtime client live lease acquisition reports missing nodes explicitly", async () => {
+    const runtime = createRuntime();
+    const profile = runtime.client.node<Record<string, never>, string>(ProfileNode, {});
+
+    const result = await profile.acquireLiveLease("manual", { pair: "BTC/USD" });
+
+    expect(result).toMatchObject({
+      _tag: "NodeMissing",
+      nodeId: profile.nodeId,
+    });
+  });
+
+  test("runtime client live lease acquisition reports unsupported scopes as failures", async () => {
+    const runtime = createRuntime();
+    const profile = runtime.client.node<Record<string, never>, string>(ProfileNode, {});
+
+    await profile.ensure();
+    const result = await profile.acquireLiveLease("manual", () => "not-json");
+
+    expect(result._tag).toBe("Failure");
+
+    if (result._tag !== "Failure") {
+      throw new Error("Expected unsupported live lease scope to fail.");
+    }
+
+    expect("lease" in result).toBe(false);
+    expect(result.nodeId).toBe(profile.nodeId);
+    expect(result.liveDemand).toEqual({ isLive: false, sources: [], scopes: [] });
+    expect(result.failures[0]).toBeInstanceOf(GraphInvariantViolation);
+    expect(result.failures[0]).toMatchObject({
+      invariant: "live lease scope must be a JSON-shaped key value",
+    });
+
+    const failedSnapshot = await profile.snapshot();
+
+    expect(failedSnapshot).toMatchObject({
+      _tag: "Found",
+      snapshot: { liveDemand: { isLive: false, sources: [], scopes: [] } },
+    });
+
+    const valid = await profile.acquireLiveLease("manual", { pair: "BTC/USD" });
+
+    expect(valid._tag).toBe("Held");
+
+    if (valid._tag !== "Held") {
+      throw new Error("Expected valid live lease scope to be held.");
+    }
+
+    expect(valid.liveDemand).toEqual({
+      isLive: true,
+      sources: ["manual"],
+      scopes: [{ pair: "BTC/USD" }],
+    });
+    await valid.lease.dispose();
+  });
+
   test("runtime client live lease dispose retries after a failed release", async () => {
     const nodeId = 'resources/profile:{"type":"singleton"}' as NodeId;
     let releaseCalls = 0;
@@ -389,9 +487,14 @@ describe("runtime client", () => {
         if (command._tag === "GraphAcquireNodeLiveLease") {
           return Effect.succeed({
             _tag: "GraphNodeLiveLeaseAcquired",
-            nodeId,
-            leaseId: "lease-1" as never,
-            liveDemand: { isLive: true, sources: ["manual"], scopes: [{ pair: "BTC/USD" }] },
+            result: {
+              _tag: "Held",
+              nodeId,
+              leaseId: "lease-1" as never,
+              liveDemand: { isLive: true, sources: ["manual"], scopes: [{ pair: "BTC/USD" }] },
+              changed: true,
+              failures: [],
+            },
           } satisfies RuntimeSubmission);
         }
 
@@ -404,9 +507,14 @@ describe("runtime client", () => {
 
           return Effect.succeed({
             _tag: "GraphNodeLiveLeaseReleased",
-            nodeId,
-            leaseId: "lease-1" as never,
-            liveDemand: { isLive: false, sources: [], scopes: [] },
+            result: {
+              _tag: "Held",
+              nodeId,
+              leaseId: "lease-1" as never,
+              liveDemand: { isLive: false, sources: [], scopes: [] },
+              changed: true,
+              failures: [],
+            },
           } satisfies RuntimeSubmission);
         }
 
@@ -417,7 +525,13 @@ describe("runtime client", () => {
       Record<string, never>,
       string
     >(ProfileNode, {});
-    const lease = await handle.acquireLiveLease("manual", { pair: "BTC/USD" });
+    const result = await handle.acquireLiveLease("manual", { pair: "BTC/USD" });
+
+    if (result._tag !== "Held") {
+      throw new Error("Expected live lease to be held.");
+    }
+
+    const lease = result.lease;
 
     await expect(lease.dispose()).rejects.toBe(releaseFailure);
     await expect(lease.dispose()).resolves.toBeUndefined();
@@ -1200,7 +1314,7 @@ describe("runtime client", () => {
 
   test("__unsafe schedule/update reports Invalid when the underlying node is invalid", async () => {
     type InvalidUnsafeSpec = NodeSpec<{
-      readonly args: { readonly value: number };
+      readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
@@ -1209,17 +1323,15 @@ describe("runtime client", () => {
     class InvalidUnsafeNode extends NodeBase<InvalidUnsafeSpec, "effect"> {
       static readonly spec = serviceSpec.effect<InvalidUnsafeSpec>({
         tag: "services/runtime-client-unsafe-invalid",
-        key: (args) => ({ value: args.value }) as never,
+        key: () => ({ value: Number.NaN }) as never,
         dependencies: dependencies(() => ({})),
         acquire: Driver.Acquire(() => Effect.succeed("ready")),
       });
     }
 
     const runtime = createRuntime();
-    // NaN cannot be a canonical key, so the node lands in Invalid status.
-    const handle = runtime.client.node<{ readonly value: number }, string>(InvalidUnsafeNode, {
-      value: Number.NaN,
-    });
+    // The args are canonical, but the key builder returns NaN, so the node lands in Invalid status.
+    const handle = runtime.client.node<Record<string, never>, string>(InvalidUnsafeNode, {});
 
     await handle.ensure();
 
@@ -1230,5 +1342,39 @@ describe("runtime client", () => {
     expect(ensureReadyResult).toMatchObject({ _tag: "Invalid", nodeId: handle.nodeId });
     expect(refreshResult).toMatchObject({ _tag: "Invalid", nodeId: handle.nodeId });
     expect(updateResult).toMatchObject({ _tag: "Invalid", nodeId: handle.nodeId });
+  });
+
+  test("__unsafe reports fire-and-forget submit failures", async () => {
+    const nodeId = 'services/unsafe-submit-failure:v1:"singleton"' as NodeId;
+    const failure = new FrondRuntimeClosed({ operation: "GraphRefreshNode" });
+    const failures: Array<{ readonly command: string; readonly cause: unknown }> = [];
+    const unsafe = createUnsafeRuntimeClient(
+      {
+        getStatusSync: () => "running",
+        readNodeSnapshotSync: () =>
+          ({
+            _tag: "Found",
+            snapshot: {
+              _tag: "Ready",
+              node: {},
+              result: "ready",
+              resultValidity: { _tag: "Current" },
+              operation: { _tag: "Idle" },
+              operationFailure: undefined,
+            },
+          }) as never,
+        submit: () => Effect.fail(failure),
+        recordUnsafeScheduleFailure: (command, cause) => {
+          failures.push({ command: command._tag, cause });
+        },
+      } as never,
+      bridgeRunner
+    );
+
+    expect(unsafe.refresh(nodeId)).toEqual({ _tag: "Scheduled", nodeId });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(failures).toEqual([{ command: "GraphRefreshNode", cause: failure }]);
   });
 });

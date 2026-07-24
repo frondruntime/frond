@@ -1,249 +1,47 @@
-import { Effect, Match } from "effect";
-import type { Dependency } from "../../node";
+import { Effect } from "effect";
 import { lookupGraphNodeCell } from "../cell/cellLookup";
+import type { GraphNodeCell, GraphNodeState, GraphPlanState } from "../cell/cellModel";
 import {
   type CellBase,
-  type CellPhase,
-  type CellPhaseProjection,
   idleCell,
   invalidCell,
   phaseReadyData,
   projectCellPhase,
 } from "../cell/cellPhase";
-import {
-  type GraphCellState,
-  type GraphCellStateReader,
-  makeGraphCellState,
-} from "../cell/cellState";
+import { makeGraphCellState } from "../cell/cellState";
 import { markInvalidState } from "../cell/cellTransitions";
 import { teardownReadyData } from "../lifecycle/cleanup";
+import { toNodeRead, unwiredNodeRead } from "../projection";
 import { normalizeResultValidityPolicy, staticResultValidityPolicy } from "../resultValidity";
 import {
-  type ActionResult,
   CycleDetected,
-  DependencyDefinitionFailed,
-  DependencyDefinitionFailures,
-  type DriverOperationTimeouts,
   DuplicateNodeTag,
-  type EdgeSnapshot,
-  type GraphActionCompletionObserver,
-  type GraphCleanupFailureObserver,
-  GraphInvariantViolation,
-  type GraphLiveFailureObserver,
-  type GraphNodeChangeObserver,
-  type GraphOperationStartObserver,
-  type GraphResultValidityObserver,
-  KeyBuildFailed,
   type NodeId,
   type NodeKey,
-  type NodeLiveDemandSnapshot,
-  type NodeLiveLeaseId,
   type NodeRead,
   type NodeRequest,
-  type NodeSnapshot,
   type NormalizedResultValidityPolicy,
-  type ObservedResultLease,
 } from "../types";
-import { canonicalKey } from "./canonicalKey";
-import { getNodeDescriptor, isFrondNodeSpec, type NodeDescriptor } from "./descriptor";
-import { makeNodeId } from "./identity";
+import {
+  checkReplannedDependencies,
+  planDependencyRequests,
+  sameDependencyIds,
+} from "./dependencyDefinitions";
+import type { NodeDescriptor } from "./descriptor";
+import {
+  type KeyResolutionFailure,
+  type ResolvedNodeIdentity,
+  resolveNodeIdentity,
+} from "./identity";
 import { type GraphOutcome, graphFailure, graphSuccess } from "./outcome";
-import { applySpecOverride } from "./specOverrides";
 
 const EDGE_KEY_SEPARATOR = "\u0000";
-
-export interface GraphPlanState {
-  readonly nodes: Map<NodeId, GraphNodeCell>;
-  readonly edges: Map<string, EdgeSnapshot>;
-  readonly specByTag: Map<string, unknown>;
-  readonly specOverrides: ReadonlyMap<unknown, unknown>;
-  readonly driverTimeouts: DriverOperationTimeouts;
-  readonly nextLiveLeaseId: () => NodeLiveLeaseId;
-  readonly executeNodeAction: (
-    nodeId: NodeId,
-    action: string,
-    input: unknown
-  ) => Effect.Effect<ActionResult>;
-  readonly notifyNodeChanged: GraphNodeChangeObserver;
-  readonly notifyOperationStarted: GraphOperationStartObserver;
-  readonly notifyActionCompleted: GraphActionCompletionObserver;
-  readonly notifyResultValidityChanged: GraphResultValidityObserver;
-  readonly notifyLiveDemandChanged: (
-    nodeId: NodeId,
-    liveDemand: NodeLiveDemandSnapshot
-  ) => Effect.Effect<void>;
-  readonly notifyLiveFailures: GraphLiveFailureObserver;
-  readonly notifyCleanupFailures: GraphCleanupFailureObserver;
-  readonly reportResultObserved: (
-    nodeId: NodeId,
-    scope: unknown,
-    observed: boolean,
-    lease: ObservedResultLease
-  ) => Promise<ObservedResultLease>;
-}
-
-export interface GraphNodeCellView {
-  readonly nodeId: NodeId;
-  readonly tag: string;
-  readonly kind: string;
-  readonly key: NodeSnapshot["key"];
-  readonly label: string;
-  readonly descriptor: NodeDescriptor;
-  readonly resultValidityPolicy: NormalizedResultValidityPolicy;
-  readonly dependencies: Readonly<Record<string, NodeId>>;
-  readonly state: GraphCellStateReader<GraphNodeState>;
-}
-
-export interface GraphNodeCell extends GraphNodeCellView {
-  readonly request: NodeRequest;
-  readonly originalRequest: NodeRequest;
-  readonly state: GraphCellState<GraphNodeState>;
-  readonly notifyChanged: GraphNodeChangeObserver;
-  readonly notifyOperationStarted: GraphOperationStartObserver;
-  readonly notifyActionCompleted: GraphActionCompletionObserver;
-  readonly notifyResultValidityChanged: GraphResultValidityObserver;
-}
-
-export interface GraphNodeState {
-  readonly nextOperationId: number;
-  readonly nextAttemptId: number;
-  readonly nextLiveGeneration: number;
-  readonly phase: CellPhase;
-}
 
 export function ensurePlannedNode(
   state: GraphPlanState,
   request: NodeRequest
 ): Effect.Effect<NodeRead> {
   return planNode(state, request, []);
-}
-
-export function resolveNodeId(request: NodeRequest): NodeId {
-  const descriptor = getNodeDescriptor(request.spec);
-  const keyResult = resolveKey(descriptor, request);
-  const key = keyResult._tag === "Success" ? keyResult.value : keyResult.failure.key;
-
-  return makeNodeId(descriptor.tag, key);
-}
-
-export function resolveEffectiveNodeId(state: GraphPlanState, request: NodeRequest): NodeId {
-  return resolveNodeId(applySpecOverride(state.specOverrides, request));
-}
-
-function handleOf(cell: GraphNodeCell): Effect.Effect<NodeRead> {
-  return Effect.gen(function* () {
-    const state = yield* cell.state.get;
-    const projection = projectCellPhase(state.phase);
-
-    return Match.value(projection).pipe(
-      Match.tag("Removed", () => unwiredNodeRead(cell.nodeId)),
-      Match.tag(
-        "Idle",
-        (projected) =>
-          ({
-            _tag: "Idle",
-            ...nodeReadFields(cell, projected),
-          }) satisfies NodeRead
-      ),
-      Match.tag(
-        "Pending",
-        (projected) =>
-          ({
-            _tag: "Pending",
-            ...nodeReadFields(cell, projected),
-          }) satisfies NodeRead
-      ),
-      Match.tag(
-        "Ready",
-        (projected) =>
-          ({
-            _tag: "Ready",
-            ...nodeReadFields(cell, projected),
-            node: projected.node,
-          }) satisfies NodeRead
-      ),
-      Match.tag(
-        "ReadinessError",
-        (projected) =>
-          ({
-            _tag: "Error",
-            ...nodeReadFields(cell, projected),
-            error: projectedFailureValue(projected.failure),
-          }) satisfies NodeRead
-      ),
-      Match.tag(
-        "Releasing",
-        (projected) =>
-          ({
-            _tag: "Idle",
-            ...nodeReadFields(cell, projected),
-          }) satisfies NodeRead
-      ),
-      Match.tag(
-        "Invalid",
-        (projected) =>
-          ({
-            _tag: "Invalid",
-            nodeId: cell.nodeId,
-            tag: cell.tag,
-            status: projected.status,
-            nodeLookup: projected.nodeLookup,
-            error: projectedFailureValue(projected.failure),
-            resultValidity: projected.resultValidity,
-          }) satisfies NodeRead
-      ),
-      Match.exhaustive
-    );
-  });
-}
-
-function nodeReadFields(
-  cell: GraphNodeCell,
-  projection: Exclude<CellPhaseProjection, { readonly _tag: "Invalid" | "Removed" }>
-) {
-  return {
-    nodeId: cell.nodeId,
-    tag: cell.tag,
-    status: projection.status,
-    resultValidity: projection.resultValidity,
-  } as const;
-}
-
-function unwiredNodeRead(nodeId: NodeId): NodeRead {
-  return {
-    _tag: "Unwired",
-    nodeId,
-    status: { _tag: "Unwired" },
-  };
-}
-
-function projectedFailureValue(
-  failure: Extract<ReturnType<typeof projectCellPhase>, { readonly _tag: "Invalid" }>["failure"]
-): unknown {
-  return failure._tag === "Present" ? failure.failure : undefined;
-}
-
-interface ResolvedNodeIdentity {
-  readonly request: NodeRequest;
-  readonly descriptor: NodeDescriptor;
-  readonly key: NodeKey;
-  readonly nodeId: NodeId;
-  readonly keyResult: GraphOutcome<NodeKey, KeyResolutionFailure>;
-  readonly duplicateTag: boolean;
-}
-
-function resolveNodeIdentity(
-  state: GraphPlanState,
-  originalRequest: NodeRequest
-): ResolvedNodeIdentity {
-  const request = applySpecOverride(state.specOverrides, originalRequest);
-  const descriptor = getNodeDescriptor(request.spec);
-  const keyResult = resolveKey(descriptor, request);
-  const key = keyResult._tag === "Success" ? keyResult.value : keyResult.failure.key;
-  const nodeId = makeNodeId(descriptor.tag, key);
-  const duplicateTag = duplicateTagSpec(state, descriptor.tag, request.spec);
-
-  return { request, descriptor, key, nodeId, keyResult, duplicateTag };
 }
 
 function materializeCellIfFresh(
@@ -326,7 +124,7 @@ function planNode(
               tag: descriptor.tag,
             });
       yield* markCellInvalid(state, existing.cell, failure);
-      return yield* handleOf(existing.cell);
+      return yield* toNodeRead(existing.cell);
     }
 
     if (existing._tag === "Missing") {
@@ -343,7 +141,7 @@ function planNode(
     const currentProjection = projectCellPhase(currentState.phase);
 
     if (currentProjection._tag !== "Removed" && currentProjection.status._tag === "Invalid") {
-      return yield* handleOf(currentCell.cell);
+      return yield* toNodeRead(currentCell.cell);
     }
 
     if (visiting.includes(nodeId)) {
@@ -351,7 +149,7 @@ function planNode(
       // whole cycle invalid so no member later tries to acquire from partial deps.
       const path = [...visiting.slice(visiting.indexOf(nodeId)), nodeId];
       yield* markCycleInvalid(state, path);
-      return yield* handleOf(currentCell.cell);
+      return yield* toNodeRead(currentCell.cell);
     }
 
     // Contract: an existing identity keeps its original args, so a re-plan whose
@@ -363,7 +161,7 @@ function planNode(
 
       if (dependencyCheck._tag === "Mismatch") {
         yield* markCellInvalid(state, currentCell.cell, dependencyCheck.failure);
-        return yield* handleOf(currentCell.cell);
+        return yield* toNodeRead(currentCell.cell);
       }
     }
 
@@ -393,7 +191,7 @@ function wirePlannedDependencies(
 
     if (plannedDependencies._tag === "Failure") {
       yield* markCellInvalid(state, currentCell, plannedDependencies.failure);
-      return yield* handleOf(currentCell);
+      return yield* toNodeRead(currentCell);
     }
 
     recordCellDependencies(state, nodeId, plannedDependencies.value);
@@ -402,7 +200,7 @@ function wirePlannedDependencies(
 
     return plannedCell._tag === "Missing"
       ? unwiredNodeRead(nodeId)
-      : yield* handleOf(plannedCell.cell);
+      : yield* toNodeRead(plannedCell.cell);
   });
 }
 
@@ -412,21 +210,9 @@ function planDependencies(input: {
   readonly request: NodeRequest;
   readonly nodeId: NodeId;
   readonly visiting: ReadonlyArray<NodeId>;
-}): Effect.Effect<
-  GraphOutcome<Record<string, NodeId>, DependencyDefinitionFailed | DependencyDefinitionFailures>
-> {
+}) {
   return Effect.gen(function* () {
-    const dependencies = dependenciesResult(input.descriptor, input.request, input.nodeId);
-
-    if (dependencies._tag === "Failure") {
-      return graphFailure(dependencies.failure);
-    }
-
-    const dependencyRequests = dependencyRequestsFor(
-      input.nodeId,
-      input.descriptor.tag,
-      dependencies.value
-    );
+    const dependencyRequests = planDependencyRequests(input);
 
     if (dependencyRequests._tag === "Failure") {
       return graphFailure(dependencyRequests.failure);
@@ -448,95 +234,6 @@ function planDependencies(input: {
 
     return graphSuccess(dependencyIds);
   });
-}
-
-function dependencyRequestsFor(
-  nodeId: NodeId,
-  tag: string,
-  dependencies: Record<string, Dependency<unknown>>
-): GraphOutcome<
-  ReadonlyArray<{
-    readonly name: string;
-    readonly request: NodeRequest;
-  }>,
-  DependencyDefinitionFailed | DependencyDefinitionFailures
-> {
-  const results = Object.entries(dependencies).map(([dependencyName, dependency]) => ({
-    dependencyName,
-    result: dependencyRequestResult(dependency, {
-      nodeId,
-      tag,
-      dependency: dependencyName,
-    }),
-  }));
-  const failures = results.flatMap(({ result }) =>
-    result._tag === "Failure" ? [result.failure] : []
-  );
-  const failure = dependencyDefinitionFailuresFor(nodeId, tag, failures);
-
-  if (failure !== undefined) {
-    return graphFailure(failure);
-  }
-
-  return graphSuccess(
-    results.flatMap(({ dependencyName, result }) =>
-      result._tag === "Success" ? [{ name: dependencyName, request: result.value }] : []
-    )
-  );
-}
-
-type ReplanDependencyCheck =
-  | { readonly _tag: "Proceed" }
-  | { readonly _tag: "Mismatch"; readonly failure: GraphInvariantViolation };
-
-function checkReplannedDependencies(
-  state: GraphPlanState,
-  cell: GraphNodeCell,
-  request: NodeRequest
-): ReplanDependencyCheck {
-  // Mirror of validateStaticDependencies in operations/argsOperation: compute
-  // the dependency ids the new request would wire without planning them.
-  // Malformed dependency records proceed so wiring reports its own structured
-  // definition failures instead of a misleading mismatch.
-  try {
-    const dependencies = cell.descriptor.dependencies(request.args);
-
-    if (!isDependencyRecord(dependencies)) {
-      return { _tag: "Proceed" };
-    }
-
-    const dependencyIds: Record<string, NodeId> = {};
-
-    for (const [dependencyName, dependency] of Object.entries(dependencies)) {
-      if (dependency.type !== "dependency" || !isFrondNodeSpec(dependency.spec)) {
-        return { _tag: "Proceed" };
-      }
-
-      dependencyIds[dependencyName] = resolveEffectiveNodeId(state, {
-        spec: dependency.spec,
-        args: dependency.args,
-      });
-    }
-
-    if (sameDependencyIds(cell.dependencies, dependencyIds)) {
-      return { _tag: "Proceed" };
-    }
-
-    return {
-      _tag: "Mismatch",
-      failure: new GraphInvariantViolation({
-        nodeId: cell.nodeId,
-        tag: cell.tag,
-        invariant: "same-identity re-plan cannot change static dependencies",
-        cause: {
-          currentDependencies: cell.dependencies,
-          nextDependencies: dependencyIds,
-        },
-      }),
-    };
-  } catch {
-    return { _tag: "Proceed" };
-  }
 }
 
 function recordDependencyEdge(
@@ -583,26 +280,6 @@ function recordCellDependencies(
   state.nodes.set(nodeId, { ...latestCell.cell, dependencies: dependencyIds });
 }
 
-export function sameDependencyIds(
-  left: Readonly<Record<string, NodeId>>,
-  right: Readonly<Record<string, NodeId>>
-): boolean {
-  const leftKeys = Object.keys(left);
-  const rightKeys = Object.keys(right);
-
-  if (leftKeys.length !== rightKeys.length) {
-    return false;
-  }
-
-  for (const key of leftKeys) {
-    if (!Object.hasOwn(right, key) || left[key] !== right[key]) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
 function resultValidityPolicyForDescriptor(
   descriptor: NodeDescriptor,
   context: {
@@ -616,11 +293,6 @@ function resultValidityPolicyForDescriptor(
     return graphFailure(failure);
   }
 }
-
-type KeyResolutionFailure = {
-  readonly key: NodeKey;
-  readonly failure: KeyBuildFailed;
-};
 
 function initialPlanningOutcome(input: {
   readonly keyResult: GraphOutcome<NodeKey, KeyResolutionFailure>;
@@ -662,163 +334,8 @@ function baseForInvalidPlan(args: unknown): CellBase {
   };
 }
 
-function resolveKey(
-  descriptor: NodeDescriptor,
-  request: NodeRequest
-): GraphOutcome<NodeKey, KeyResolutionFailure> {
-  try {
-    return graphSuccess(canonicalKey(descriptor.key(request.args)));
-  } catch (cause) {
-    const key = invalidKey(cause);
-    const nodeId = makeNodeId(descriptor.tag, key);
-
-    return graphFailure({
-      key,
-      failure: new KeyBuildFailed({
-        nodeId,
-        tag: descriptor.tag,
-        cause,
-      }),
-    });
-  }
-}
-
-function invalidKey(cause: unknown): NodeKey {
-  return `__invalid__:${safeFailureLabel(cause)}` as NodeKey;
-}
-
-function safeFailureLabel(cause: unknown): string {
-  const text = cause instanceof Error ? `${cause.name}:${cause.message}` : String(cause);
-
-  return text.replaceAll(/[^a-zA-Z0-9_.:-]+/g, "_").slice(0, 180);
-}
-
-function duplicateTagSpec(state: GraphPlanState, tag: string, spec: unknown): boolean {
-  const existing = state.specByTag.get(tag);
-
-  return existing !== undefined && existing !== spec;
-}
-
-function dependenciesResult(
-  descriptor: NodeDescriptor,
-  request: NodeRequest,
-  nodeId: NodeId
-): GraphOutcome<Record<string, Dependency<unknown>>, DependencyDefinitionFailed> {
-  try {
-    const dependencies = descriptor.dependencies(request.args);
-
-    if (!isDependencyRecord(dependencies)) {
-      return graphFailure(
-        new DependencyDefinitionFailed({
-          nodeId,
-          tag: descriptor.tag,
-          cause: new GraphInvariantViolation({
-            nodeId,
-            tag: descriptor.tag,
-            invariant: "dependencies must return an object record",
-            cause: { dependencies },
-          }),
-        })
-      );
-    }
-
-    return graphSuccess(dependencies);
-  } catch (cause) {
-    return graphFailure(
-      new DependencyDefinitionFailed({
-        nodeId,
-        tag: descriptor.tag,
-        cause,
-      })
-    );
-  }
-}
-
-function dependencyRequestResult(
-  dependency: Dependency<unknown>,
-  context: {
-    readonly nodeId: NodeId;
-    readonly tag: string;
-    readonly dependency: string;
-  }
-): GraphOutcome<NodeRequest, DependencyDefinitionFailed> {
-  try {
-    if (dependency.type !== "dependency") {
-      return graphFailure(
-        new DependencyDefinitionFailed({
-          nodeId: context.nodeId,
-          tag: context.tag,
-          dependency: context.dependency,
-          cause: new GraphInvariantViolation({
-            nodeId: context.nodeId,
-            tag: context.tag,
-            invariant: "dependency record entry must be a dependency",
-            cause: { dependency: context.dependency },
-          }),
-        })
-      );
-    }
-
-    const request = {
-      spec: dependency.spec,
-      args: dependency.args,
-    };
-
-    if (!isFrondNodeSpec(request.spec)) {
-      return graphFailure(
-        new DependencyDefinitionFailed({
-          nodeId: context.nodeId,
-          tag: context.tag,
-          dependency: context.dependency,
-          cause: new GraphInvariantViolation({
-            nodeId: context.nodeId,
-            tag: context.tag,
-            invariant: "dependency node spec must be a Frond node spec",
-            cause: { dependency: context.dependency },
-          }),
-        })
-      );
-    }
-
-    return graphSuccess(request);
-  } catch (cause) {
-    return graphFailure(
-      new DependencyDefinitionFailed({
-        nodeId: context.nodeId,
-        tag: context.tag,
-        dependency: context.dependency,
-        cause,
-      })
-    );
-  }
-}
-
-function dependencyDefinitionFailuresFor(
-  nodeId: NodeId,
-  tag: string,
-  failures: ReadonlyArray<DependencyDefinitionFailed>
-): DependencyDefinitionFailed | DependencyDefinitionFailures | undefined {
-  if (failures.length === 0) {
-    return undefined;
-  }
-
-  if (failures.length === 1) {
-    return failures[0];
-  }
-
-  return new DependencyDefinitionFailures({
-    nodeId,
-    tag,
-    failures: failures as readonly [DependencyDefinitionFailed, ...DependencyDefinitionFailed[]],
-  });
-}
-
 function makeEdgeKey(from: NodeId, dependency: string): string {
   return [from, dependency].join(EDGE_KEY_SEPARATOR);
-}
-
-function isDependencyRecord(value: unknown): value is Record<string, Dependency<unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function markCycleInvalid(state: GraphPlanState, path: ReadonlyArray<NodeId>): Effect.Effect<void> {
@@ -850,12 +367,53 @@ function markCellInvalid(
   failure: unknown
 ): Effect.Effect<void> {
   return Effect.gen(function* () {
-    const latest = yield* cell.state.get;
-    const ready = phaseReadyData(latest.phase);
+    const actor =
+      state.cellActors === undefined
+        ? undefined
+        : yield* state.cellActors.getExistingActor(cell.nodeId);
 
-    // Contract: invalidating a ready cell discards its ready generation, so it
-    // must run the full teardown (live stop, driver release, disposers) before
-    // the Invalid transition makes the ready data unreachable.
+    if (actor !== undefined) {
+      yield* actor.close({
+        _tag: "Released",
+        detail: "graph cell invalidated",
+      });
+      const deleteActor = state.cellActors?.deleteActor(cell.nodeId, actor) ?? Effect.void;
+      const ready = yield* actor.runExclusive(markInvalidCellState(cell, failure));
+      yield* actor
+        .runExclusiveFork(
+          teardownInvalidatedReadyData(state, cell, ready).pipe(Effect.ensuring(deleteActor))
+        )
+        .pipe(Effect.asVoid);
+      return;
+    }
+
+    const ready = yield* markInvalidCellState(cell, failure);
+    yield* teardownInvalidatedReadyData(state, cell, ready);
+  });
+}
+
+function markInvalidCellState(
+  cell: GraphNodeCell,
+  failure: unknown
+): Effect.Effect<ReturnType<typeof phaseReadyData>> {
+  return Effect.gen(function* () {
+    let ready = phaseReadyData((yield* cell.state.get).phase);
+    yield* cell.state.transition((latest) => {
+      ready = phaseReadyData(latest.phase);
+      return [undefined, markInvalidState({ latest, failure })];
+    });
+    return ready;
+  });
+}
+
+function teardownInvalidatedReadyData(
+  state: GraphPlanState,
+  cell: GraphNodeCell,
+  ready: ReturnType<typeof phaseReadyData>
+): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    // Contract: invalidating a ready cell commits Invalid first, but it still
+    // owns teardown of the captured ready generation.
     if (ready._tag === "Found") {
       const cleanupFailures = yield* teardownReadyData(
         cell,
@@ -868,7 +426,5 @@ function markCellInvalid(
         yield* state.notifyCleanupFailures(cell.nodeId, "invalidate", cleanupFailures);
       }
     }
-
-    yield* cell.state.transition((latest) => [undefined, markInvalidState({ latest, failure })]);
   });
 }

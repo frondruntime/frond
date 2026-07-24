@@ -53,7 +53,6 @@ export function applySpecOverride(
 }
 
 function resolveSpecOverride(overrides: ReadonlyMap<unknown, unknown>, spec: unknown): unknown {
-  const visited = new Set<unknown>();
   let current = spec;
 
   while (true) {
@@ -63,14 +62,6 @@ function resolveSpecOverride(overrides: ReadonlyMap<unknown, unknown>, spec: unk
       return current;
     }
 
-    if (visited.has(current)) {
-      throw new SpecOverrideFailed({
-        reason: "cycle",
-        cause: { invariant: "spec overrides must not contain cycles" },
-      });
-    }
-
-    visited.add(current);
     current = next;
   }
 }

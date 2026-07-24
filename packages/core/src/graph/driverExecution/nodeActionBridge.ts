@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import type { RuntimeActionEffectExecutor, RuntimeActionExecutor } from "../../node";
+import type { RuntimeActionEffectExecutor, RuntimeActionExecutor } from "../../node/runtime";
 import type { ActionResult, NodeId } from "../types";
 
 export type NodeActionRunner = (

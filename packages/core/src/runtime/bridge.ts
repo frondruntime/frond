@@ -12,7 +12,6 @@ import type {
   RuntimeQuery,
   RuntimeSignal,
   RuntimeSignalSubscriber,
-  RuntimeSnapshotPurpose,
   RuntimeWorkMetadata,
 } from "./types";
 
@@ -53,13 +52,16 @@ export function bridgeRuntimeHost(
     ingest: (input: RuntimeInput) => runner.run(host.ingest(input)),
     publish: (signal: RuntimeSignal, metadata?: RuntimeWorkMetadata | undefined) =>
       runner.run(host.publish(signal, metadata)),
+    recordUnsafeScheduleFailure: (command: RuntimeCommand, cause: unknown) =>
+      runner.run(host.recordUnsafeScheduleFailure(command, cause)),
+    recordMobXProjectionFailure: (
+      nodeId: Parameters<RuntimeHostService["recordMobXProjectionFailure"]>[0],
+      cause: unknown
+    ) => runner.run(host.recordMobXProjectionFailure(nodeId, cause)),
     subscribeSignals: (subscriber: RuntimeSignalSubscriber) =>
       runner.run(host.subscribeSignals(subscriber)),
     getSnapshotSync: () => runner.runSync(host.getSnapshot()),
-    getSnapshotSyncFor: (purpose: RuntimeSnapshotPurpose) =>
-      runner.runSync(host.getSnapshotFor(purpose)),
     getSnapshot: () => runner.run(host.getSnapshot()),
-    getSnapshotFor: (purpose: RuntimeSnapshotPurpose) => runner.run(host.getSnapshotFor(purpose)),
     observe: (observer: RuntimeObserver) => runner.runSync(host.observe(observer)),
   };
 

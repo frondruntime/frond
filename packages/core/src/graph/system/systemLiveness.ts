@@ -1,11 +1,11 @@
 import { Effect, Match, type Semaphore } from "effect";
 import type { GraphCellActorRegistry } from "../cell/actorRegistry";
+import type { GraphPlanState } from "../cell/cellModel";
 import { acquireLiveLeaseOperation, releaseLiveLeaseOperation } from "../cell/cellOperations";
 import { submitToCellActor } from "../cell/cellSubmission";
 import { acquireNodeLiveLease, releaseNodeLiveLease } from "../liveness";
 import { bridgeObservedResultLease } from "../liveness/resultObservationBridge";
 import type { GraphOperationEnvironment } from "../operations/dependencies";
-import type { GraphPlanState } from "../planning/plan";
 import type {
   AcquireNodeLiveLeaseRequest,
   NodeId,
@@ -54,10 +54,10 @@ export function makeGraphSystemLiveness(options: {
         {
           state: options.state,
           planningSemaphore: options.planningSemaphore,
-          getActor: options.actorRegistry.getActor,
+          submit: options.actorRegistry.submit,
         },
         request.nodeId,
-        (cell, actor) => actor.submit(acquireLiveLeaseOperation(options.graphEnv, cell, request))
+        (cell) => acquireLiveLeaseOperation(options.graphEnv, cell, request)
       );
 
       const result = yield* Match.value(submission).pipe(
@@ -85,10 +85,10 @@ export function makeGraphSystemLiveness(options: {
         {
           state: options.state,
           planningSemaphore: options.planningSemaphore,
-          getActor: options.actorRegistry.getActor,
+          submit: options.actorRegistry.submit,
         },
         request.nodeId,
-        (cell, actor) => actor.submit(releaseLiveLeaseOperation(options.graphEnv, cell, request))
+        (cell) => releaseLiveLeaseOperation(options.graphEnv, cell, request)
       );
 
       const result = yield* Match.value(submission).pipe(
@@ -122,12 +122,16 @@ export function makeGraphSystemLiveness(options: {
         source: "mobx",
         scope,
       });
-      if (result.failures.length > 0) {
-        return { _tag: "Missing" } as const;
-      }
-      return result.changed || result.liveDemand.isLive
-        ? ({ _tag: "Held", leaseId: result.leaseId } as const)
-        : ({ _tag: "Missing" } as const);
+      return Match.value(result).pipe(
+        Match.tag("Held", (held) =>
+          held.changed || held.liveDemand.isLive
+            ? ({ _tag: "Held", leaseId: held.leaseId } as const)
+            : ({ _tag: "Missing" } as const)
+        ),
+        Match.tag("Failed", () => ({ _tag: "Missing" }) as const),
+        Match.tag("NodeMissing", () => ({ _tag: "Missing" }) as const),
+        Match.exhaustive
+      );
     });
   };
 
@@ -162,11 +166,24 @@ function notifyLiveResult(
   result: NodeLiveLeaseResult
 ): Effect.Effect<void> {
   return Effect.gen(function* () {
-    if (result.changed) {
-      yield* observers.notifyLiveDemandChanged(result.nodeId, result.liveDemand);
-    }
-    if (result.failures.length > 0) {
-      yield* observers.notifyLiveFailures(result.nodeId, result.failures);
-    }
+    yield* Match.value(result).pipe(
+      Match.tag("Held", (held) =>
+        Effect.gen(function* () {
+          if (held.changed) {
+            yield* observers.notifyLiveDemandChanged(held.nodeId, held.liveDemand);
+          }
+          if (held.failures.length > 0) {
+            yield* observers.notifyLiveFailures(held.nodeId, held.failures);
+          }
+        })
+      ),
+      Match.tag("Failed", (failed) =>
+        failed.failures.length > 0
+          ? observers.notifyLiveFailures(failed.nodeId, failed.failures)
+          : Effect.void
+      ),
+      Match.tag("NodeMissing", () => Effect.void),
+      Match.exhaustive
+    );
   });
 }

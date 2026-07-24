@@ -4,7 +4,6 @@ import { GraphSystem } from "../src/graph/types";
 import {
   AcquireFailed,
   type ActionContract,
-  Context,
   Deferred,
   type Dep,
   DependencyFailures,
@@ -22,6 +21,7 @@ import {
   NodeEvicted,
   type NodeSpec,
   ProfileNode,
+  ReleaseFailed,
   resourceSpec,
   resultCommit,
   serviceSpec,
@@ -300,11 +300,11 @@ describe("graph execution", () => {
     const node = snapshot.nodes.find((entry) => entry.tag === "services/release-timeout");
 
     expect(node?.status).toEqual({ _tag: "Wired", run: { _tag: "Idle" } });
-    expect(node?.failure).toBeInstanceOf(DisposerFailed);
-    expect((node?.failure as DisposerFailed | undefined)?.cause).toBeInstanceOf(
+    expect(node?.failure).toBeInstanceOf(ReleaseFailed);
+    expect((node?.failure as ReleaseFailed | undefined)?.cause).toBeInstanceOf(
       DriverOperationTimedOut
     );
-    expect((node?.failure as DisposerFailed | undefined)?.cause).toMatchObject({
+    expect((node?.failure as ReleaseFailed | undefined)?.cause).toMatchObject({
       cancellation: { _tag: "TimedOut", detail: "20ms" },
     });
   });
@@ -563,44 +563,6 @@ describe("graph execution", () => {
 
     expect(handle.status).toEqual({ _tag: "Wired", run: { _tag: "Ready" } });
     expect(asyncNode?.result).toBe("async-value");
-  });
-
-  test("effect driver can require Effect services supplied at execution boundary", async () => {
-    const DriverValue = Context.Service<{ readonly value: string }>(
-      "test/graph-execution/DriverValue"
-    );
-    type ServiceBackedSpec = NodeSpec<{
-      readonly args: Record<string, never>;
-      readonly key: Key.Singleton;
-      readonly deps: Record<string, never>;
-      readonly result: string;
-    }>;
-
-    class ServiceBackedNode extends NodeBase<ServiceBackedSpec, "effect"> {
-      static readonly spec = serviceSpec.effect<ServiceBackedSpec, typeof DriverValue>({
-        tag: "services/effect-service-backed",
-        key: () => Key.singleton(),
-        dependencies: dependencies(() => ({})),
-        acquire: Driver.Acquire(() =>
-          Effect.gen(function* () {
-            const service = yield* DriverValue;
-            return service.value;
-          })
-        ),
-      });
-    }
-    const graph = makeInMemoryGraphSystem();
-
-    const handle = await Effect.runPromise(
-      graph
-        .ensureReadyNode({ spec: ServiceBackedNode, args: {} })
-        .pipe(Effect.provideService(DriverValue, { value: "from-effect-service" }))
-    );
-    const snapshot = await Effect.runPromise(graph.snapshot());
-    const node = snapshot.nodes.find((entry) => entry.tag === "services/effect-service-backed");
-
-    expect(handle.status).toEqual({ _tag: "Wired", run: { _tag: "Ready" } });
-    expect(node?.result).toBe("from-effect-service");
   });
 
   test("ensureReady wraps async driver rejections as typed readiness causes", async () => {
@@ -916,7 +878,7 @@ describe("graph execution", () => {
     const failure = node?.failure;
 
     expect(disposed).toBe(true);
-    expect(failure).toBeInstanceOf(DisposerFailed);
+    expect(failure).toBeInstanceOf(ReleaseFailed);
     expect(failure).toMatchObject({ cause });
   });
 
@@ -1153,6 +1115,42 @@ describe("graph execution", () => {
     expect(node?.status).toEqual({ _tag: "Wired", run: { _tag: "Idle" } });
   });
 
+  test("GraphSystem.stop rejects fresh readiness through the closed-actor typed outcome", async () => {
+    const graph = makeInMemoryGraphSystem();
+
+    const planned = await Effect.runPromise(graph.ensureNode({ spec: ProfileNode, args: {} }));
+    await Effect.runPromise(graph.stop());
+
+    const read = await Effect.runPromise(graph.ensureReadyNode({ spec: ProfileNode, args: {} }));
+    const error = read._tag === "Error" ? read.error : undefined;
+
+    expect(error).toBeInstanceOf(NodeEvicted);
+    expect(error).toMatchObject({
+      cancellation: {
+        _tag: "Released",
+        detail: "graph cell is closed",
+      },
+    });
+
+    const refresh = await Effect.runPromise(
+      graph.refreshNode({ target: { _tag: "NodeId", nodeId: planned.nodeId } })
+    );
+
+    expect(refresh).toMatchObject({
+      _tag: "Failure",
+      error: {
+        _tag: "RefreshFailed",
+        cause: {
+          _tag: "NodeEvicted",
+          cancellation: {
+            _tag: "Released",
+            detail: "graph cell is closed",
+          },
+        },
+      },
+    });
+  });
+
   test("release failures are recorded on the graph snapshot", async () => {
     const cause = { _tag: "ReleaseRejected" };
     type ReleaseFailSpec = NodeSpec<{
@@ -1181,7 +1179,7 @@ describe("graph execution", () => {
     const node = snapshot.nodes.find((entry) => entry.tag === "services/release-failure");
 
     expect(node?.status).toEqual({ _tag: "Wired", run: { _tag: "Idle" } });
-    expect(node?.failure).toBeInstanceOf(DisposerFailed);
+    expect(node?.failure).toBeInstanceOf(ReleaseFailed);
     expect(node?.failure).toMatchObject({ cause });
   });
 
@@ -1212,10 +1210,10 @@ describe("graph execution", () => {
     const snapshot = await Effect.runPromise(graph.snapshot());
     const node = snapshot.nodes.find((entry) => entry.tag === "services/release-defect");
     const failure = node?.failure;
-    const boundary = failure instanceof DisposerFailed ? failure.cause : undefined;
+    const boundary = failure instanceof ReleaseFailed ? failure.cause : undefined;
 
     expect(node?.status).toEqual({ _tag: "Wired", run: { _tag: "Idle" } });
-    expect(failure).toBeInstanceOf(DisposerFailed);
+    expect(failure).toBeInstanceOf(ReleaseFailed);
     expect(boundary).toBeInstanceOf(EffectBoundaryFailed);
     expect((boundary as EffectBoundaryFailed | undefined)?.boundary).toBe("driver-release");
     expect((boundary as EffectBoundaryFailed | undefined)?.cause).toBe(cause);
@@ -1294,7 +1292,7 @@ describe("graph execution", () => {
     const snapshot = await Effect.runPromise(graph.snapshot());
     const node = snapshot.nodes.find((entry) => entry.tag === "services/cleanup-failure-order");
 
-    expect(node?.failure).toBeInstanceOf(DisposerFailed);
+    expect(node?.failure).toBeInstanceOf(ReleaseFailed);
     expect(node?.failure).toMatchObject({ cause: releaseCause });
   });
 });

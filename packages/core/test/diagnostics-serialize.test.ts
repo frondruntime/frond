@@ -30,6 +30,30 @@ describe("Frond diagnostics cause serialization", () => {
     });
   });
 
+  test("shared preview references are not labeled circular but true cycles are", () => {
+    const shared = { id: "shared" };
+    const cycle: { readonly label: string; self?: unknown } = { label: "cycle" };
+    cycle.self = cycle;
+
+    const [frame] = serializeCauseChain(
+      {
+        first: shared,
+        second: shared,
+        cycle,
+      },
+      { maxDepth: 6 }
+    );
+
+    expect(frame?.preview).toMatchObject({
+      first: { id: "shared" },
+      second: { id: "shared" },
+      cycle: {
+        label: "cycle",
+        self: "[Circular]",
+      },
+    });
+  });
+
   test("cause serialization preserves boundary and invariant fields", () => {
     const invariant = new GraphInvariantViolation({
       nodeId: 'diagnostics/request:v1:"singleton"' as NodeId,

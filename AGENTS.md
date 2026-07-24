@@ -70,10 +70,10 @@ This repository uses release-please-style release automation. Release notes and 
 
 Frond keeps the MobX-facing public model and runs runtime execution through Effect.
 
-- Runtime must enforce node identity, readiness, operation admission, liveness, cancellation, scope, and stale-commit rules.
+- Runtime must enforce node identity, readiness, operation admission, liveness, cancellation, lifecycle/resource ownership, and stale-commit rules.
 - React consumers use node classes, useNode, useNodes, Suspense, ErrorBoundary, computed fields, and domain methods.
 - Driver authors use Frond Driver.Async or Driver.Effect hooks through node specs.
-- Runtime owns graph identity, dependency readiness, per-node serialization, cancellation, scope, release, telemetry, and command execution.
+- Runtime owns graph identity, dependency readiness, per-node serialization, cancellation, lifecycle/resource ownership, release, telemetry, and command execution.
 - Graph/runtime owns node construction, lifecycle state, attempts, eviction, and liveness demand records.
 - Node owns MobX domain state, computed getters, domain methods, and observation-derived liveness signals.
 - MobX and React are adapters. They may mirror, subscribe, schedule through handles, and translate state for consumers. They must not own readiness or driver liveness truth.
@@ -106,6 +106,9 @@ Frond keeps the MobX-facing public model and runs runtime execution through Effe
 - Prefer strict discriminated unions for domain states, protocol packets, outcomes, and lifecycle phases.
 - Match closed runtime protocols, graph jobs, events, commands, and lifecycle states exhaustively.
 - Distinguish expected domain failures from defects. Expected failures should be typed and recoverable. Defects should fail loudly.
+- Caller-visible operation outcomes surface as store `operationFailure` in React.
+- Render-critical failures throw to the nearest error boundary.
+- Out-of-band observer, projection, schedule, sink, and subscriber defects become diagnostic runtime events.
 - Do not silently coerce malformed config, query, policy, or protocol values unless a design note explicitly names that contract.
 - Do not build domain objects with conditional spread fragments. Normalize to a named value or return an explicit object variant.
 

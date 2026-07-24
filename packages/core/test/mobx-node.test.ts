@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Deferred, Effect, Match } from "effect";
 import { autorun, observable, onBecomeObserved, onBecomeUnobserved } from "mobx";
 import { Driver, Key, unwrapEffect } from "../src";
-import { ActionFailed, GraphInvariantViolation, resultCommit } from "../src/graph";
+import { ActionFailed, GraphInvariantViolation, type NodeId, resultCommit } from "../src/graph";
 import { createNode } from "../src/mobx";
 import {
   type ActionContract,
@@ -47,7 +47,10 @@ type ProfileSpec = NodeSpec<{
   };
   readonly result: Profile;
   readonly actions: {
-    readonly updateTimezone: ActionContract<{ readonly timezone: string }, string>;
+    readonly updateTimezone: ActionContract<
+      { readonly timezone: string },
+      { readonly timezone: string }
+    >;
     readonly rejectTimezone: ActionContract<void, never>;
   };
 }>;
@@ -75,7 +78,7 @@ class ProfileNode extends NodeBase<ProfileSpec, "effect"> {
             current.timezone = input.timezone;
           });
 
-          return input.timezone;
+          return { timezone: input.timezone };
         })
       ),
       rejectTimezone: Driver.Action(() => Effect.fail({ _tag: "TimezoneRejected" } as const)),
@@ -122,6 +125,44 @@ describe("MobX node projection", () => {
     await projection.ensureReady();
 
     expect(projection.result).toEqual({ name: "transport", timezone: "UTC" });
+
+    projection.dispose();
+  });
+
+  test("fire-and-forget sync rejection is recorded as a runtime observer failure", async () => {
+    const runtime = createRuntime();
+    const runtimeWithFailure = runtime as typeof runtime & {
+      readonly recordMobXProjectionFailure: (nodeId: NodeId, cause: unknown) => Promise<void>;
+    };
+    const cause = new Error("projection read failed");
+    const projection = createNode(
+      {
+        client: runtime.client,
+        observe: runtime.observe,
+        readNodeSnapshot: async () => {
+          throw cause;
+        },
+        recordMobXProjectionFailure: (nodeId, syncCause) =>
+          runtimeWithFailure.recordMobXProjectionFailure(nodeId, syncCause),
+      },
+      ProfileNode,
+      {}
+    );
+
+    const failureRecord = await waitForRuntimeEvent(runtime, "RuntimeObserverFailureObserved");
+    const failure = failureRecord.event;
+
+    expect(failure).toMatchObject({
+      _tag: "RuntimeObserverFailureObserved",
+      eventTag: "MobXProjectionSync",
+    });
+    expect(
+      failure._tag === "RuntimeObserverFailureObserved" ? failure.cause : undefined
+    ).toMatchObject({
+      _tag: "FrondMobXProjectionError",
+      nodeId: projection.nodeId,
+      cause,
+    });
 
     projection.dispose();
   });
@@ -301,7 +342,7 @@ describe("MobX node projection", () => {
 
     const actionResult = await action;
 
-    expect(actionResult).toBe("CET");
+    expect(actionResult).toEqual({ timezone: "CET" });
     expect(projection.result).toEqual({ name: "transport", timezone: "CET" });
     expect(projection.node.timezone).toBe("CET");
     expect(observedTimezones).toContain("CET");
@@ -311,7 +352,7 @@ describe("MobX node projection", () => {
     expect(refreshResult).toEqual({
       _tag: "Success",
       nodeId: projection.nodeId,
-      value: undefined,
+      value: { name: "transport", timezone: "PST" },
     });
     expect(projection.node.result).toEqual({ name: "transport", timezone: "PST" });
     expect(observedTimezones).toContain("PST");
@@ -344,7 +385,7 @@ describe("MobX node projection", () => {
       _tag: "GraphActionSucceeded",
       action: "updateTimezone",
       input: { timezone: "CET" },
-      value: "CET",
+      value: { timezone: "CET" },
     });
 
     projection.dispose();
@@ -536,6 +577,59 @@ describe("MobX node projection", () => {
       sources: [],
       scopes: [],
     });
+
+    projection.dispose();
+  });
+
+  test("observed-result live start failure does not leave phantom MobX demand", async () => {
+    const failure = new Error("live start failed once");
+    let starts = 0;
+    type FlakyLiveSpec = NodeSpec<{
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: string;
+    }>;
+
+    class FlakyLiveNode extends NodeBase<FlakyLiveSpec> {
+      static readonly spec = resourceSpec.effect<FlakyLiveSpec>({
+        tag: "mobx/resources/flaky-live",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        live: Driver.Live({
+          start: () =>
+            Effect.sync(() => {
+              starts += 1;
+            }).pipe(
+              Effect.flatMap(() => (starts === 1 ? Effect.fail(failure) : Effect.succeed("live")))
+            ),
+          stop: () => Effect.void,
+        }),
+      });
+    }
+    const runtime = createRuntime();
+    const projection = createNode(runtime, FlakyLiveNode, {});
+
+    await runtime.submit({ _tag: "RuntimeStart" });
+    await projection.ensureReady();
+
+    const stop = autorun(() => {
+      void projection.node.result;
+    });
+
+    await waitForRuntimeEvent(runtime, "GraphNodeLiveFailed");
+
+    stop();
+    await waitForRuntimeEventCount(runtime, "GraphNodeLiveDemandChanged", 2);
+    await projection.sync();
+
+    expect(projection.snapshot?.liveDemand).toEqual({
+      isLive: false,
+      sources: [],
+      scopes: [],
+    });
+    expect(starts).toBe(1);
 
     projection.dispose();
   });
@@ -737,6 +831,159 @@ describe("MobX node projection", () => {
     projection.dispose();
   });
 
+  test("invalidation rolls back an observation lease interrupted during live start", async () => {
+    const liveStarted = await Effect.runPromise(Deferred.make<void>());
+    const liveGate = await Effect.runPromise(Deferred.make<void>());
+    let liveStarts = 0;
+    type InterruptedObservationSpec = NodeSpec<{
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: { readonly values: ReturnType<typeof observable.map<string, string>> };
+    }>;
+
+    class InterruptedObservationNode extends NodeBase<InterruptedObservationSpec> {
+      static readonly spec = resourceSpec.effect<InterruptedObservationSpec>({
+        tag: "mobx/resources/interrupted-observation-lease",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        acquire: Driver.Acquire(() =>
+          Effect.succeed({ values: observable.map([["value", "ready"]]) })
+        ),
+        live: Driver.Live({
+          start: () =>
+            Effect.gen(function* () {
+              liveStarts += 1;
+              yield* Deferred.succeed(liveStarted, undefined);
+              yield* Deferred.await(liveGate);
+              return "live";
+            }),
+          stop: () => Effect.void,
+        }),
+      });
+
+      constructor() {
+        super();
+        this.onRuntimeClose(
+          onBecomeObserved(this.result.values, "value", () => {
+            this.reportResultObserved({ field: "values", key: "value" }, true);
+          })
+        );
+        this.onRuntimeClose(
+          onBecomeUnobserved(this.result.values, "value", () => {
+            this.reportResultObserved({ field: "values", key: "value" }, false);
+          })
+        );
+      }
+
+      readValue(): string | undefined {
+        return this.untrackedResult().values.get("value");
+      }
+    }
+
+    class ConflictingObservationNode extends NodeBase<InterruptedObservationSpec> {
+      static readonly spec = resourceSpec.effect<InterruptedObservationSpec>({
+        tag: "mobx/resources/interrupted-observation-lease",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        acquire: Driver.Acquire(() =>
+          Effect.succeed({ values: observable.map([["value", "conflict"]]) })
+        ),
+      });
+    }
+
+    const runtime = createRuntime();
+    const projection = createNode(runtime, InterruptedObservationNode, {});
+
+    await runtime.submit({ _tag: "RuntimeStart" });
+    await projection.ensureReady();
+    const node = projection.node;
+
+    const stopObserving = autorun(() => {
+      void node.readValue();
+    });
+    await Effect.runPromise(Deferred.await(liveStarted));
+
+    await runtime.submit({
+      _tag: "GraphEnsureNode",
+      request: { spec: ConflictingObservationNode, args: {} },
+    });
+    await projection.sync();
+
+    expect(projection.snapshot?.liveDemand).toEqual({
+      isLive: false,
+      sources: [],
+      scopes: [],
+    });
+
+    stopObserving();
+    await projection.ensureReady();
+    expect(liveStarts).toBe(1);
+
+    projection.dispose();
+  });
+
+  test("invalidation releases a successfully acquired observation lease by id", async () => {
+    type InvalidatedObservationSpec = NodeSpec<{
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: { readonly value: string };
+    }>;
+
+    class InvalidatedObservationNode extends NodeBase<InvalidatedObservationSpec> {
+      static readonly spec = resourceSpec.effect<InvalidatedObservationSpec>({
+        tag: "mobx/resources/invalidated-observation-release",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
+        live: Driver.Live({
+          start: () => Effect.succeed("live"),
+          stop: () => Effect.void,
+        }),
+      });
+    }
+
+    class ConflictingInvalidatedObservationNode extends NodeBase<InvalidatedObservationSpec> {
+      static readonly spec = resourceSpec.effect<InvalidatedObservationSpec>({
+        tag: "mobx/resources/invalidated-observation-release",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "conflict" })),
+      });
+    }
+
+    const runtime = createRuntime();
+    const projection = createNode(runtime, InvalidatedObservationNode, {});
+
+    await runtime.submit({ _tag: "RuntimeStart" });
+    await projection.ensureReady();
+    const node = projection.node;
+
+    const stopObserving = autorun(
+      () => {
+        void node.result;
+      },
+      { onError: () => undefined }
+    );
+    await waitForRuntimeEvent(runtime, "GraphNodeLiveDemandChanged");
+
+    await runtime.submit({
+      _tag: "GraphEnsureNode",
+      request: { spec: ConflictingInvalidatedObservationNode, args: {} },
+    });
+    await projection.sync();
+
+    expect(projection.snapshot?.liveDemand).toEqual({
+      isLive: false,
+      sources: [],
+      scopes: [],
+    });
+
+    stopObserving();
+    projection.dispose();
+  });
+
   test("observing projection mirror result does not create duplicate live demand", async () => {
     const runtime = createRuntime();
     const projection = createNode(runtime, ProfileNode, {});
@@ -773,7 +1020,7 @@ describe("MobX node projection", () => {
 
     const result = await unwrapEffect(projection.node.actions.updateTimezone({ timezone: "EET" }));
 
-    expect(result).toBe("EET");
+    expect(result).toEqual({ timezone: "EET" });
     expect(projection.node.timezone).toBe("EET");
 
     projection.dispose();

@@ -5,6 +5,7 @@ import type { NodeId } from "../graph/types/ids";
 import type { NodeLiveSource } from "../graph/types/liveness";
 import type { ActionResult, EvictResult, RefreshResult } from "../graph/types/operations";
 import type { NodeRead } from "../graph/types/reads";
+import { isKeyError } from "../keys";
 import type {
   NodeSpecActions,
   NodeSpecArgs,
@@ -22,6 +23,7 @@ import type {
   RuntimeHostService,
   RuntimeNodeHandle,
   RuntimeNodeLiveLease,
+  RuntimeNodeLiveLeaseResult,
   RuntimeNodeRead,
   RuntimeNodeSnapshotLookup,
   RuntimeSubmission,
@@ -172,7 +174,25 @@ function createRuntimeNodeHandle<TArgs, TResult>(
         ({ result }) => result
       ),
     updateArgs: async (nextArgs, metadata) => {
-      const nextNodeId = host.resolveNodeIdSync({ spec, args: nextArgs });
+      let nextNodeId: NodeId;
+
+      try {
+        nextNodeId = host.resolveNodeIdSync({ spec, args: nextArgs });
+      } catch (cause) {
+        if (!isKeyError(cause)) {
+          throw cause;
+        }
+
+        return {
+          _tag: "Failure",
+          nodeId,
+          error: new UpdateNodeArgsFailed({
+            nodeId,
+            tag: "unknown",
+            cause,
+          }),
+        };
+      }
 
       if (nextNodeId !== nodeId) {
         return {
@@ -231,7 +251,41 @@ function createRuntimeNodeHandle<TArgs, TResult>(
           metadata,
         },
         "GraphNodeLiveLeaseAcquired",
-        ({ leaseId }) => makeRuntimeNodeLiveLease(host, runner, nodeId, leaseId, source, scope)
+        ({ result }) => {
+          switch (result._tag) {
+            case "Held":
+              return {
+                _tag: "Held",
+                nodeId: result.nodeId,
+                lease: makeRuntimeNodeLiveLease(
+                  host,
+                  runner,
+                  result.nodeId,
+                  result.leaseId,
+                  source,
+                  scope
+                ),
+                liveDemand: result.liveDemand,
+              } satisfies RuntimeNodeLiveLeaseResult;
+            case "Failed":
+              return {
+                _tag: "Failure",
+                nodeId: result.nodeId,
+                failures: result.failures,
+                liveDemand: result.liveDemand,
+              } satisfies RuntimeNodeLiveLeaseResult;
+            case "NodeMissing":
+              return {
+                _tag: "NodeMissing",
+                nodeId: result.nodeId,
+                liveDemand: result.liveDemand,
+              } satisfies RuntimeNodeLiveLeaseResult;
+            default: {
+              const exhaustive: never = result;
+              return exhaustive;
+            }
+          }
+        }
       ),
     snapshot: async () =>
       (await runner.run(host.readNodeSnapshot(nodeId))) as RuntimeNodeSnapshotLookup<TResult>,

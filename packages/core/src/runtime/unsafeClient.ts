@@ -9,7 +9,12 @@ import type {
   UnsafeScheduleResult,
 } from "./types";
 
-type UnsafeRuntimeHost = Pick<RuntimeHostService, "submit"> & RuntimeReadHost;
+type UnsafeRuntimeHost = Pick<RuntimeHostService, "submit"> &
+  RuntimeReadHost & {
+    readonly recordUnsafeScheduleFailure?:
+      | ((command: RuntimeCommand, cause: unknown) => void)
+      | undefined;
+  };
 
 /**
  * Creates the devtools/test escape hatch client.
@@ -80,6 +85,8 @@ export function createUnsafeRuntimeClient(
       return { _tag: "Invalid", nodeId, error: read.error };
     }
 
+    // Devtools escape hatch: unsafe updates intentionally bypass request/args
+    // validation and operate on an existing node id plus a mutation recipe.
     scheduleUnsafe(runtime, runner, {
       _tag: "GraphUnsafeUpdateNode",
       request: {
@@ -100,11 +107,17 @@ export function createUnsafeRuntimeClient(
 }
 
 function scheduleUnsafe(
-  runtime: Pick<RuntimeHostService, "submit">,
+  runtime: Pick<RuntimeHostService, "submit"> & {
+    readonly recordUnsafeScheduleFailure?:
+      | ((command: RuntimeCommand, cause: unknown) => void)
+      | undefined;
+  },
   runner: RuntimeEffectBridgeRunner,
   command: RuntimeCommand
 ): void {
-  // Fire-and-forget: run the Effect submit through the bridge and swallow the
-  // result. Unsafe scheduling never awaits.
-  void runner.run(runtime.submit(command)).catch(() => undefined);
+  // Fire-and-forget: run the Effect submit through the bridge and never await.
+  // Failures are surfaced to the diagnostics hook instead of being swallowed.
+  void runner.run(runtime.submit(command)).catch((cause) => {
+    runtime.recordUnsafeScheduleFailure?.(command, cause);
+  });
 }

@@ -28,6 +28,7 @@ type RuntimeHandle = Frond.Runtime.RuntimeNodeHandle<Frond.Args.None, { readonly
 type RuntimeRead = Frond.Runtime.RuntimeNodeRead<{ readonly ok: true }>;
 type UnsafeRead = Frond.Runtime.UnsafeNodeRead;
 type RuntimeSnapshot = Frond.Runtime.RuntimeNodeSnapshot<{ readonly ok: true }>;
+type RuntimeLiveLeaseResult = Frond.Runtime.RuntimeNodeLiveLeaseResult;
 type RuntimeEvent = Frond.Runtime.RuntimeEvent;
 type RuntimeEventRecord = Frond.Runtime.RuntimeEventRecord;
 type RuntimeClassification = Frond.Events.RuntimeEventClassification;
@@ -35,11 +36,13 @@ type GraphNodeId = Frond.Graph.NodeId;
 type GraphFailure = Frond.Graph.GraphFailure;
 type GraphSnapshot = Frond.Graph.NodeSnapshot;
 type MobXNode = Frond.MobX.MobXNode<Frond.Args.None, object, { readonly ok: true }, object>;
+const nodeSpecError = new Frond.FrondNodeSpecError("typed");
 
 export type PublicSurfaceTypes = [
   RuntimeHandle,
   RuntimeRead,
   RuntimeSnapshot,
+  RuntimeLiveLeaseResult,
   RuntimeEvent,
   RuntimeEventRecord,
   RuntimeClassification,
@@ -49,6 +52,11 @@ export type PublicSurfaceTypes = [
   MobXNode,
 ];
 
+nodeSpecError satisfies TypeError;
+
+export type RootFrondNodeSpecError = Expect<
+  Equal<"FrondNodeSpecError" extends keyof typeof Frond ? true : false, true>
+>;
 export type EffectBoundaryFailedIsGraphFailure = Expect<
   Frond.Graph.EffectBoundaryFailed extends Frond.Graph.GraphFailure ? true : false
 >;
@@ -57,6 +65,9 @@ export type RuntimeControlOnlySetInputIngestion = Expect<
 >;
 export type PublicRuntimeReadTags = Expect<
   Equal<RuntimeRead["_tag"], "Unwired" | "Idle" | "Pending" | "Ready" | "Error">
+>;
+export type PublicRuntimeLiveLeaseResultTags = Expect<
+  Equal<RuntimeLiveLeaseResult["_tag"], "Held" | "Failure" | "NodeMissing">
 >;
 export type PublicRuntimeErrorKinds = Expect<
   Equal<
@@ -219,4 +230,6 @@ export type PublicRefreshSubmission = Frond.Graph.RefreshSubmission;
 export type PublicUnsafeUpdateNodeRequest = Frond.Graph.UnsafeUpdateNodeRequest;
 
 Frond.Key.singleton() satisfies Frond.Key.Singleton;
+Frond.Key.canonicalArgs({ payload: "large args are uncapped" }) satisfies string;
+Frond.Key.isKeyError(new Error("unknown")) satisfies boolean;
 FrondTesting.createDeferred<number>() satisfies FrondTesting.DeferredTestValue<number>;

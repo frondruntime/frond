@@ -52,13 +52,6 @@ function runtimeWorkId(value: number): RuntimeWorkId {
   return value as RuntimeWorkId;
 }
 
-export type RuntimeSnapshotPurpose =
-  | "product-read"
-  | "devtools"
-  | "diagnostics"
-  | "test"
-  | "persistence";
-
 export function makeRuntimeWorkFactory(runtimeId: RuntimeId): {
   readonly defaultWork: RuntimeWorkContext;
   readonly nextWork: (

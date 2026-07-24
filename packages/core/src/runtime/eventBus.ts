@@ -1,7 +1,6 @@
 import { Clock, Effect } from "effect";
 import { classify, failures, nodeIds } from "../events";
 import { effectBoundaryFailed } from "../graph/driverExecution/effectBoundary";
-import { RuntimeEvents } from "./events";
 import { optionalNonNegativeInteger } from "./limits";
 import { withRuntimeSpan } from "./observability";
 import type {
@@ -29,7 +28,7 @@ export interface RuntimeEventBusConfig {
   readonly runtimeId: RuntimeId;
   readonly eventBufferSize: number;
   readonly sinks: ReadonlyArray<RuntimeSink>;
-  readonly currentWork: () => RuntimeWorkContext;
+  readonly fallbackWork: () => RuntimeWorkContext;
 }
 
 export const makeRuntimeEventBus = (config: RuntimeEventBusConfig): RuntimeEventBus => {
@@ -69,7 +68,10 @@ export const makeRuntimeEventBus = (config: RuntimeEventBusConfig): RuntimeEvent
     return record;
   };
 
-  const notifyObservers = (record: RuntimeEventRecord): Effect.Effect<void> =>
+  const notifyObservers = (
+    record: RuntimeEventRecord,
+    observerFailureDepth = 0
+  ): Effect.Effect<void> =>
     observerList.length === 0
       ? Effect.void
       : Effect.forEach(
@@ -79,13 +81,21 @@ export const makeRuntimeEventBus = (config: RuntimeEventBusConfig): RuntimeEvent
               Effect.flatMap((cause) =>
                 cause === undefined
                   ? Effect.void
-                  : recordObserverFailure(record.event._tag, cause, record.work)
+                  : recordObserverFailure(
+                      record.event._tag,
+                      cause,
+                      record.work,
+                      observerFailureDepth
+                    )
               )
             ),
           { concurrency: 1, discard: true }
         );
 
-  const notifySinks = (record: RuntimeEventRecord): Effect.Effect<void> =>
+  const notifySinks = (
+    record: RuntimeEventRecord,
+    observerFailureDepth = 0
+  ): Effect.Effect<void> =>
     sinks.length === 0
       ? Effect.void
       : Effect.forEach(
@@ -106,7 +116,8 @@ export const makeRuntimeEventBus = (config: RuntimeEventBusConfig): RuntimeEvent
                   sink.name,
                   record.event._tag,
                   effectBoundaryFailed("runtime-sink", cause),
-                  record.work
+                  record.work,
+                  observerFailureDepth
                 )
               )
             ),
@@ -116,30 +127,48 @@ export const makeRuntimeEventBus = (config: RuntimeEventBusConfig): RuntimeEvent
   const recordObserverFailure = (
     eventTag: RuntimeEvent["_tag"],
     cause: unknown,
-    work: RuntimeWorkContext
+    work: RuntimeWorkContext,
+    observerFailureDepth: number
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
       const at = yield* Clock.currentTimeMillis;
-      remember(RuntimeEvents.runtimeObserverFailureObserved(eventTag, cause, at), at, work);
+      const record = remember(
+        { _tag: "RuntimeObserverFailureObserved", eventTag, cause, at },
+        at,
+        work
+      );
+
+      if (observerFailureDepth > 0) {
+        return;
+      }
+
+      yield* notifySinks(record, observerFailureDepth + 1);
     });
 
   const recordSinkFailure = (
     sink: string,
     eventTag: RuntimeEvent["_tag"],
     cause: unknown,
-    work: RuntimeWorkContext
+    work: RuntimeWorkContext,
+    observerFailureDepth: number
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
       const at = yield* Clock.currentTimeMillis;
-      const failure = RuntimeEvents.runtimeSinkFailureObserved(sink, eventTag, cause, at);
+      const failure = {
+        _tag: "RuntimeSinkFailureObserved",
+        sink,
+        eventTag,
+        cause,
+        at,
+      } satisfies RuntimeEvent;
       const record = remember(failure, at, work);
 
-      yield* notifyObservers(record);
+      yield* notifyObservers(record, observerFailureDepth);
     });
 
   const emit = (
     event: RuntimeEvent,
-    work: RuntimeWorkContext | undefined = config.currentWork()
+    work: RuntimeWorkContext | undefined = config.fallbackWork()
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
       const recordedAt = yield* Clock.currentTimeMillis;

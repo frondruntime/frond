@@ -16,6 +16,7 @@ export type {
   LiveContext,
   LiveResourceStopReason,
   LiveStopContext,
+  ResultPatchOptions,
 } from "./driver";
 export * as Driver from "./driver";
 export { resultCommit } from "./driver";
@@ -48,6 +49,7 @@ export {
   dependencies,
   FrondNodeClosed,
   FrondNodeConstructionUnavailable,
+  FrondNodeSpecError,
   facadeSpec,
   NodeBase,
   nodeSpec,

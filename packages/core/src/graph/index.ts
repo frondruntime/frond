@@ -50,6 +50,7 @@ export {
   NodeConstructionFailed,
   NodeEvicted,
   RefreshFailed,
+  ReleaseFailed,
   ResultExpired,
   resultCommit,
   SpecOverrideFailed,

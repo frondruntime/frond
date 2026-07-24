@@ -2,7 +2,12 @@ import { Clock, Deferred, Effect } from "effect";
 import type { RuntimeCancellationReason } from "../../cancellation";
 import { runtimeCancellationDetail } from "../../cancellation";
 import { releaseCell } from "../lifecycle/cleanup";
-import { acquireNodeLiveLease, releaseNodeLiveLease } from "../liveness";
+import {
+  acquireNodeLiveLease,
+  makeLiveDeliveryInterrupt,
+  releaseNodeLiveLease,
+  rollbackNodeLiveLease,
+} from "../liveness";
 import {
   refreshInCell,
   runActionInCell,
@@ -10,14 +15,15 @@ import {
   updateNodeArgsInCell,
 } from "../operations";
 import type { GraphOperationEnvironment } from "../operations/dependencies";
-import type { GraphNodeCell } from "../planning/plan";
 import { ensureReadyCell } from "../readiness";
+import { completeAttempt } from "../readiness/readinessAttempt";
 import {
   type AcquireNodeLiveLeaseRequest,
   ActionFailed,
   type ActionRequest,
   type ActionResult,
   NodeEvicted,
+  type NodeLiveLeaseId,
   type NodeLiveLeaseResult,
   type NodeRead,
   RefreshFailed,
@@ -32,6 +38,7 @@ import {
   type UpdateNodeArgsResult,
 } from "../types";
 import { type GraphCellOperation, interruptCellOperation } from "./cellActor";
+import type { GraphNodeCell } from "./cellModel";
 import { phaseBase, phaseReadinessAttempt } from "./cellPhase";
 import { failReadinessAttemptState } from "./cellTransitions";
 
@@ -93,14 +100,30 @@ export function acquireLiveLeaseOperation(
   cell: GraphNodeCell,
   request: AcquireNodeLiveLeaseRequest
 ): GraphCellOperation<NodeLiveLeaseResult> {
+  const liveInterrupt = makeLiveDeliveryInterrupt();
+  let preparedLeaseId: NodeLiveLeaseId | undefined;
+
   return {
     effect: acquireNodeLiveLease(
       env.state,
       { _tag: "Found", cell },
       request,
-      env.driverTimeouts.live
+      env.driverTimeouts.live,
+      liveInterrupt,
+      (leaseId) => {
+        preparedLeaseId = leaseId;
+      }
     ),
-    interrupt: interruptCellOperation,
+    interrupt: (reply, reason) =>
+      Effect.gen(function* () {
+        liveInterrupt.abort();
+
+        if (preparedLeaseId !== undefined) {
+          yield* rollbackNodeLiveLease(env.state, cell, preparedLeaseId, env.driverTimeouts.live);
+        }
+
+        yield* interruptCellOperation(reply, reason);
+      }),
   };
 }
 
@@ -109,9 +132,19 @@ export function releaseLiveLeaseOperation(
   cell: GraphNodeCell,
   request: ReleaseNodeLiveLeaseRequest
 ): GraphCellOperation<NodeLiveLeaseResult> {
+  const liveInterrupt = makeLiveDeliveryInterrupt();
+
   return {
-    effect: releaseNodeLiveLease({ _tag: "Found", cell }, request, env.driverTimeouts.live),
-    interrupt: interruptCellOperation,
+    effect: releaseNodeLiveLease(
+      { _tag: "Found", cell },
+      request,
+      env.driverTimeouts.live,
+      liveInterrupt
+    ),
+    interrupt: (reply, reason) =>
+      Effect.sync(() => {
+        liveInterrupt.abort();
+      }).pipe(Effect.flatMap(() => interruptCellOperation(reply, reason))),
   };
 }
 
@@ -229,9 +262,7 @@ function completeEvictedReadiness(
     const attemptLookup = phaseReadinessAttempt(current.phase);
 
     if (attemptLookup._tag === "Found") {
-      const { attempt } = attemptLookup;
-      attempt.resolve(handle);
-      yield* Deferred.succeed(attempt.deferred, handle).pipe(Effect.asVoid);
+      yield* completeAttempt(attemptLookup.attempt, handle);
     }
 
     yield* cell.state.transition((latest) => [

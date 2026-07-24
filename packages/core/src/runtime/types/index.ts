@@ -9,7 +9,6 @@ export type {
 } from "../../signals";
 export type {
   RuntimeCancellationReason,
-  RuntimeSnapshotPurpose,
   RuntimeWorkContext,
   RuntimeWorkId,
   RuntimeWorkMetadata,

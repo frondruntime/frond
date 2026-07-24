@@ -8,6 +8,21 @@ export {
 } from "./define";
 export { dep } from "./dependency";
 export type {
+  FrondNode,
+  RuntimeActionEffectExecutor,
+  RuntimeActionExecutor,
+  RuntimeReadyNodeConstruction,
+  RuntimeReadyNodeControl,
+  RuntimeReadyNodeUpdate,
+} from "./runtime";
+export {
+  asRuntimeReadyNodeControl,
+  FrondNodeClosed,
+  FrondNodeConstructionUnavailable,
+  NodeBase,
+  withReadyNodeConstruction,
+} from "./runtime";
+export type {
   ActionContract,
   ActionContracts,
   ActionInput,
@@ -17,7 +32,6 @@ export type {
   DependenciesRecord,
   Dependency,
   DependencyResolver,
-  FrondNode,
   NodeActions,
   NodeDescriptor,
   NodeKind,
@@ -35,20 +49,10 @@ export type {
   NodeSpecResult,
   NodeTag,
   ResolvedDeps,
-  RuntimeActionEffectExecutor,
-  RuntimeActionExecutor,
-  RuntimeReadyNodeConstruction,
-  RuntimeReadyNodeControl,
-  RuntimeReadyNodeUpdate,
 } from "./types";
 export {
   Args,
-  asRuntimeReadyNodeControl,
   FROND_DEPENDENCIES_BRAND,
   FROND_NODE_SPEC_BRAND,
-  FrondNodeClosed,
-  FrondNodeConstructionUnavailable,
   FrondNodeSpecError,
-  NodeBase,
-  withReadyNodeConstruction,
 } from "./types";

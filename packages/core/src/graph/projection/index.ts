@@ -1,9 +1,14 @@
 import { Clock, Effect, Match } from "effect";
-import { phaseReadyData, projectCellPhase, projectLiveDemand } from "../cell/cellPhase";
+import type { GraphNodeCellView, GraphNodeState } from "../cell/cellModel";
+import {
+  type CellPhaseProjection,
+  phaseReadyData,
+  projectCellPhase,
+  projectLiveDemand,
+} from "../cell/cellPhase";
 import { idleOperation } from "../operations/nodeOperation";
-import type { GraphNodeCellView, GraphNodeState } from "../planning/plan";
 import { effectiveResultValidity } from "../resultValidity";
-import type { NodeSnapshot, ProjectionContext } from "../types";
+import type { NodeId, NodeRead, NodeSnapshot, ProjectionContext } from "../types";
 
 export function toSnapshot(
   cell: GraphNodeCellView,
@@ -53,6 +58,98 @@ export function projectNodeSnapshot(
     ),
     Match.exhaustive
   );
+}
+
+export function toNodeRead(cell: GraphNodeCellView): Effect.Effect<NodeRead> {
+  return Effect.gen(function* () {
+    const state = yield* cell.state.get;
+
+    return projectNodeRead(cell, state);
+  });
+}
+
+export function projectNodeRead(cell: GraphNodeCellView, state: GraphNodeState): NodeRead {
+  const projection = projectCellPhase(state.phase);
+
+  return Match.value(projection).pipe(
+    Match.tag("Removed", () => unwiredNodeRead(cell.nodeId)),
+    Match.tag(
+      "Idle",
+      (projected) =>
+        ({
+          _tag: "Idle",
+          ...nodeReadFields(cell, projected),
+        }) satisfies NodeRead
+    ),
+    Match.tag(
+      "Pending",
+      (projected) =>
+        ({
+          _tag: "Pending",
+          ...nodeReadFields(cell, projected),
+        }) satisfies NodeRead
+    ),
+    Match.tag(
+      "Ready",
+      (projected) =>
+        ({
+          _tag: "Ready",
+          ...nodeReadFields(cell, projected),
+          node: projected.node,
+        }) satisfies NodeRead
+    ),
+    Match.tag(
+      "ReadinessError",
+      (projected) =>
+        ({
+          _tag: "Error",
+          ...nodeReadFields(cell, projected),
+          error: projectedFailureValue(projected.failure),
+        }) satisfies NodeRead
+    ),
+    Match.tag(
+      "Releasing",
+      (projected) =>
+        ({
+          _tag: "Idle",
+          ...nodeReadFields(cell, projected),
+        }) satisfies NodeRead
+    ),
+    Match.tag(
+      "Invalid",
+      (projected) =>
+        ({
+          _tag: "Invalid",
+          nodeId: cell.nodeId,
+          tag: cell.tag,
+          status: projected.status,
+          nodeLookup: projected.nodeLookup,
+          error: projectedFailureValue(projected.failure),
+          resultValidity: projected.resultValidity,
+        }) satisfies NodeRead
+    ),
+    Match.exhaustive
+  );
+}
+
+function nodeReadFields(
+  cell: GraphNodeCellView,
+  projection: Exclude<CellPhaseProjection, { readonly _tag: "Invalid" | "Removed" }>
+) {
+  return {
+    nodeId: cell.nodeId,
+    tag: cell.tag,
+    status: projection.status,
+    resultValidity: projection.resultValidity,
+  } as const;
+}
+
+export function unwiredNodeRead(nodeId: NodeId): NodeRead {
+  return {
+    _tag: "Unwired",
+    nodeId,
+    status: { _tag: "Unwired" },
+  };
 }
 
 function projectedNodeSnapshot(

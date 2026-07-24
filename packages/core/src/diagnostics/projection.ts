@@ -1,4 +1,5 @@
 import { Match } from "effect";
+import { isKeyError } from "../keys";
 import { safeGet, safeMessage } from "./safe";
 import { serializeCauseChain } from "./serialize";
 import type { FrondErrorProjection, FrondErrorProjectionKind, SerializedCauseFrame } from "./types";
@@ -32,6 +33,7 @@ const wrapperTags = new Set([
   "KeyBuildFailed",
   "LiveDeliveryFailed",
   "RefreshFailed",
+  "ReleaseFailed",
   "UpdateNodeArgsFailed",
   "UnsafeUpdateNodeFailed",
 ]);
@@ -40,6 +42,7 @@ const operationFailureTags = new Set([
   "ActionFailed",
   "DisposerFailed",
   "RefreshFailed",
+  "ReleaseFailed",
   "UpdateNodeArgsFailed",
   "UnsafeUpdateNodeFailed",
 ]);
@@ -89,7 +92,7 @@ function projectErrorUnsafe(input: ProjectionInput): FrondErrorProjection {
     wrapper?.tag === "FrondRuntimeReadError" && safeGet(input.raw, "retryable") === true;
   const rootTag = frameTag(root);
   const rootMessage = root?.invariant ?? root?.message ?? rootTag;
-  const headline = projectionHeadline({ kind, rootTag, raw: input.raw });
+  const headline = projectionHeadline({ kind, root, rootTag, raw: input.raw });
   const summary = projectionSummary(headline, root, input.causeChain);
 
   // Single pass over the cause chain to find the first defined value for each
@@ -188,11 +191,7 @@ function projectionKindSignal(frames: ReadonlyArray<SerializedCauseFrame>): Proj
     return { _tag: "RuntimeUnavailable" };
   }
 
-  if (
-    hasFrameTag(frames, "CycleDetected") ||
-    hasFrameTag(frames, "KeyBuildFailed") ||
-    frames.some((frame) => frame.tag?.startsWith("Key") === true)
-  ) {
+  if (hasFrameTag(frames, "CycleDetected") || frames.some((frame) => isKeyErrorFrame(frame))) {
     return { _tag: "InvalidGraph" };
   }
 
@@ -213,6 +212,7 @@ function projectionKindSignal(frames: ReadonlyArray<SerializedCauseFrame>): Proj
 
 function projectionHeadline(input: {
   readonly kind: FrondErrorProjectionKind;
+  readonly root: SerializedCauseFrame | undefined;
   readonly rootTag: string;
   readonly raw: unknown;
 }): string {
@@ -222,8 +222,16 @@ function projectionHeadline(input: {
       () => "Dependency cycle detected"
     ),
     Match.when(
-      ({ rootTag }) => rootTag.startsWith("Key") || rootTag === "KeyBuildFailed",
+      ({ root }) => root !== undefined && isKeyErrorFrame(root),
       () => "Invalid node key"
+    ),
+    Match.when(
+      ({ kind, root }) =>
+        kind === "readiness" &&
+        root?.tag !== undefined &&
+        root.tag.startsWith("Key") &&
+        !isKeyErrorFrame(root),
+      ({ rootTag }) => `Readiness failed: ${rootTag}`
     ),
     Match.when({ kind: "runtime" }, () => "Runtime unavailable"),
     Match.when({ kind: "readiness" }, () => "Readiness failed"),
@@ -294,6 +302,10 @@ export function frameTag(frame: SerializedCauseFrame | undefined): string {
 
 function hasFrameTag(frames: ReadonlyArray<SerializedCauseFrame>, tag: string): boolean {
   return frames.some((frame) => frameTag(frame) === tag);
+}
+
+function isKeyErrorFrame(frame: SerializedCauseFrame): boolean {
+  return frame.tag !== undefined && isKeyError({ _tag: frame.tag });
 }
 
 function shortNodeLabel(value: string): string {

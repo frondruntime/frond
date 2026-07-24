@@ -20,7 +20,7 @@ export function normalizeOptions(
 
 export function errorName(value: unknown, maxLength = defaultMaxStringLength): string | undefined {
   if (value instanceof Error) {
-    return truncate(value.name, maxLength);
+    return safeString(safeGet(value, "name"), maxLength);
   }
 
   return safeString(safeGet(value, "name"), maxLength);
@@ -28,7 +28,7 @@ export function errorName(value: unknown, maxLength = defaultMaxStringLength): s
 
 export function safeMessage(value: unknown, maxLength = defaultMaxStringLength): string {
   if (value instanceof Error) {
-    return truncate(value.message, maxLength);
+    return safeString(safeGet(value, "message"), maxLength) ?? valueKind(value);
   }
 
   const message = safeString(safeGet(value, "message"), maxLength);
@@ -74,13 +74,16 @@ export function safeString(value: unknown, maxLength = defaultMaxStringLength): 
 
 export function safeStringArray(
   value: unknown,
-  maxLength: number
+  maxLength: number,
+  maxItems = defaultMaxObjectKeys
 ): ReadonlyArray<string> | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
 
-  return value.map((entry) => safeString(entry, maxLength) ?? String(entry));
+  return value
+    .slice(0, maxItems)
+    .map((entry) => safeString(entry, maxLength) ?? safeStringify(entry, maxLength));
 }
 
 export function valueKind(value: unknown): string {
@@ -99,18 +102,20 @@ export function valueKind(value: unknown): string {
   return typeof value;
 }
 
-export function truncate(value: string, maxLength: number): string {
-  if (value.length <= maxLength) {
-    return value;
+export function truncate(value: unknown, maxLength: number): string {
+  const stringValue = typeof value === "string" ? value : safeStringify(value, maxLength);
+
+  if (stringValue.length <= maxLength) {
+    return stringValue;
   }
 
-  return `${value.slice(0, Math.max(0, maxLength - 1))}…`;
+  return `${stringValue.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 
 function safePreviewAtDepth(
   value: unknown,
   options: NormalizedCauseSerializationOptions,
-  seen: WeakSet<object>,
+  activePath: WeakSet<object>,
   depth: number
 ): unknown {
   if (depth >= options.maxDepth) {
@@ -121,37 +126,41 @@ function safePreviewAtDepth(
     return safeScalar(value, options.maxStringLength);
   }
 
-  if (seen.has(value)) {
+  if (activePath.has(value)) {
     return "[Circular]";
   }
 
-  seen.add(value);
+  activePath.add(value);
 
-  if (value instanceof Error) {
-    return {
-      name: value.name,
-      message: truncate(value.message, options.maxStringLength),
-      stack: truncate(value.stack ?? "", options.maxStackLength),
-      cause: safePreviewAtDepth(safeGet(value, "cause"), options, seen, depth + 1),
-    };
+  try {
+    if (value instanceof Error) {
+      return {
+        name: errorName(value, options.maxStringLength),
+        message: safeMessage(value, options.maxStringLength),
+        stack: safeString(safeGet(value, "stack"), options.maxStackLength),
+        cause: safePreviewAtDepth(safeGet(value, "cause"), options, activePath, depth + 1),
+      };
+    }
+
+    if (Array.isArray(value)) {
+      return value
+        .slice(0, options.maxObjectKeys)
+        .map((entry) => safePreviewAtDepth(entry, options, activePath, depth + 1));
+    }
+
+    const output: Record<string, unknown> = {};
+    const keys = safeKeys(value).slice(0, options.maxObjectKeys);
+
+    for (const key of keys) {
+      output[key] = sensitiveKeyPattern.test(key)
+        ? "[Redacted]"
+        : safePreviewAtDepth(safeGet(value, key), options, activePath, depth + 1);
+    }
+
+    return output;
+  } finally {
+    activePath.delete(value);
   }
-
-  if (Array.isArray(value)) {
-    return value
-      .slice(0, options.maxObjectKeys)
-      .map((entry) => safePreviewAtDepth(entry, options, seen, depth + 1));
-  }
-
-  const output: Record<string, unknown> = {};
-  const keys = safeKeys(value).slice(0, options.maxObjectKeys);
-
-  for (const key of keys) {
-    output[key] = sensitiveKeyPattern.test(key)
-      ? "[Redacted]"
-      : safePreviewAtDepth(safeGet(value, key), options, seen, depth + 1);
-  }
-
-  return output;
 }
 
 function safeScalar(value: unknown, maxLength: number): unknown {
@@ -164,10 +173,18 @@ function safeScalar(value: unknown, maxLength: number): unknown {
   }
 
   if (typeof value === "bigint" || typeof value === "symbol" || typeof value === "function") {
-    return String(value);
+    return truncate(value, maxLength);
   }
 
   return value;
+}
+
+function safeStringify(value: unknown, maxLength: number): string {
+  try {
+    return truncate(String(value), maxLength);
+  } catch {
+    return "[Thrown while stringifying value]";
+  }
 }
 
 function safeKeys(value: object): ReadonlyArray<string> {

@@ -8,24 +8,22 @@ export interface ObserverFailure {
   readonly cause: unknown;
 }
 
-export interface ObserverChannelOptions<TValue> {
+export interface ObserverChannelOptions<TArgs extends ReadonlyArray<unknown>> {
   readonly channel: GraphObserverChannel;
   readonly reportFailure?:
-    | ((failure: ObserverFailure & { readonly value: TValue }) => Effect.Effect<void>)
+    | ((failure: ObserverFailure & { readonly value: TArgs }) => Effect.Effect<void>)
     | undefined;
 }
 
-export interface ObserverChannel<TObserver> {
+export interface ObserverChannel<TObserver, TArgs extends ReadonlyArray<unknown>> {
   readonly subscribe: (observer: TObserver) => Effect.Effect<GraphSubscription>;
-  readonly notifyAll: <TValue>(
-    value: TValue,
-    notify: (value: TValue, observer: TObserver) => Effect.Effect<void>
-  ) => Effect.Effect<void>;
+  readonly notifyAll: (...args: TArgs) => Effect.Effect<void>;
 }
 
-export function makeObserverChannel<TObserver, TValue = unknown>(
-  options?: ObserverChannelOptions<TValue> | undefined
-): ObserverChannel<TObserver> {
+export function makeObserverChannel<
+  TObserver extends (...args: TArgs) => Effect.Effect<void>,
+  TArgs extends ReadonlyArray<unknown>,
+>(options?: ObserverChannelOptions<TArgs> | undefined): ObserverChannel<TObserver, TArgs> {
   const observers = new Set<TObserver>();
 
   return {
@@ -38,15 +36,19 @@ export function makeObserverChannel<TObserver, TValue = unknown>(
           },
         };
       }),
-    notifyAll: (value, notify) =>
-      notifyProjectedObservers(observers, value, notify, (failedValue, _observer, cause) =>
-        options?.reportFailure === undefined
-          ? Effect.void
-          : options.reportFailure({
-              channel: options.channel,
-              value: failedValue as unknown as TValue,
-              cause,
-            })
+    notifyAll: (...args) =>
+      notifyProjectedObservers(
+        observers,
+        args,
+        (observedArgs, observer) => observer(...observedArgs),
+        (failedArgs, _observer, cause) =>
+          options?.reportFailure === undefined
+            ? Effect.void
+            : options.reportFailure({
+                channel: options.channel,
+                value: failedArgs,
+                cause,
+              })
       ),
   };
 }

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Data } from "effect";
 import { projectError } from "../src/diagnostics";
 import {
   AcquireFailed,
@@ -20,6 +21,31 @@ const cycleSecond = 'diagnostics/cycle-second:v1:"singleton"' as NodeId;
 const invalidKeyNode = "diagnostics/invalid-key:__invalid__:nan" as NodeId;
 
 describe("Frond diagnostics projection", () => {
+  test("user Key-prefixed tagged errors remain readiness failures", () => {
+    class KeyExpired extends Data.TaggedError("KeyExpired")<{
+      readonly message: string;
+    }> {}
+
+    const failure = new AcquireFailed({
+      nodeId: 'diagnostics/request:v1:"singleton"' as NodeId,
+      tag: "diagnostics/request",
+      cause: new KeyExpired({ message: "backend key expired" }),
+    });
+    const error = new FrondRuntimeReadError({
+      message: "Frond node readiness failed.",
+      nodeId: 'diagnostics/request:v1:"singleton"' as NodeId,
+      kind: "readiness",
+      cause: failure,
+    });
+    const projection = projectError(error);
+
+    expect(projection.kind).toBe("readiness");
+    expect(projection.headline).toBe("Readiness failed: KeyExpired");
+    expect(projection.headline).not.toBe("Invalid node key");
+    expect(projection.rootTag).toBe("KeyExpired");
+    expect(projection.rootMessage).toBe("backend key expired");
+  });
+
   test("cycle read error projects to actionable invalid graph summary", () => {
     const cycle = new CycleDetected({
       nodeId: cycleFirst,

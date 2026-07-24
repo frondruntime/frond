@@ -1,25 +1,15 @@
 import { Clock, Effect } from "effect";
-import { phaseArgs, phaseReadyData, projectCellPhase } from "../cell/cellPhase";
-import { makeDriverContext } from "../driverExecution/driverContext";
-import {
-  recoverDriverOperationFailure,
-  runTimedDriverOperation,
-} from "../driverExecution/driverOperationRunner";
-import { interruptDriverOperation, makeOperationDisposers } from "../lifecycle/operationDisposers";
-import type { GraphNodeCell } from "../planning/plan";
-import { effectiveResultValidity, type ResultState } from "../resultValidity";
+import type { GraphNodeCell } from "../cell/cellModel";
+import { phaseReadyData, projectCellPhase } from "../cell/cellPhase";
+import { effectiveResultValidity } from "../resultValidity";
 import {
   GraphInvariantViolation,
   type RefreshRequest,
   type RefreshResult,
   ResultExpired,
 } from "../types";
-import {
-  collectDependencyValues,
-  type GraphOperationEnvironment,
-  refreshDependencyValue,
-} from "./dependencies";
-import { appendOperationDisposers, commitReadyOperationResult } from "./operationCommit";
+import type { GraphOperationEnvironment } from "./dependencies";
+import { runReadyDriverOperation } from "./driverOperationSkeleton";
 import { makeRefreshFailure } from "./operationFailures";
 import { runBackgroundOperation } from "./operationState";
 
@@ -62,7 +52,6 @@ export function runRefreshDriver(
       );
     }
     const readyData = ready.ready;
-    const readyNode = readyData.node;
     const clock = yield* Clock.Clock;
     const resultValidity = effectiveResultValidity(
       readyData.resultValidity,
@@ -93,99 +82,38 @@ export function runRefreshDriver(
       } satisfies RefreshResult;
     }
 
-    const depsResult = yield* collectDependencyValues(env, cell).pipe(
-      Effect.match({
-        onFailure: (cause) => ({ _tag: "Failure", cause }) as const,
-        onSuccess: (deps) => ({ _tag: "Success", deps }) as const,
-      })
-    );
-
-    if (depsResult._tag === "Failure") {
-      return makeRefreshFailure(cell, request, depsResult.cause);
-    }
-
-    const abortController = new AbortController();
-    const refreshDisposers = makeOperationDisposers(cell, env.state.notifyCleanupFailures);
-    let currentResultState: ResultState = {
-      result: readyData.result,
-      resultLoadedAt: readyData.resultLoadedAt,
-      resultValidity: readyData.resultValidity,
-      resultValidityCommit: "default",
-    };
-
-    const ctx = makeDriverContext({
+    return yield* runReadyDriverOperation<unknown, RefreshResult>({
+      env,
       cell,
-      node: readyNode,
-      args: phaseArgs(current.phase),
-      deps: depsResult.deps,
-      abortController,
-      disposers: refreshDisposers,
-      signals: env.signals,
-      refreshDep: (dependencyName) => refreshDependencyValue(env, cell, dependencyName),
-      now: () => clock.currentTimeMillisUnsafe(),
-      getCurrentResultState: () => currentResultState,
-      setCurrentResultState: (next) => {
-        currentResultState = next;
+      phase: current.phase,
+      readyData,
+      operation: "refresh",
+      boundary: "driver-refresh",
+      timeout: env.driverTimeouts.refresh,
+      disposerReason: "refresh",
+      spanName: "frond.graph.refresh.driver",
+      spanAttributes: {
+        ...env.runtimeSpanAttributes,
+        "frond.node.id": cell.nodeId,
+        "frond.node.tag": cell.tag,
+        "frond.driver.mode": cell.descriptor.driver.mode,
       },
-      cloneResultOnPatch: true,
+      commitInput: ({ value, currentResultState, now }) => ({
+        context: cell,
+        returned: value,
+        staged: currentResultState,
+        defaultLoadedAt: now(),
+      }),
+      previousValidity: readyData.resultValidity,
+      validityReason: "refresh",
+      run: (ctx) => refresh.run(ctx),
+      makeFailure: (cause) => makeRefreshFailure(cell, request, cause),
+      makeSuccess: ({ committedResultState }) =>
+        ({
+          _tag: "Success",
+          nodeId: cell.nodeId,
+          value: committedResultState.result,
+        }) satisfies RefreshResult,
     });
-
-    return yield* recoverDriverOperationFailure(
-      runTimedDriverOperation({
-        cell,
-        operation: "refresh",
-        boundary: "driver-refresh",
-        timeout: env.driverTimeouts.refresh,
-        abortController,
-        spanName: "frond.graph.refresh.driver",
-        spanAttributes: {
-          ...env.runtimeSpanAttributes,
-          "frond.node.id": cell.nodeId,
-          "frond.node.tag": cell.tag,
-          "frond.driver.mode": cell.descriptor.driver.mode,
-        },
-        run: () => refresh.run(ctx),
-      }).pipe(
-        Effect.matchEffect({
-          onFailure: (cause) =>
-            Effect.gen(function* () {
-              yield* appendOperationDisposers(cell, refreshDisposers.take("refresh"));
-              return makeRefreshFailure(cell, request, cause);
-            }),
-          onSuccess: (value) =>
-            Effect.gen(function* () {
-              yield* commitReadyOperationResult({
-                cell,
-                node: readyNode,
-                deps: depsResult.deps,
-                resultState: currentResultState,
-                previousValidity: readyData.resultValidity,
-                validityReason: "refresh",
-                operationDisposers: refreshDisposers.take("refresh"),
-              });
-
-              return {
-                _tag: "Success",
-                nodeId: cell.nodeId,
-                value,
-              } satisfies RefreshResult;
-            }),
-        }),
-        Effect.onInterrupt(() =>
-          interruptDriverOperation({
-            cell,
-            abortController,
-            disposers: refreshDisposers,
-            notifyCleanupFailures: env.state.notifyCleanupFailures,
-          })
-        )
-      ),
-      "driver-refresh",
-      (cause) =>
-        Effect.gen(function* () {
-          yield* appendOperationDisposers(cell, refreshDisposers.take("refresh"));
-          return makeRefreshFailure(cell, request, cause);
-        })
-    );
   });
 }
