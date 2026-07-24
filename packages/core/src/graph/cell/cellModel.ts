@@ -25,6 +25,10 @@ import type { GraphCellState, GraphCellStateReader } from "./cellState";
 export interface GraphPlanState {
   readonly nodes: Map<NodeId, GraphNodeCell>;
   readonly edges: Map<string, EdgeSnapshot>;
+  // Last committed revision of each evicted cell, keyed by node id. A recreated
+  // cell seeds its revision past this so `readVersion` stays monotonic across
+  // evict + recreate for the same node identity instead of ABA-ing back to 0.
+  readonly evictedRevisionByNodeId: Map<NodeId, number>;
   readonly specByTag: Map<string, unknown>;
   readonly specOverrides: ReadonlyMap<unknown, unknown>;
   readonly driverTimeouts: DriverOperationTimeouts;

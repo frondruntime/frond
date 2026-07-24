@@ -79,6 +79,8 @@ interface NodeSnapshotBase {
   readonly key: NodeKey;
   readonly label: string;
   // Monotonic per-node revision that bumps on every committed cell-state write.
+  // Monotonic across cell incarnations too: a recreated cell seeds its revision
+  // past the evicted predecessor's for the same node id within one runtime.
   readonly revision: number;
   readonly status: NodeStatus;
   readonly resultValidity?: ResultValidity | undefined;
