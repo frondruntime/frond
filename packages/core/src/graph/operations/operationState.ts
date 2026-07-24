@@ -9,6 +9,7 @@ import {
 import {
   GraphInvariantViolation,
   type GraphOperationStarted,
+  NodeEvicted,
   type NodeOperation,
   type NodeOperationKind,
   type RunningActionOperation,
@@ -66,6 +67,25 @@ export function runBackgroundOperation<A extends BackgroundOperationResult>(
               cause,
             })
           ).pipe(Effect.flatMap(() => Effect.failCause(cause)))
+        ),
+        // Interruption bypasses both the success flatMap and catchCause. Without
+        // this finalizer an interrupted worker leaves the phase Operating forever:
+        // the stale entry blocks nothing (later ops guard by operation identity)
+        // but the projection reads Running and Ready-gated behaviors such as
+        // expired-validity invalidation stay disabled for the node.
+        Effect.onInterrupt(() =>
+          failNodeOperation(
+            cell,
+            operation,
+            new NodeEvicted({
+              nodeId: cell.nodeId,
+              tag: cell.tag,
+              cancellation: {
+                _tag: "Interrupted",
+                detail: `${kind} operation interrupted before settling`,
+              },
+            })
+          )
         )
       )
     )
