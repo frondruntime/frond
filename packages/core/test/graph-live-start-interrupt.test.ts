@@ -19,6 +19,7 @@ async function waitFor(condition: () => boolean, timeoutMs = 500): Promise<void>
 }
 
 type GatedLiveSpec = NodeSpec<{
+  readonly mode: "async";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;

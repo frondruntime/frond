@@ -12,6 +12,7 @@ import {
 } from "./graphTestFixtures";
 
 type LifetimeSpec = NodeSpec<{
+  readonly mode: "async";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
