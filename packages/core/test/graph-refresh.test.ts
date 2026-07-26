@@ -67,13 +67,14 @@ describe("graph refresh", () => {
 
   test("missing refresh is a no-op success for ready nodes", async () => {
     type NoopRefreshSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class NoopRefreshNode extends NodeBase<NoopRefreshSpec, "effect"> {
+    class NoopRefreshNode extends NodeBase<NoopRefreshSpec> {
       static readonly spec = resourceSpec.effect<NoopRefreshSpec>({
         tag: "resources/noop-refresh",
         key: () => Key.singleton(),
@@ -109,13 +110,14 @@ describe("graph refresh", () => {
   test("refresh does not propagate to dependencies unless the driver asks for it", async () => {
     let childRefreshes = 0;
     type ChildSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: number };
     }>;
 
-    class ChildNode extends NodeBase<ChildSpec, "effect"> {
+    class ChildNode extends NodeBase<ChildSpec> {
       static readonly spec = serviceSpec.effect<ChildSpec>({
         tag: "services/no-implicit-refresh-child",
         key: () => Key.singleton(),
@@ -131,6 +133,7 @@ describe("graph refresh", () => {
     }
 
     type ParentSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -139,7 +142,7 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class ParentNode extends NodeBase<ParentSpec, "effect"> {
+    class ParentNode extends NodeBase<ParentSpec> {
       static readonly spec = resourceSpec.effect<ParentSpec>({
         tag: "resources/no-implicit-refresh-parent",
         key: () => Key.singleton(),
@@ -181,13 +184,14 @@ describe("graph refresh", () => {
   test("driver refreshDep refreshes one direct dependency and returns the refreshed node", async () => {
     let childRefreshes = 0;
     type ChildSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: number };
     }>;
 
-    class ChildNode extends NodeBase<ChildSpec, "effect"> {
+    class ChildNode extends NodeBase<ChildSpec> {
       static readonly spec = serviceSpec.effect<ChildSpec>({
         tag: "services/explicit-refresh-child",
         key: () => Key.singleton(),
@@ -203,6 +207,7 @@ describe("graph refresh", () => {
     }
 
     type ParentSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -211,7 +216,7 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class ParentNode extends NodeBase<ParentSpec, "effect"> {
+    class ParentNode extends NodeBase<ParentSpec> {
       static readonly spec = resourceSpec.effect<ParentSpec>({
         tag: "resources/explicit-refresh-parent",
         key: () => Key.singleton(),
@@ -251,13 +256,14 @@ describe("graph refresh", () => {
 
   test("refresh failure keeps ready result and does not set acquire failure", async () => {
     type FailingRefreshSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class FailingRefreshNode extends NodeBase<FailingRefreshSpec, "effect"> {
+    class FailingRefreshNode extends NodeBase<FailingRefreshSpec> {
       static readonly spec = resourceSpec.effect<FailingRefreshSpec>({
         tag: "resources/failing-refresh",
         key: () => Key.singleton(),
@@ -295,13 +301,14 @@ describe("graph refresh", () => {
   test("refresh defects preserve Effect cause in refresh failure", async () => {
     const cause = new TypeError("refresh died");
     type DefectRefreshSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class DefectRefreshNode extends NodeBase<DefectRefreshSpec, "effect"> {
+    class DefectRefreshNode extends NodeBase<DefectRefreshSpec> {
       static readonly spec = resourceSpec.effect<DefectRefreshSpec>({
         tag: "resources/refresh-defect",
         key: () => Key.singleton(),
@@ -334,13 +341,14 @@ describe("graph refresh", () => {
     const cause = new TypeError("refresh disposer defect");
     let disposed = 0;
     type DisposingRefreshSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class DisposingRefreshNode extends NodeBase<DisposingRefreshSpec, "effect"> {
+    class DisposingRefreshNode extends NodeBase<DisposingRefreshSpec> {
       static readonly spec = resourceSpec.effect<DisposingRefreshSpec>({
         tag: "resources/refresh-defect-disposer",
         key: () => Key.singleton(),
@@ -377,13 +385,14 @@ describe("graph refresh", () => {
 
   test("refresh failure rolls back staged result patches", async () => {
     type FailingPatchRefreshSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { value: string };
     }>;
 
-    class FailingPatchRefreshNode extends NodeBase<FailingPatchRefreshSpec, "effect"> {
+    class FailingPatchRefreshNode extends NodeBase<FailingPatchRefreshSpec> {
       static readonly spec = resourceSpec.effect<FailingPatchRefreshSpec>({
         tag: "resources/failing-patch-refresh",
         key: () => Key.singleton(),
@@ -421,13 +430,14 @@ describe("graph refresh", () => {
     const refreshStarted = await Effect.runPromise(Deferred.make<void>());
     const refreshGate = await Effect.runPromise(Deferred.make<void>());
     type SlowRefreshSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class SlowRefreshNode extends NodeBase<SlowRefreshSpec, "effect"> {
+    class SlowRefreshNode extends NodeBase<SlowRefreshSpec> {
       static readonly spec = resourceSpec.effect<SlowRefreshSpec>({
         tag: "resources/slow-refresh-operation",
         key: () => Key.singleton(),
@@ -480,13 +490,14 @@ describe("graph refresh", () => {
     const refreshGate = await Effect.runPromise(Deferred.make<void>());
     let refreshCount = 0;
     type SlowRefreshSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class SlowRefreshNode extends NodeBase<SlowRefreshSpec, "effect"> {
+    class SlowRefreshNode extends NodeBase<SlowRefreshSpec> {
       static readonly spec = resourceSpec.effect<SlowRefreshSpec>({
         tag: "resources/refresh-singleflight",
         key: () => Key.singleton(),
@@ -531,13 +542,14 @@ describe("graph refresh", () => {
     const refreshStarted = await Effect.runPromise(Deferred.make<void>());
     const refreshGate = await Effect.runPromise(Deferred.make<void>());
     type SlowRefreshSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class SlowRefreshNode extends NodeBase<SlowRefreshSpec, "effect"> {
+    class SlowRefreshNode extends NodeBase<SlowRefreshSpec> {
       static readonly spec = resourceSpec.effect<SlowRefreshSpec>({
         tag: "resources/refresh-admission",
         key: () => Key.singleton(),
@@ -582,13 +594,14 @@ describe("graph refresh", () => {
   test("refresh after an active refresh settles starts new work", async () => {
     let refreshCount = 0;
     type RefreshAgainSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class RefreshAgainNode extends NodeBase<RefreshAgainSpec, "effect"> {
+    class RefreshAgainNode extends NodeBase<RefreshAgainSpec> {
       static readonly spec = resourceSpec.effect<RefreshAgainSpec>({
         tag: "resources/refresh-again",
         key: () => Key.singleton(),
@@ -629,6 +642,7 @@ describe("graph refresh", () => {
     let refreshCount = 0;
 
     type NeverAwaitedRefreshSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -686,6 +700,7 @@ describe("graph refresh", () => {
     let refreshCount = 0;
 
     type InterruptedRefreshAdmissionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -739,13 +754,14 @@ describe("graph refresh", () => {
     const refreshGate = await Effect.runPromise(Deferred.make<void>());
     let refreshCount = 0;
     type FailingSingleflightSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class FailingSingleflightNode extends NodeBase<FailingSingleflightSpec, "effect"> {
+    class FailingSingleflightNode extends NodeBase<FailingSingleflightSpec> {
       static readonly spec = resourceSpec.effect<FailingSingleflightSpec>({
         tag: "resources/failing-refresh-singleflight",
         key: () => Key.singleton(),
@@ -800,13 +816,14 @@ describe("graph refresh", () => {
     let activeRefreshes = 0;
     let maxActiveRefreshes = 0;
     type MultiRefreshSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly id: string };
       readonly key: Key.Structure<{ readonly id: string }>;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class MultiRefreshNode extends NodeBase<MultiRefreshSpec, "effect"> {
+    class MultiRefreshNode extends NodeBase<MultiRefreshSpec> {
       static readonly spec = resourceSpec.effect<MultiRefreshSpec>({
         tag: "resources/per-node-refresh-singleflight",
         key: (args) => Key.structure({ id: args.id }),
@@ -881,6 +898,7 @@ describe("graph refresh", () => {
     const actionGate = await Effect.runPromise(Deferred.make<void>());
     const order: Array<string> = [];
     type RefreshOrderSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -890,7 +908,7 @@ describe("graph refresh", () => {
       };
     }>;
 
-    class RefreshOrderNode extends NodeBase<RefreshOrderSpec, "effect"> {
+    class RefreshOrderNode extends NodeBase<RefreshOrderSpec> {
       static readonly spec = resourceSpec.effect<RefreshOrderSpec>({
         tag: "resources/refresh-order",
         key: () => Key.singleton(),
@@ -956,13 +974,14 @@ describe("graph refresh", () => {
     let childRefreshes = 0;
 
     type ChildSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: number };
     }>;
 
-    class ChildNode extends NodeBase<ChildSpec, "effect"> {
+    class ChildNode extends NodeBase<ChildSpec> {
       static readonly spec = serviceSpec.effect<ChildSpec>({
         tag: "services/refresh-dep-admission-child",
         key: () => Key.singleton(),
@@ -980,6 +999,7 @@ describe("graph refresh", () => {
     }
 
     type ParentSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly id: string };
       readonly key: Key.Structure<{ readonly id: string }>;
       readonly deps: {
@@ -988,7 +1008,7 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class ParentNode extends NodeBase<ParentSpec, "effect"> {
+    class ParentNode extends NodeBase<ParentSpec> {
       static readonly spec = resourceSpec.effect<ParentSpec>({
         tag: "resources/refresh-dep-admission-parent",
         key: (args) => Key.structure({ id: args.id }),
@@ -1037,13 +1057,14 @@ describe("graph refresh", () => {
 
   test("driver refreshDep failure becomes a dependency refresh failure", async () => {
     type ChildSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class ChildNode extends NodeBase<ChildSpec, "effect"> {
+    class ChildNode extends NodeBase<ChildSpec> {
       static readonly spec = serviceSpec.effect<ChildSpec>({
         tag: "services/refresh-dep-failure-child",
         key: () => Key.singleton(),
@@ -1054,6 +1075,7 @@ describe("graph refresh", () => {
     }
 
     type ParentSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -1062,7 +1084,7 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class ParentNode extends NodeBase<ParentSpec, "effect"> {
+    class ParentNode extends NodeBase<ParentSpec> {
       static readonly spec = resourceSpec.effect<ParentSpec>({
         tag: "resources/refresh-dep-failure-parent",
         key: () => Key.singleton(),
@@ -1102,13 +1124,14 @@ describe("graph refresh", () => {
 
   test("driver refreshDep rejects undeclared dependency names as graph invariants", async () => {
     type ParentSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class ParentNode extends NodeBase<ParentSpec, "effect"> {
+    class ParentNode extends NodeBase<ParentSpec> {
       static readonly spec = resourceSpec.effect<ParentSpec>({
         tag: "resources/refresh-dep-invalid-name",
         key: () => Key.singleton(),
@@ -1139,13 +1162,14 @@ describe("graph refresh", () => {
 
   test("refresh dependency value collection aggregates multiple dependency failures", async () => {
     type LeftSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class LeftNode extends NodeBase<LeftSpec, "effect"> {
+    class LeftNode extends NodeBase<LeftSpec> {
       static readonly spec = serviceSpec.effect<LeftSpec>({
         tag: "services/refresh-aggregate-left",
         key: () => Key.singleton(),
@@ -1155,13 +1179,14 @@ describe("graph refresh", () => {
     }
 
     type RightSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class RightNode extends NodeBase<RightSpec, "effect"> {
+    class RightNode extends NodeBase<RightSpec> {
       static readonly spec = serviceSpec.effect<RightSpec>({
         tag: "services/refresh-aggregate-right",
         key: () => Key.singleton(),
@@ -1171,6 +1196,7 @@ describe("graph refresh", () => {
     }
 
     type ParentSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -1180,7 +1206,7 @@ describe("graph refresh", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class ParentNode extends NodeBase<ParentSpec, "effect"> {
+    class ParentNode extends NodeBase<ParentSpec> {
       static readonly spec = resourceSpec.effect<ParentSpec>({
         tag: "resources/refresh-aggregate-parent",
         key: () => Key.singleton(),
@@ -1232,13 +1258,14 @@ describe("graph refresh", () => {
 
   test("refresh timeout keeps old result and records operation failure", async () => {
     type RefreshTimeoutSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class RefreshTimeoutNode extends NodeBase<RefreshTimeoutSpec, "effect"> {
+    class RefreshTimeoutNode extends NodeBase<RefreshTimeoutSpec> {
       static readonly spec = resourceSpec.effect<RefreshTimeoutSpec>({
         tag: "resources/refresh-timeout",
         key: () => Key.singleton(),

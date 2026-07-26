@@ -16,6 +16,7 @@ import {
 } from "./graphTestFixtures";
 
 type SingletonSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -28,7 +29,7 @@ describe("bounded async disposers", () => {
   test("later disposers still run in reverse order after an earlier one times out", async () => {
     const runs: Array<string> = [];
 
-    class TimeoutOrderNode extends NodeBase<SingletonSpec, "effect"> {
+    class TimeoutOrderNode extends NodeBase<SingletonSpec> {
       static readonly spec = serviceSpec.effect<SingletonSpec>({
         tag: "services/disposer-timeout-order",
         key: () => Key.singleton(),
@@ -72,7 +73,7 @@ describe("bounded async disposers", () => {
   });
 
   test("eviction completes and removes graph records with a never-settling disposer", async () => {
-    class HangingDisposerNode extends NodeBase<SingletonSpec, "effect"> {
+    class HangingDisposerNode extends NodeBase<SingletonSpec> {
       static readonly spec = serviceSpec.effect<SingletonSpec>({
         tag: "services/evict-hanging-disposer",
         key: () => Key.singleton(),
@@ -106,7 +107,7 @@ describe("bounded async disposers", () => {
   });
 
   test("runtime stop completes with a never-settling disposer and reports the timeout", async () => {
-    class StopHangingDisposerNode extends NodeBase<SingletonSpec, "effect"> {
+    class StopHangingDisposerNode extends NodeBase<SingletonSpec> {
       static readonly spec = serviceSpec.effect<SingletonSpec>({
         tag: "services/stop-hanging-disposer",
         key: () => Key.singleton(),
@@ -136,7 +137,7 @@ describe("bounded async disposers", () => {
   test("runtime stop completes when an interrupted acquire holds a never-settling disposer", async () => {
     const started = await Effect.runPromise(Deferred.make<void>());
 
-    class InterruptedAcquireNode extends NodeBase<SingletonSpec, "effect"> {
+    class InterruptedAcquireNode extends NodeBase<SingletonSpec> {
       static readonly spec = serviceSpec.effect<SingletonSpec>({
         tag: "services/interrupted-acquire-disposer",
         key: () => Key.singleton(),
@@ -165,7 +166,7 @@ describe("bounded async disposers", () => {
   });
 
   test("timed-out disposer surfaces DisposerFailed with a DisposerTimedOut cause, not ReleaseFailed", async () => {
-    class TaxonomyNode extends NodeBase<SingletonSpec, "effect"> {
+    class TaxonomyNode extends NodeBase<SingletonSpec> {
       static readonly spec = serviceSpec.effect<SingletonSpec>({
         tag: "services/disposer-timeout-taxonomy",
         key: () => Key.singleton(),
@@ -210,7 +211,7 @@ describe("bounded async disposers", () => {
       runs += 1;
     };
 
-    class SharedDisposerNode extends NodeBase<SingletonSpec, "effect"> {
+    class SharedDisposerNode extends NodeBase<SingletonSpec> {
       static readonly spec = serviceSpec.effect<SingletonSpec>({
         tag: "services/shared-disposer-once",
         key: () => Key.singleton(),
@@ -250,7 +251,7 @@ describe("bounded async disposers", () => {
     const events: Array<string> = [];
     let bag: DisposerBag | undefined;
 
-    class LateRegistrationNode extends NodeBase<SingletonSpec, "effect"> {
+    class LateRegistrationNode extends NodeBase<SingletonSpec> {
       static readonly spec = serviceSpec.effect<SingletonSpec>({
         tag: "services/late-teardown-disposer",
         key: () => Key.singleton(),
@@ -298,7 +299,7 @@ describe("bounded async disposers", () => {
     let bag: DisposerBag | undefined;
     let lateRan = false;
 
-    class PostTeardownNode extends NodeBase<SingletonSpec, "effect"> {
+    class PostTeardownNode extends NodeBase<SingletonSpec> {
       static readonly spec = serviceSpec.effect<SingletonSpec>({
         tag: "services/post-teardown-disposer",
         key: () => Key.singleton(),

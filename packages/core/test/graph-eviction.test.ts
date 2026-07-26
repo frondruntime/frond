@@ -76,13 +76,14 @@ describe("graph eviction", () => {
   test("eviction interrupts active acquire and removes the graph record", async () => {
     const started = await Effect.runPromise(Deferred.make<void>());
     type HangingSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class HangingNode extends NodeBase<HangingSpec, "effect"> {
+    class HangingNode extends NodeBase<HangingSpec> {
       static readonly spec = serviceSpec.effect<HangingSpec>({
         tag: "services/evict-hanging",
         key: () => Key.singleton(),
@@ -131,13 +132,14 @@ describe("graph eviction", () => {
     let disposerRuns = 0;
     let lateDisposerRuns = 0;
     type InterruptedAcquireSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class InterruptedAcquireNode extends NodeBase<InterruptedAcquireSpec, "effect"> {
+    class InterruptedAcquireNode extends NodeBase<InterruptedAcquireSpec> {
       static readonly spec = serviceSpec.effect<InterruptedAcquireSpec>({
         tag: "services/evict-interrupted-acquire",
         key: () => Key.singleton(),
@@ -193,13 +195,14 @@ describe("graph eviction", () => {
     let refreshSignal: AbortSignal | undefined;
     let refreshDisposerRuns = 0;
     type InterruptedRefreshSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class InterruptedRefreshNode extends NodeBase<InterruptedRefreshSpec, "effect"> {
+    class InterruptedRefreshNode extends NodeBase<InterruptedRefreshSpec> {
       static readonly spec = serviceSpec.effect<InterruptedRefreshSpec>({
         tag: "services/evict-interrupted-refresh",
         key: () => Key.singleton(),
@@ -247,6 +250,7 @@ describe("graph eviction", () => {
     let actionSignal: AbortSignal | undefined;
     let actionDisposerRuns = 0;
     type InterruptedActionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -256,7 +260,7 @@ describe("graph eviction", () => {
       };
     }>;
 
-    class InterruptedActionNode extends NodeBase<InterruptedActionSpec, "effect"> {
+    class InterruptedActionNode extends NodeBase<InterruptedActionSpec> {
       static readonly spec = serviceSpec.effect<InterruptedActionSpec>({
         tag: "services/evict-interrupted-action",
         key: () => Key.singleton(),
@@ -307,13 +311,14 @@ describe("graph eviction", () => {
     const refreshStarted = await Effect.runPromise(Deferred.make<void>());
     const refreshGate = await Effect.runPromise(Deferred.make<void>());
     type RefreshSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class RefreshNode extends NodeBase<RefreshSpec, "effect"> {
+    class RefreshNode extends NodeBase<RefreshSpec> {
       static readonly spec = serviceSpec.effect<RefreshSpec>({
         tag: "services/evict-refresh",
         key: () => Key.singleton(),
@@ -369,6 +374,7 @@ describe("graph eviction", () => {
     const actionStarted = await Effect.runPromise(Deferred.make<void>());
     const actionGate = await Effect.runPromise(Deferred.make<void>());
     type ActionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -378,7 +384,7 @@ describe("graph eviction", () => {
       };
     }>;
 
-    class ActionNode extends NodeBase<ActionSpec, "effect"> {
+    class ActionNode extends NodeBase<ActionSpec> {
       static readonly spec = serviceSpec.effect<ActionSpec>({
         tag: "services/evict-action",
         key: () => Key.singleton(),
@@ -435,13 +441,14 @@ describe("graph eviction", () => {
     const refreshStarted = await Effect.runPromise(Deferred.make<void>());
     const refreshGate = await Effect.runPromise(Deferred.make<void>());
     type ArgsSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly page: number };
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly page: number };
     }>;
 
-    class ArgsNode extends NodeBase<ArgsSpec, "effect"> {
+    class ArgsNode extends NodeBase<ArgsSpec> {
       static readonly spec = serviceSpec.effect<ArgsSpec>({
         tag: "services/evict-args",
         key: () => Key.singleton(),
@@ -499,13 +506,14 @@ describe("graph eviction", () => {
     let childAttempts = 0;
 
     type EvictedDependencySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class EvictedDependencyNode extends NodeBase<EvictedDependencySpec, "effect"> {
+    class EvictedDependencyNode extends NodeBase<EvictedDependencySpec> {
       static readonly spec = serviceSpec.effect<EvictedDependencySpec>({
         tag: "services/evict-dependency-child",
         key: () => Key.singleton(),
@@ -521,6 +529,7 @@ describe("graph eviction", () => {
     }
 
     type EvictedDependencyRootSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -529,7 +538,7 @@ describe("graph eviction", () => {
       readonly result: string;
     }>;
 
-    class EvictedDependencyRoot extends NodeBase<EvictedDependencyRootSpec, "effect"> {
+    class EvictedDependencyRoot extends NodeBase<EvictedDependencyRootSpec> {
       static readonly spec = resourceSpec.effect<EvictedDependencyRootSpec>({
         tag: "resources/evict-dependency-root",
         key: () => Key.singleton(),
@@ -575,6 +584,7 @@ describe("graph eviction", () => {
     let childDisposerRuns = 0;
 
     type DependencySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -600,6 +610,7 @@ describe("graph eviction", () => {
     }
 
     type DependentSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -686,13 +697,14 @@ describe("graph eviction", () => {
 
   test("invalid planned nodes can be evicted", async () => {
     type InvalidKeySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly value: number };
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class InvalidKeyNode extends NodeBase<InvalidKeySpec, "effect"> {
+    class InvalidKeyNode extends NodeBase<InvalidKeySpec> {
       static readonly spec = serviceSpec.effect<InvalidKeySpec>({
         tag: "services/evict-invalid",
         key: (args) => ({ value: args.value }) as never,
@@ -717,12 +729,13 @@ describe("graph eviction", () => {
 
   test("orders evicted nodes by dependency depth in a chain", async () => {
     type DepthLeafSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
-    class DepthLeafNode extends NodeBase<DepthLeafSpec, "effect"> {
+    class DepthLeafNode extends NodeBase<DepthLeafSpec> {
       static readonly spec = serviceSpec.effect<DepthLeafSpec>({
         tag: "services/depth-leaf",
         key: () => Key.singleton(),
@@ -731,12 +744,13 @@ describe("graph eviction", () => {
       });
     }
     type DepthMidSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: { readonly leaf: Dep<typeof DepthLeafNode> };
       readonly result: string;
     }>;
-    class DepthMidNode extends NodeBase<DepthMidSpec, "effect"> {
+    class DepthMidNode extends NodeBase<DepthMidSpec> {
       static readonly spec = resourceSpec.effect<DepthMidSpec>({
         tag: "resources/depth-mid",
         key: () => Key.singleton(),
@@ -745,12 +759,13 @@ describe("graph eviction", () => {
       });
     }
     type DepthTopSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: { readonly mid: Dep<typeof DepthMidNode> };
       readonly result: string;
     }>;
-    class DepthTopNode extends NodeBase<DepthTopSpec, "effect"> {
+    class DepthTopNode extends NodeBase<DepthTopSpec> {
       static readonly spec = resourceSpec.effect<DepthTopSpec>({
         tag: "resources/depth-top",
         key: () => Key.singleton(),
@@ -788,12 +803,13 @@ describe("graph eviction", () => {
 
   test("orders a diamond subgraph by dependency depth", async () => {
     type DiamondLeafSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
-    class DiamondLeafNode extends NodeBase<DiamondLeafSpec, "effect"> {
+    class DiamondLeafNode extends NodeBase<DiamondLeafSpec> {
       static readonly spec = serviceSpec.effect<DiamondLeafSpec>({
         tag: "services/diamond-leaf",
         key: () => Key.singleton(),
@@ -802,13 +818,14 @@ describe("graph eviction", () => {
       });
     }
     type DiamondSideSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: { readonly leaf: Dep<typeof DiamondLeafNode> };
       readonly result: string;
     }>;
     const diamondSide = (tag: string) =>
-      class extends NodeBase<DiamondSideSpec, "effect"> {
+      class extends NodeBase<DiamondSideSpec> {
         static readonly spec = resourceSpec.effect<DiamondSideSpec>({
           tag,
           key: () => Key.singleton(),
@@ -819,6 +836,7 @@ describe("graph eviction", () => {
     const DiamondLeftNode = diamondSide("resources/diamond-left");
     const DiamondRightNode = diamondSide("resources/diamond-right");
     type DiamondTopSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -827,7 +845,7 @@ describe("graph eviction", () => {
       };
       readonly result: string;
     }>;
-    class DiamondTopNode extends NodeBase<DiamondTopSpec, "effect"> {
+    class DiamondTopNode extends NodeBase<DiamondTopSpec> {
       static readonly spec = resourceSpec.effect<DiamondTopSpec>({
         tag: "resources/diamond-top",
         key: () => Key.singleton(),
@@ -872,13 +890,14 @@ describe("graph eviction", () => {
 
   test("release timeout during eviction returns cleanup failure and removes graph records", async () => {
     type HangingReleaseSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class HangingReleaseNode extends NodeBase<HangingReleaseSpec, "effect"> {
+    class HangingReleaseNode extends NodeBase<HangingReleaseSpec> {
       static readonly spec = serviceSpec.effect<HangingReleaseSpec>({
         tag: "services/evict-hanging-release",
         key: () => Key.singleton(),

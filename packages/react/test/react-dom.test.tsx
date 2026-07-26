@@ -50,6 +50,7 @@ type Profile = {
 type EmptyArgs = Record<string, never>;
 
 type StringSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: EmptyArgs;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -57,6 +58,7 @@ type StringSpec = NodeSpec<{
 }>;
 
 type ProfileSpec<TArgs = EmptyArgs, TKey = Key.Singleton> = NodeSpec<{
+  readonly mode: "effect";
   readonly args: TArgs;
   readonly key: TKey;
   readonly deps: Record<string, never>;
@@ -65,7 +67,7 @@ type ProfileSpec<TArgs = EmptyArgs, TKey = Key.Singleton> = NodeSpec<{
 
 describe("React DOM adapter", () => {
   test("TestFrondProvider supplies a harness runtime and respects spec overrides", async () => {
-    class TestingProviderNode extends NodeBase<StringSpec, "effect"> {
+    class TestingProviderNode extends NodeBase<StringSpec> {
       static readonly spec = resourceSpec.effect<StringSpec>({
         tag: "react-dom/resources/testing-provider",
         key: () => Key.singleton(),
@@ -318,7 +320,7 @@ describe("React DOM adapter", () => {
   test("suspends cold nodes and renders the ready graph-owned node", async () => {
     const gate = await Effect.runPromise(Deferred.make<Profile>());
 
-    class DomProfileNode extends NodeBase<ProfileSpec, "effect"> {
+    class DomProfileNode extends NodeBase<ProfileSpec> {
       static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/profile",
         key: () => Key.singleton(),
@@ -370,6 +372,7 @@ describe("React DOM adapter", () => {
 
   test("renders a ready node with canonical args larger than the key size cap", async () => {
     type LargeArgsSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly payload: string };
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -492,7 +495,7 @@ describe("React DOM adapter", () => {
     const gate = await Effect.runPromise(Deferred.make<Profile>());
     let acquireCount = 0;
 
-    class StrictColdBootNode extends NodeBase<ProfileSpec, "effect"> {
+    class StrictColdBootNode extends NodeBase<ProfileSpec> {
       static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/strict-cold-boot",
         key: () => Key.singleton(),
@@ -552,7 +555,7 @@ describe("React DOM adapter", () => {
     const consoleError = spyOn(console, "error").mockImplementation(() => {});
 
     try {
-      class ExpiredProfileNode extends NodeBase<ProfileSpec, "effect"> {
+      class ExpiredProfileNode extends NodeBase<ProfileSpec> {
         static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/expired-profile",
           key: () => Key.singleton(),
@@ -631,7 +634,7 @@ describe("React DOM adapter", () => {
 
     type FilteredProfileSpec = ProfileSpec<{ readonly filter: string }>;
 
-    class FilteredProfileNode extends NodeBase<FilteredProfileSpec, "effect"> {
+    class FilteredProfileNode extends NodeBase<FilteredProfileSpec> {
       static readonly spec = resourceSpec.effect<FilteredProfileSpec>({
         tag: "react-dom/resources/filtered-profile",
         key: () => Key.singleton(),
@@ -760,7 +763,7 @@ describe("React DOM adapter", () => {
   test("useNodeState does not re-dispatch args reconciliation on a no-op re-render", async () => {
     type FilteredSpec = ProfileSpec<{ readonly filter: string }>;
 
-    class NoOpArgsProfileNode extends NodeBase<FilteredSpec, "effect"> {
+    class NoOpArgsProfileNode extends NodeBase<FilteredSpec> {
       static readonly spec = resourceSpec.effect<FilteredSpec>({
         tag: "react-dom/resources/no-op-args-profile",
         key: () => Key.singleton(),
@@ -824,7 +827,7 @@ describe("React DOM adapter", () => {
   test("useNodes does not re-dispatch args reconciliation on a no-op re-render", async () => {
     type FilteredSpec = ProfileSpec<{ readonly filter: string }>;
 
-    class NoOpArgsNodesProfileNode extends NodeBase<FilteredSpec, "effect"> {
+    class NoOpArgsNodesProfileNode extends NodeBase<FilteredSpec> {
       static readonly spec = resourceSpec.effect<FilteredSpec>({
         tag: "react-dom/resources/no-op-args-nodes-profile",
         key: () => Key.singleton(),
@@ -889,7 +892,7 @@ describe("React DOM adapter", () => {
     try {
       let attempts = 0;
 
-      class RetryProfileNode extends NodeBase<ProfileSpec, "effect"> {
+      class RetryProfileNode extends NodeBase<ProfileSpec> {
         static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/retry-profile",
           key: () => Key.singleton(),
@@ -966,7 +969,7 @@ describe("React DOM adapter", () => {
     try {
       let attempts = 0;
 
-      class RecoverableProfileNode extends NodeBase<ProfileSpec, "effect"> {
+      class RecoverableProfileNode extends NodeBase<ProfileSpec> {
         static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/recoverable-profile",
           key: () => Key.singleton(),
@@ -1065,7 +1068,7 @@ describe("React DOM adapter", () => {
     try {
       let attempts = 0;
 
-      class UnmountedRetryNode extends NodeBase<ProfileSpec, "effect"> {
+      class UnmountedRetryNode extends NodeBase<ProfileSpec> {
         static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/unmounted-retry",
           key: () => Key.singleton(),
@@ -1173,7 +1176,7 @@ describe("React DOM adapter", () => {
     const consoleError = spyOn(console, "error").mockImplementation(() => {});
 
     try {
-      class DecoratedErrorNode extends NodeBase<ProfileSpec, "effect"> {
+      class DecoratedErrorNode extends NodeBase<ProfileSpec> {
         static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/decorated-error",
           key: () => Key.singleton(),
@@ -1250,7 +1253,7 @@ describe("React DOM adapter", () => {
     let acquired = 0;
     let refreshed = 0;
 
-    class ControlsProfileNode extends NodeBase<ProfileSpec, "effect"> {
+    class ControlsProfileNode extends NodeBase<ProfileSpec> {
       static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/controls-profile",
         key: () => Key.singleton(),
@@ -1349,7 +1352,7 @@ describe("React DOM adapter", () => {
       Key.Structure<{ readonly id: string }>
     >;
 
-    class ControlsProfileNode extends NodeBase<ControlsProfileSpec, "effect"> {
+    class ControlsProfileNode extends NodeBase<ControlsProfileSpec> {
       static readonly spec = resourceSpec.effect<ControlsProfileSpec>({
         tag: "react-dom/resources/plural-controls-profile",
         key: (args) => Key.structure({ id: args.id }),
@@ -1431,7 +1434,7 @@ describe("React DOM adapter", () => {
   test("active useNode recovers from self eviction without pending-attempt invariant", async () => {
     let acquired = 0;
 
-    class EvictedVisibleNode extends NodeBase<ProfileSpec, "effect"> {
+    class EvictedVisibleNode extends NodeBase<ProfileSpec> {
       static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/evicted-visible",
         key: () => Key.singleton(),
@@ -1497,7 +1500,7 @@ describe("React DOM adapter", () => {
   test("active useNode recovers when separate controls evict under StrictMode", async () => {
     let acquired = 0;
 
-    class StrictEvictedVisibleNode extends NodeBase<ProfileSpec, "effect"> {
+    class StrictEvictedVisibleNode extends NodeBase<ProfileSpec> {
       static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/strict-evicted-visible",
         key: () => Key.singleton(),
@@ -1653,7 +1656,7 @@ describe("React DOM adapter", () => {
   test("controls reconcile same-identity args before imperative refresh", async () => {
     type FilteredControlsSpec = ProfileSpec<{ readonly filter: string }>;
 
-    class FilteredControlsNode extends NodeBase<FilteredControlsSpec, "effect"> {
+    class FilteredControlsNode extends NodeBase<FilteredControlsSpec> {
       static readonly spec = resourceSpec.effect<FilteredControlsSpec>({
         tag: "react-dom/resources/filtered-controls",
         key: () => Key.singleton(),
@@ -1736,7 +1739,7 @@ describe("React DOM adapter", () => {
       Key.Structure<{ readonly id: string }>
     >;
 
-    class KeyedControlsNode extends NodeBase<KeyedControlsSpec, "effect"> {
+    class KeyedControlsNode extends NodeBase<KeyedControlsSpec> {
       static readonly spec = resourceSpec.effect<KeyedControlsSpec>({
         tag: "react-dom/resources/keyed-controls",
         key: (args) => Key.structure({ id: args.id }),
@@ -1817,7 +1820,7 @@ describe("React DOM adapter", () => {
 
     type OvertakeControlsSpec = ProfileSpec<{ readonly filter: string }>;
 
-    class OvertakeControlsNode extends NodeBase<OvertakeControlsSpec, "effect"> {
+    class OvertakeControlsNode extends NodeBase<OvertakeControlsSpec> {
       static readonly spec = resourceSpec.effect<OvertakeControlsSpec>({
         tag: "react-dom/resources/overtake-controls",
         key: () => Key.singleton(),
@@ -1963,7 +1966,7 @@ describe("React DOM adapter", () => {
     const gateA = await Effect.runPromise(Deferred.make<Profile>());
     const gateB = await Effect.runPromise(Deferred.make<Profile>());
 
-    class ParallelNodeA extends NodeBase<ProfileSpec, "effect"> {
+    class ParallelNodeA extends NodeBase<ProfileSpec> {
       static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/parallel-a",
         key: () => Key.singleton(),
@@ -1981,7 +1984,7 @@ describe("React DOM adapter", () => {
       }
     }
 
-    class ParallelNodeB extends NodeBase<ProfileSpec, "effect"> {
+    class ParallelNodeB extends NodeBase<ProfileSpec> {
       static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/parallel-b",
         key: () => Key.singleton(),
@@ -2046,7 +2049,7 @@ describe("React DOM adapter", () => {
       let goodAttempts = 0;
       let failingAttempts = 0;
 
-      class GoodNode extends NodeBase<ProfileSpec, "effect"> {
+      class GoodNode extends NodeBase<ProfileSpec> {
         static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/use-nodes-good",
           key: () => Key.singleton(),
@@ -2060,7 +2063,7 @@ describe("React DOM adapter", () => {
         });
       }
 
-      class FailingNode extends NodeBase<ProfileSpec, "effect"> {
+      class FailingNode extends NodeBase<ProfileSpec> {
         static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/use-nodes-failing",
           key: () => Key.singleton(),
@@ -2115,7 +2118,7 @@ describe("React DOM adapter", () => {
 
     type FilteredNodesProfileSpec = ProfileSpec<{ readonly filter: string }>;
 
-    class FilteredNodesProfileNode extends NodeBase<FilteredNodesProfileSpec, "effect"> {
+    class FilteredNodesProfileNode extends NodeBase<FilteredNodesProfileSpec> {
       static readonly spec = resourceSpec.effect<FilteredNodesProfileSpec>({
         tag: "react-dom/resources/use-nodes-filtered-profile",
         key: () => Key.singleton(),
@@ -2140,7 +2143,7 @@ describe("React DOM adapter", () => {
       }
     }
 
-    class StaticNodesProfileNode extends NodeBase<ProfileSpec, "effect"> {
+    class StaticNodesProfileNode extends NodeBase<ProfileSpec> {
       static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/use-nodes-static-profile",
         key: () => Key.singleton(),
@@ -2203,7 +2206,7 @@ describe("React DOM adapter", () => {
   test("active useNodes recovers when separate controls evict under StrictMode", async () => {
     let acquired = 0;
 
-    class StrictNodesEvictedNode extends NodeBase<ProfileSpec, "effect"> {
+    class StrictNodesEvictedNode extends NodeBase<ProfileSpec> {
       static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/strict-nodes-evicted",
         key: () => Key.singleton(),
@@ -2296,7 +2299,7 @@ describe("React DOM adapter", () => {
     const gateA = await Effect.runPromise(Deferred.make<Profile>());
     const gateB = await Effect.runPromise(Deferred.make<Profile>());
 
-    class PreloadLayerNodeA extends NodeBase<ProfileSpec, "effect"> {
+    class PreloadLayerNodeA extends NodeBase<ProfileSpec> {
       static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/preload-layer-a",
         key: () => Key.singleton(),
@@ -2310,7 +2313,7 @@ describe("React DOM adapter", () => {
       });
     }
 
-    class PreloadLayerNodeB extends NodeBase<ProfileSpec, "effect"> {
+    class PreloadLayerNodeB extends NodeBase<ProfileSpec> {
       static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/preload-layer-b",
         key: () => Key.singleton(),
@@ -2372,7 +2375,7 @@ describe("React DOM adapter", () => {
     const secondGate = await Effect.runPromise(Deferred.make<Profile>());
     let secondAttempts = 0;
 
-    class FirstPreloadLayerNode extends NodeBase<ProfileSpec, "effect"> {
+    class FirstPreloadLayerNode extends NodeBase<ProfileSpec> {
       static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/preload-first-layer",
         key: () => Key.singleton(),
@@ -2386,7 +2389,7 @@ describe("React DOM adapter", () => {
       });
     }
 
-    class SecondPreloadLayerNode extends NodeBase<ProfileSpec, "effect"> {
+    class SecondPreloadLayerNode extends NodeBase<ProfileSpec> {
       static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/preload-second-layer",
         key: () => Key.singleton(),
@@ -2445,7 +2448,7 @@ describe("React DOM adapter", () => {
     const consoleError = spyOn(console, "error").mockImplementation(() => {});
 
     try {
-      class FailingPreloadNode extends NodeBase<ProfileSpec, "effect"> {
+      class FailingPreloadNode extends NodeBase<ProfileSpec> {
         static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/preload-failing",
           key: () => Key.singleton(),
@@ -2494,6 +2497,7 @@ describe("React DOM adapter", () => {
 
     try {
       type InvalidReadSpec = NodeSpec<{
+        readonly mode: "effect";
         readonly args: EmptyArgs;
         readonly key: Key.Singleton;
         readonly deps: {
@@ -2502,7 +2506,7 @@ describe("React DOM adapter", () => {
         readonly result: Profile;
       }>;
 
-      class InvalidReadNode extends NodeBase<InvalidReadSpec, "effect"> {
+      class InvalidReadNode extends NodeBase<InvalidReadSpec> {
         static readonly spec = resourceSpec.effect<InvalidReadSpec>({
           tag: "react-dom/resources/invalid-read",
           key: () => Key.singleton(),
@@ -2552,7 +2556,7 @@ describe("React DOM adapter", () => {
     const consoleError = spyOn(console, "error").mockImplementation(() => {});
 
     try {
-      class StoppedRuntimeNode extends NodeBase<ProfileSpec, "effect"> {
+      class StoppedRuntimeNode extends NodeBase<ProfileSpec> {
         static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/stopped-runtime",
           key: () => Key.singleton(),
@@ -2603,7 +2607,7 @@ describe("React DOM adapter", () => {
     const gate = await Effect.runPromise(Deferred.make<Profile>());
     let attempts = 0;
 
-    class PendingProfileNode extends NodeBase<ProfileSpec, "effect"> {
+    class PendingProfileNode extends NodeBase<ProfileSpec> {
       static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/remount-pending",
         key: () => Key.singleton(),
@@ -2671,7 +2675,7 @@ describe("React DOM adapter", () => {
   });
 
   test("provider runtime swap creates a new store and boots against the next runtime", async () => {
-    class RuntimeSwapNode extends NodeBase<ProfileSpec, "effect"> {
+    class RuntimeSwapNode extends NodeBase<ProfileSpec> {
       static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/runtime-swap",
         key: () => Key.singleton(),
@@ -2743,7 +2747,7 @@ describe("React DOM adapter", () => {
     const consoleError = spyOn(console, "error").mockImplementation(() => {});
 
     try {
-      class StableNode extends NodeBase<ProfileSpec, "effect"> {
+      class StableNode extends NodeBase<ProfileSpec> {
         static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/stable-key-set",
           key: () => Key.singleton(),

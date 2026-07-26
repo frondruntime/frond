@@ -50,13 +50,14 @@ export function makeInMemoryGraphSystem(
 }
 
 type TransportNodeSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: string;
 }>;
 
-export class TransportNode extends NodeBase<TransportNodeSpec, "effect"> {
+export class TransportNode extends NodeBase<TransportNodeSpec> {
   static readonly spec = serviceSpec.effect<TransportNodeSpec>({
     tag: "services/transport",
     key: () => Key.singleton(),
@@ -66,6 +67,7 @@ export class TransportNode extends NodeBase<TransportNodeSpec, "effect"> {
 }
 
 type ProfileNodeSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: {
@@ -74,7 +76,7 @@ type ProfileNodeSpec = NodeSpec<{
   readonly result: string;
 }>;
 
-export class ProfileNode extends NodeBase<ProfileNodeSpec, "effect"> {
+export class ProfileNode extends NodeBase<ProfileNodeSpec> {
   static readonly spec = resourceSpec.effect<ProfileNodeSpec>({
     tag: "resources/profile",
     key: () => Key.singleton(),
@@ -91,6 +93,7 @@ export type MutableProfile = {
 };
 
 type ActionProfileNodeSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: {
@@ -106,7 +109,7 @@ type ActionProfileNodeSpec = NodeSpec<{
   };
 }>;
 
-export class ActionProfileNode extends NodeBase<ActionProfileNodeSpec, "effect"> {
+export class ActionProfileNode extends NodeBase<ActionProfileNodeSpec> {
   static readonly spec = resourceSpec.effect<ActionProfileNodeSpec>({
     tag: "resources/action-profile",
     key: () => Key.singleton(),

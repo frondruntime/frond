@@ -34,12 +34,13 @@ describe("action interruption", () => {
     const probe = makeAbortProbe();
 
     type WaitSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly key: Key.Singleton;
       readonly result: { readonly ready: true };
       readonly actions: { readonly wait: Driver.ActionContract<void, string> };
     }>;
 
-    class WaitNode extends NodeBase<WaitSpec, "effect"> {
+    class WaitNode extends NodeBase<WaitSpec> {
       static readonly spec = serviceSpec.effect<WaitSpec>({
         tag: tag("interruption/queue"),
         key: () => Key.singleton(),
@@ -84,12 +85,13 @@ describe("action interruption", () => {
     });
 
     type JoinSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly key: Key.Singleton;
       readonly result: { readonly ready: true };
       readonly actions: { readonly wait: Driver.ActionContract<{ readonly id: string }, string> };
     }>;
 
-    class JoinNode extends NodeBase<JoinSpec, "effect"> {
+    class JoinNode extends NodeBase<JoinSpec> {
       static readonly spec = serviceSpec.effect<JoinSpec>({
         tag: tag("interruption/join"),
         key: () => Key.singleton(),

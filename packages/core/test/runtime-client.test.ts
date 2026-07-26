@@ -55,6 +55,7 @@ describe("runtime client", () => {
   test("updateArgs returns canonical args validation failures through its typed result", async () => {
     type Args = { readonly filter: string };
     type ArgsSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Args;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -299,13 +300,14 @@ describe("runtime client", () => {
     let constructed = 0;
     let acquired = 0;
     type RewiredSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class RewiredNode extends NodeBase<RewiredSpec, "effect"> {
+    class RewiredNode extends NodeBase<RewiredSpec> {
       static readonly spec = serviceSpec.effect<RewiredSpec>({
         tag: "services/runtime-evict-rewire",
         key: () => Key.singleton(),
@@ -603,13 +605,14 @@ describe("runtime client", () => {
     const started = await Effect.runPromise(Deferred.make<void>());
     const gate = await Effect.runPromise(Deferred.make<string>());
     type SlowSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class SlowNode extends NodeBase<SlowSpec, "effect"> {
+    class SlowNode extends NodeBase<SlowSpec> {
       static readonly spec = serviceSpec.effect<SlowSpec>({
         tag: "services/runtime-client-slow",
         key: () => Key.singleton(),
@@ -721,13 +724,14 @@ describe("runtime client", () => {
     const started = await Effect.runPromise(Deferred.make<void>());
     const gate = await Effect.runPromise(Deferred.make<string>());
     type SlowSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class SlowNode extends NodeBase<SlowSpec, "effect"> {
+    class SlowNode extends NodeBase<SlowSpec> {
       static readonly spec = serviceSpec.effect<SlowSpec>({
         tag: "services/runtime-client-external-pending",
         key: () => Key.singleton(),
@@ -774,13 +778,14 @@ describe("runtime client", () => {
     const started = await Effect.runPromise(Deferred.make<void>());
     const gate = await Effect.runPromise(Deferred.make<void>());
     type FailingSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class FailingNode extends NodeBase<FailingSpec, "effect"> {
+    class FailingNode extends NodeBase<FailingSpec> {
       static readonly spec = serviceSpec.effect<FailingSpec>({
         tag: "services/runtime-client-failing-attempt",
         key: () => Key.singleton(),
@@ -839,13 +844,14 @@ describe("runtime client", () => {
   test("runtime client boot does not retry error but ensureReady does", async () => {
     let attempts = 0;
     type FailingOnceSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class FailingOnceNode extends NodeBase<FailingOnceSpec, "effect"> {
+    class FailingOnceNode extends NodeBase<FailingOnceSpec> {
       static readonly spec = serviceSpec.effect<FailingOnceSpec>({
         tag: "services/runtime-client-failing-once",
         key: () => Key.singleton(),
@@ -887,13 +893,14 @@ describe("runtime client", () => {
   test("runtime client pending attempt resolves on acquire defect", async () => {
     const cause = new TypeError("driver typo");
     type DefectSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class DefectNode extends NodeBase<DefectSpec, "effect"> {
+    class DefectNode extends NodeBase<DefectSpec> {
       static readonly spec = serviceSpec.effect<DefectSpec>({
         tag: "services/runtime-client-acquire-defect",
         key: () => Key.singleton(),
@@ -928,13 +935,14 @@ describe("runtime client", () => {
     };
     let revision = 0;
     type ListSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: ListArgs;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: ListResult;
     }>;
 
-    class ListNode extends NodeBase<ListSpec, "effect"> {
+    class ListNode extends NodeBase<ListSpec> {
       static readonly spec = serviceSpec.effect<ListSpec>({
         tag: "services/runtime-client-list",
         key: () => Key.singleton(),
@@ -1012,13 +1020,14 @@ describe("runtime client", () => {
     const refreshStarted = await Effect.runPromise(Deferred.make<void>());
     const refreshGate = await Effect.runPromise(Deferred.make<void>());
     type SlowListSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: ListArgs;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: ListResult;
     }>;
 
-    class SlowListNode extends NodeBase<SlowListSpec, "effect"> {
+    class SlowListNode extends NodeBase<SlowListSpec> {
       static readonly spec = serviceSpec.effect<SlowListSpec>({
         tag: "services/runtime-client-slow-list",
         key: () => Key.singleton(),
@@ -1064,6 +1073,7 @@ describe("runtime client", () => {
     const actionStarted = await Effect.runPromise(Deferred.make<void>());
     const actionGate = await Effect.runPromise(Deferred.make<void>());
     type BusyActionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1073,7 +1083,7 @@ describe("runtime client", () => {
       };
     }>;
 
-    class BusyActionNode extends NodeBase<BusyActionSpec, "effect"> {
+    class BusyActionNode extends NodeBase<BusyActionSpec> {
       static readonly spec = serviceSpec.effect<BusyActionSpec>({
         tag: "services/runtime-client-busy-action",
         key: () => Key.singleton(),
@@ -1117,13 +1127,14 @@ describe("runtime client", () => {
       readonly filter: string;
     };
     type RollbackListSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: ListArgs;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: ListResult;
     }>;
 
-    class RollbackListNode extends NodeBase<RollbackListSpec, "effect"> {
+    class RollbackListNode extends NodeBase<RollbackListSpec> {
       static readonly spec = serviceSpec.effect<RollbackListSpec>({
         tag: "services/runtime-client-rollback-list",
         key: () => Key.singleton(),
@@ -1160,13 +1171,14 @@ describe("runtime client", () => {
       readonly filter: string;
     };
     type RollbackPatchListSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: ListArgs;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: ListResult;
     }>;
 
-    class RollbackPatchListNode extends NodeBase<RollbackPatchListSpec, "effect"> {
+    class RollbackPatchListNode extends NodeBase<RollbackPatchListSpec> {
       static readonly spec = serviceSpec.effect<RollbackPatchListSpec>({
         tag: "services/runtime-client-rollback-patch-list",
         key: () => Key.singleton(),
@@ -1203,13 +1215,14 @@ describe("runtime client", () => {
       readonly filter: string;
     };
     type KeyedListSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: ListArgs;
       readonly key: Key.Structure<{ readonly id: string }>;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class KeyedListNode extends NodeBase<KeyedListSpec, "effect"> {
+    class KeyedListNode extends NodeBase<KeyedListSpec> {
       static readonly spec = serviceSpec.effect<KeyedListSpec>({
         tag: "services/runtime-client-keyed-list",
         key: (args) => Key.structure({ id: args.id }),
@@ -1239,13 +1252,14 @@ describe("runtime client", () => {
 
   test("__unsafe reads and schedules explicit runtime work by node id", async () => {
     type UnsafeSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { value: string };
     }>;
 
-    class UnsafeNode extends NodeBase<UnsafeSpec, "effect"> {
+    class UnsafeNode extends NodeBase<UnsafeSpec> {
       static readonly spec = serviceSpec.effect<UnsafeSpec>({
         tag: "services/runtime-client-unsafe",
         key: () => Key.singleton(),
@@ -1286,13 +1300,14 @@ describe("runtime client", () => {
 
   test("__unsafe ensureReady schedules an already-wired idle node by node id", async () => {
     type IdleUnsafeSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class IdleUnsafeNode extends NodeBase<IdleUnsafeSpec, "effect"> {
+    class IdleUnsafeNode extends NodeBase<IdleUnsafeSpec> {
       static readonly spec = serviceSpec.effect<IdleUnsafeSpec>({
         tag: "services/runtime-client-unsafe-idle",
         key: () => Key.singleton(),
@@ -1326,13 +1341,14 @@ describe("runtime client", () => {
 
   test("__unsafe schedule/update reports Invalid when the underlying node is invalid", async () => {
     type InvalidUnsafeSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class InvalidUnsafeNode extends NodeBase<InvalidUnsafeSpec, "effect"> {
+    class InvalidUnsafeNode extends NodeBase<InvalidUnsafeSpec> {
       static readonly spec = serviceSpec.effect<InvalidUnsafeSpec>({
         tag: "services/runtime-client-unsafe-invalid",
         key: () => ({ value: Number.NaN }) as never,
@@ -1392,6 +1408,7 @@ describe("runtime client", () => {
 
   test("handle created from a bare effect-mode descriptor dispatches effect-mode actions", async () => {
     type BareSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;

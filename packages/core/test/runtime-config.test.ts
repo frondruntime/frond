@@ -68,13 +68,14 @@ describe("runtime config normalization", () => {
   test("minimal graph options require runtime id and normalize no-op signals", async () => {
     const retainedCounts: Array<number> = [];
     type SignalReaderSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class SignalReaderNode extends NodeBase<SignalReaderSpec, "effect"> {
+    class SignalReaderNode extends NodeBase<SignalReaderSpec> {
       static readonly spec = serviceSpec.effect<SignalReaderSpec>({
         tag: "services/test-graph-signal-default",
         key: () => Key.singleton(),

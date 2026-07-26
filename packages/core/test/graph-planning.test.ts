@@ -40,13 +40,14 @@ describe("graph planning", () => {
   test("concurrent planning creates one graph identity and readiness constructs one node", async () => {
     let constructed = 0;
     type ConstructedOnceSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class ConstructedOnceNode extends NodeBase<ConstructedOnceSpec, "effect"> {
+    class ConstructedOnceNode extends NodeBase<ConstructedOnceSpec> {
       static readonly spec = serviceSpec.effect<ConstructedOnceSpec>({
         tag: "services/constructed-once",
         key: () => Key.singleton(),
@@ -120,13 +121,14 @@ describe("graph planning", () => {
     // record diverges. Planning must surface the divergence as a structured
     // invariant violation instead of silently mixing old args with new edges.
     type ReplanLeafSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly which: string };
       readonly key: Key.Structure<{ readonly which: string }>;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class ReplanLeafNode extends NodeBase<ReplanLeafSpec, "effect"> {
+    class ReplanLeafNode extends NodeBase<ReplanLeafSpec> {
       static readonly spec = serviceSpec.effect<ReplanLeafSpec>({
         tag: "services/replan-leaf",
         key: (args) => Key.structure({ which: args.which }),
@@ -136,6 +138,7 @@ describe("graph planning", () => {
     }
 
     type ReplanParentSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly which: string };
       readonly key: Key.Singleton;
       readonly deps: {
@@ -144,7 +147,7 @@ describe("graph planning", () => {
       readonly result: string;
     }>;
 
-    class ReplanParentNode extends NodeBase<ReplanParentSpec, "effect"> {
+    class ReplanParentNode extends NodeBase<ReplanParentSpec> {
       static readonly spec = resourceSpec.effect<ReplanParentSpec>({
         tag: "resources/replan-parent",
         key: () => Key.singleton(),
@@ -187,6 +190,7 @@ describe("graph planning", () => {
     const acquireGate = await Effect.runPromise(Deferred.make<string>());
 
     type MidAcquireLeafSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly which: string };
       readonly key: Key.Structure<{ readonly which: string }>;
       readonly deps: Record<string, never>;
@@ -203,6 +207,7 @@ describe("graph planning", () => {
     }
 
     type MidAcquireParentSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly which: string };
       readonly key: Key.Singleton;
       readonly deps: {
@@ -253,6 +258,7 @@ describe("graph planning", () => {
     let acquireCount = 0;
 
     type FirstSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -261,7 +267,7 @@ describe("graph planning", () => {
       readonly result: null;
     }>;
 
-    class FirstNode extends NodeBase<FirstSpec, "effect"> {
+    class FirstNode extends NodeBase<FirstSpec> {
       static readonly spec = resourceSpec.effect<FirstSpec>({
         tag: "resources/cycle-first",
         key: () => Key.singleton(),
@@ -278,6 +284,7 @@ describe("graph planning", () => {
     }
 
     type SecondSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -286,7 +293,7 @@ describe("graph planning", () => {
       readonly result: null;
     }>;
 
-    class SecondNode extends NodeBase<SecondSpec, "effect"> {
+    class SecondNode extends NodeBase<SecondSpec> {
       static readonly spec = resourceSpec.effect<SecondSpec>({
         tag: "resources/cycle-second",
         key: () => Key.singleton(),
@@ -316,13 +323,14 @@ describe("graph planning", () => {
 
   test("invalid key values become invalid graph state instead of escaping planning", async () => {
     type InvalidKeySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly value: number };
       readonly key: Key.Structure<{ readonly value: number }>;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class InvalidKeyNode extends NodeBase<InvalidKeySpec, "effect"> {
+    class InvalidKeyNode extends NodeBase<InvalidKeySpec> {
       static readonly spec = serviceSpec.effect<InvalidKeySpec>({
         tag: "services/invalid-key",
         key: (args) => Key.structure({ value: args.value }),
@@ -345,13 +353,14 @@ describe("graph planning", () => {
 
   test("unsupported object keys become invalid graph state", async () => {
     type InvalidObjectKeySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Structure<{ readonly date: string }>;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class InvalidObjectKeyNode extends NodeBase<InvalidObjectKeySpec, "effect"> {
+    class InvalidObjectKeyNode extends NodeBase<InvalidObjectKeySpec> {
       static readonly spec = serviceSpec.effect<InvalidObjectKeySpec>({
         tag: "services/invalid-object-key",
         key: () => Key.structure({ date: new Date("2026-01-01T00:00:00.000Z") } as never),
@@ -376,6 +385,7 @@ describe("graph planning", () => {
     let secondMessageCounter = 0;
 
     type ThrowingKeySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Structure<{ readonly id: string }>;
       readonly deps: Record<string, never>;
@@ -439,6 +449,7 @@ describe("graph planning", () => {
   test("invalid key identities sanitize and cap hostile error paths", async () => {
     const hostileProperty = `line\n${"x".repeat(100_000)}`;
     type HostileKeySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Structure<Record<string, string>>;
       readonly deps: Record<string, never>;
@@ -467,13 +478,14 @@ describe("graph planning", () => {
   test("malformed dependency declarations become invalid graph state", async () => {
     const malformedDependencies = () => "not-a-dependency-record";
     type MalformedDependencySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class MalformedDependencyNode extends NodeBase<MalformedDependencySpec, "effect"> {
+    class MalformedDependencyNode extends NodeBase<MalformedDependencySpec> {
       static readonly spec = resourceSpec.effect<MalformedDependencySpec>({
         tag: "resources/malformed-dependencies",
         key: () => Key.singleton(),
@@ -502,13 +514,14 @@ describe("graph planning", () => {
 
   test("malformed dependency entries become structured dependency definition failures", async () => {
     type MalformedDependencyEntrySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class MalformedDependencyEntryNode extends NodeBase<MalformedDependencyEntrySpec, "effect"> {
+    class MalformedDependencyEntryNode extends NodeBase<MalformedDependencyEntrySpec> {
       static readonly spec = resourceSpec.effect<MalformedDependencyEntrySpec>({
         tag: "resources/malformed-dependency-entry",
         key: () => Key.singleton(),
@@ -541,6 +554,7 @@ describe("graph planning", () => {
 
   test("non-canonical dependency args become structured dependency definition failures", async () => {
     type DependencyArgSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly id: string };
       readonly key: Key.Structure<{ readonly id: string }>;
       readonly deps: Record<string, never>;
@@ -557,6 +571,7 @@ describe("graph planning", () => {
     }
 
     type DependencyArgParentSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -600,16 +615,14 @@ describe("graph planning", () => {
   test("multiple malformed dependency entries aggregate before invalidating parent", async () => {
     class PlainDependency {}
     type MalformedDependencyEntriesSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class MalformedDependencyEntriesNode extends NodeBase<
-      MalformedDependencyEntriesSpec,
-      "effect"
-    > {
+    class MalformedDependencyEntriesNode extends NodeBase<MalformedDependencyEntriesSpec> {
       static readonly spec = resourceSpec.effect<MalformedDependencyEntriesSpec>({
         tag: "resources/malformed-dependency-entries",
         key: () => Key.singleton(),
@@ -648,13 +661,14 @@ describe("graph planning", () => {
   test("unbranded dependency specs become invalid graph state", async () => {
     class PlainDependency {}
     type UnbrandedDependencySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class UnbrandedDependencyNode extends NodeBase<UnbrandedDependencySpec, "effect"> {
+    class UnbrandedDependencyNode extends NodeBase<UnbrandedDependencySpec> {
       static readonly spec = resourceSpec.effect<UnbrandedDependencySpec>({
         tag: "resources/unbranded-dependency",
         key: () => Key.singleton(),
@@ -678,13 +692,14 @@ describe("graph planning", () => {
 
   test("constructor failures become readiness failures", async () => {
     type ThrowingConstructorSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class ThrowingConstructorNode extends NodeBase<ThrowingConstructorSpec, "effect"> {
+    class ThrowingConstructorNode extends NodeBase<ThrowingConstructorSpec> {
       static readonly spec = serviceSpec.effect<ThrowingConstructorSpec>({
         tag: "services/throwing-constructor",
         key: () => Key.singleton(),
@@ -714,13 +729,14 @@ describe("graph planning", () => {
 
   test("different specs with the same tag are rejected deterministically", async () => {
     type FirstTaggedSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class FirstTaggedNode extends NodeBase<FirstTaggedSpec, "effect"> {
+    class FirstTaggedNode extends NodeBase<FirstTaggedSpec> {
       static readonly spec = serviceSpec.effect<FirstTaggedSpec>({
         tag: "services/duplicate-tag",
         key: () => Key.singleton(),
@@ -730,13 +746,14 @@ describe("graph planning", () => {
     }
 
     type SecondTaggedSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class SecondTaggedNode extends NodeBase<SecondTaggedSpec, "effect"> {
+    class SecondTaggedNode extends NodeBase<SecondTaggedSpec> {
       static readonly spec = serviceSpec.effect<SecondTaggedSpec>({
         tag: "services/duplicate-tag",
         key: () => Key.singleton(),
@@ -759,13 +776,14 @@ describe("graph planning", () => {
     let releaseRuns = 0;
     let disposerRuns = 0;
     type ReadyInvalidatedSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class ReadyInvalidatedNode extends NodeBase<ReadyInvalidatedSpec, "effect"> {
+    class ReadyInvalidatedNode extends NodeBase<ReadyInvalidatedSpec> {
       static readonly spec = serviceSpec.effect<ReadyInvalidatedSpec>({
         tag: "services/ready-invalidated-teardown",
         key: () => Key.singleton(),
@@ -786,7 +804,7 @@ describe("graph planning", () => {
       });
     }
 
-    class ConflictingTagNode extends NodeBase<ReadyInvalidatedSpec, "effect"> {
+    class ConflictingTagNode extends NodeBase<ReadyInvalidatedSpec> {
       static readonly spec = serviceSpec.effect<ReadyInvalidatedSpec>({
         tag: "services/ready-invalidated-teardown",
         key: () => Key.singleton(),
@@ -816,6 +834,7 @@ describe("graph planning", () => {
     const releaseGate = await Effect.runPromise(Deferred.make<void>());
     let releaseRuns = 0;
     type SlowInvalidatedSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -848,6 +867,7 @@ describe("graph planning", () => {
     }
 
     type UnrelatedSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -886,13 +906,14 @@ describe("graph planning", () => {
 
   test("spec overrides substitute dependency node specs during planning and readiness", async () => {
     type OriginalServiceSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class OriginalServiceNode extends NodeBase<OriginalServiceSpec, "effect"> {
+    class OriginalServiceNode extends NodeBase<OriginalServiceSpec> {
       static readonly spec = serviceSpec.effect<OriginalServiceSpec>({
         tag: "services/original",
         key: () => Key.singleton(),
@@ -911,6 +932,7 @@ describe("graph planning", () => {
     }
 
     type UsesServiceSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -919,7 +941,7 @@ describe("graph planning", () => {
       readonly result: string;
     }>;
 
-    class UsesServiceNode extends NodeBase<UsesServiceSpec, "effect"> {
+    class UsesServiceNode extends NodeBase<UsesServiceSpec> {
       static readonly spec = resourceSpec.effect<UsesServiceSpec>({
         tag: "resources/uses-service-override",
         key: () => Key.singleton(),
@@ -953,13 +975,14 @@ describe("graph planning", () => {
 
   test("runtime spec overrides affect direct client handles", async () => {
     type OriginalSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class OriginalNode extends NodeBase<OriginalSpec, "effect"> {
+    class OriginalNode extends NodeBase<OriginalSpec> {
       static readonly spec = serviceSpec.effect<OriginalSpec>({
         tag: "services/runtime-original",
         key: () => Key.singleton(),
@@ -996,13 +1019,14 @@ describe("graph planning", () => {
 
   test("Effect runtime construction preserves spec overrides", async () => {
     type OriginalSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class OriginalNode extends NodeBase<OriginalSpec, "effect"> {
+    class OriginalNode extends NodeBase<OriginalSpec> {
       static readonly spec = serviceSpec.effect<OriginalSpec>({
         tag: "services/effect-runtime-original",
         key: () => Key.singleton(),
@@ -1042,13 +1066,14 @@ describe("graph planning", () => {
 
   test("explicit override class preserves identity while replacing driver behavior", async () => {
     type OriginalSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class OriginalNode extends NodeBase<OriginalSpec, "effect"> {
+    class OriginalNode extends NodeBase<OriginalSpec> {
       static readonly spec = serviceSpec.effect<OriginalSpec>({
         tag: "services/derive-original",
         key: () => Key.singleton(),
@@ -1084,13 +1109,14 @@ describe("graph planning", () => {
 
   test("spec validation rejects duplicate originals and tag mismatches", () => {
     type OriginalSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class OriginalNode extends NodeBase<OriginalSpec, "effect"> {
+    class OriginalNode extends NodeBase<OriginalSpec> {
       static readonly spec = serviceSpec.effect<OriginalSpec>({
         tag: "services/override-validation-original",
         key: () => Key.singleton(),
@@ -1134,13 +1160,14 @@ describe("graph planning", () => {
 
   test("spec validation rejects cycles at construction", () => {
     type FirstSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class FirstNode extends NodeBase<FirstSpec, "effect"> {
+    class FirstNode extends NodeBase<FirstSpec> {
       static readonly spec = serviceSpec.effect<FirstSpec>({
         tag: "services/override-cycle",
         key: () => Key.singleton(),
