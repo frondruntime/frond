@@ -119,6 +119,43 @@ export type UnsafeReadKeepsRawTags = Expect<
   >
 >;
 
+// handle.readReady() projects the handle's typed node instance (TNode), and
+// ensureReadyNode is its awaited counterpart.
+type TypedReadReadyHandle = Frond.Runtime.RuntimeNodeHandle<
+  Frond.Args.None,
+  { readonly ok: true },
+  Record<string, never>,
+  "async",
+  { readonly probe: 1 }
+>;
+export type ReadReadyReturnsTypedNode = Expect<
+  Equal<ReturnType<TypedReadReadyHandle["readReady"]>, { readonly probe: 1 }>
+>;
+export type EnsureReadyNodeReturnsTypedNode = Expect<
+  Equal<Awaited<ReturnType<TypedReadReadyHandle["ensureReadyNode"]>>, { readonly probe: 1 }>
+>;
+
+// FrondNodeNotReady is namespace-owned under Frond.Runtime, alongside the
+// other Frond* runtime errors.
+export type RuntimeNamespaceHasFrondNodeNotReady = Expect<
+  Equal<"FrondNodeNotReady" extends keyof typeof Frond.Runtime ? true : false, true>
+>;
+export type FrondNodeNotReadyReadiness = Expect<
+  Equal<
+    InstanceType<typeof Frond.Runtime.FrondNodeNotReady>["readiness"],
+    "unwired" | "idle" | "pending"
+  >
+>;
+
+// Quiescence reads live on the Runtime facade only, and pendingOperations
+// projects exclusively Running operations.
+export type RuntimeFacadeIsQuiescentIsBoolean = Expect<
+  Equal<ReturnType<Frond.Runtime.Runtime["isQuiescent"]>, boolean>
+>;
+export type PendingOperationIsRunningOnly = Expect<
+  Equal<Frond.Runtime.RuntimePendingOperation["operation"]["_tag"], "Running">
+>;
+
 // An opaque NodeSpecLike carrier must not collapse the typed handle's node
 // surface to `any` (lib `Function.prototype` is `any`); the documented
 // degrade for statically unrecoverable instance types is `object`.

@@ -13,7 +13,11 @@ import type {
   NodeSpecMode,
   NodeSpecResult,
 } from "../node/types";
-import { FrondRuntimeInvariantViolation } from "./errors";
+import {
+  FrondNodeNotReady,
+  type FrondNodeReadiness,
+  FrondRuntimeInvariantViolation,
+} from "./errors";
 import { bootingRuntimeNodeRead, readNode, readNodeRevision } from "./nodeRead";
 import type {
   HandleActions,
@@ -118,6 +122,33 @@ function createRuntimeNodeHandle<TArgs, TResult, TNode extends object = object>(
       ({ read }) => read
     );
 
+  // Ready-or-throw projection of the same sync read `read()` performs: Ready
+  // yields the typed node, Error rethrows the read's error, and the remaining
+  // phases throw `FrondNodeNotReady` with the observed readiness. Sync-only:
+  // never schedules graph work.
+  const readReady = (): TNode => {
+    const read = readNode<TResult, TNode>(host, nodeId);
+
+    switch (read._tag) {
+      case "Ready":
+        return read.node;
+      case "Error":
+        throw read.error;
+      case "Unwired":
+      case "Idle":
+      case "Pending":
+        throw new FrondNodeNotReady({
+          nodeId,
+          tag: nodeTagOf(host, nodeId),
+          readiness: notReadyReadiness(read._tag),
+        });
+      default: {
+        const exhaustive: never = read;
+        return exhaustive;
+      }
+    }
+  };
+
   return {
     nodeId,
     get args() {
@@ -160,6 +191,13 @@ function createRuntimeNodeHandle<TArgs, TResult, TNode extends object = object>(
         ({ read }) => read
       ),
     ensureReady,
+    readReady,
+    ensureReadyNode: async (metadata) => {
+      // One awaited readiness attempt, then the same sync projection readReady
+      // performs — so both surfaces throw identically for error/not-ready.
+      await ensureReady(metadata);
+      return readReady();
+    },
     actions: makeHandleActions(host, runner, request, driverModeOfSpec(spec)),
     action: (action, input, metadata) =>
       submitEffect(
@@ -350,6 +388,34 @@ function makeRuntimeNodeLiveLease(
       return release;
     },
   };
+}
+
+function notReadyReadiness(tag: "Unwired" | "Idle" | "Pending"): FrondNodeReadiness {
+  switch (tag) {
+    case "Unwired":
+      return "unwired";
+    case "Idle":
+      return "idle";
+    case "Pending":
+      return "pending";
+    default: {
+      const exhaustive: never = tag;
+      return exhaustive;
+    }
+  }
+}
+
+function nodeTagOf(
+  host: Pick<RuntimeClientHost, "getStatusSync" | "readNodeSnapshotSync">,
+  nodeId: NodeId
+): string | undefined {
+  if (host.getStatusSync() === "stopped") {
+    return undefined;
+  }
+
+  const lookup = host.readNodeSnapshotSync(nodeId);
+
+  return lookup._tag === "Found" ? lookup.snapshot.tag : undefined;
 }
 
 function settleBootAttempt(nodeId: NodeId, attempt: Promise<NodeRead>): Promise<NodeRead> {

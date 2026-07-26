@@ -1,8 +1,9 @@
 export { createRuntime } from "./bridge";
 export type { RuntimeHandleResult } from "./client";
 export { createRuntimeClient } from "./client";
-export type { RuntimeReadFailureKind } from "./errors";
+export type { FrondNodeReadiness, RuntimeReadFailureKind } from "./errors";
 export {
+  FrondNodeNotReady,
   FrondRuntimeClosed,
   FrondRuntimeInvariantViolation,
   FrondRuntimeReadError,
@@ -32,6 +33,7 @@ export type {
   RuntimeNodeSnapshotLookup,
   RuntimeObserver,
   RuntimeOptions,
+  RuntimePendingOperation,
   RuntimeQuery,
   RuntimeQueryResult,
   RuntimeSignal,
