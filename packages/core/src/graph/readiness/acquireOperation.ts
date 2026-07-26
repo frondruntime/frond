@@ -52,7 +52,11 @@ export function runAcquire(
 ): Effect.Effect<NodeRead> {
   return Effect.gen(function* () {
     const abortController = new AbortController();
-    const disposers = makeOperationDisposers(cell, env.state.notifyCleanupFailures);
+    const disposers = makeOperationDisposers(
+      cell,
+      env.state.notifyCleanupFailures,
+      env.driverTimeouts.release
+    );
     const initialState = yield* cell.state.get;
     const base = phaseBase(initialState.phase);
 

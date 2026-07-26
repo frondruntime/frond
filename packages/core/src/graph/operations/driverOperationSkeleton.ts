@@ -73,7 +73,8 @@ export function runReadyDriverOperation<TValue, TResult extends BackgroundOperat
     const abortController = new AbortController();
     const operationDisposers = makeOperationDisposers(
       input.cell,
-      input.env.state.notifyCleanupFailures
+      input.env.state.notifyCleanupFailures,
+      input.env.driverTimeouts.release
     );
     const clock = yield* Clock.Clock;
     let currentResultState: ResultState = {

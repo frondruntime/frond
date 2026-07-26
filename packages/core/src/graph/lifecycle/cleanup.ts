@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import type { Disposer } from "../../driver";
 import type { GraphNodeCell, GraphNodeState } from "../cell/cellModel";
 import { phaseReadyData, type ReadyData } from "../cell/cellPhase";
 import { completeReleaseState } from "../cell/cellTransitions";
@@ -15,7 +16,7 @@ import {
   type LiveResourceStopReason,
   ReleaseFailed,
 } from "../types";
-import { runDisposers } from "./disposers";
+import { drainLiveDisposers } from "./disposers";
 
 export interface ReadyTeardownTimeouts {
   readonly release: DriverOperationTimeoutMs;
@@ -40,7 +41,7 @@ export function teardownReadyData(
       liveStopReason
     );
     const releaseFailures = yield* runRelease(cell, ready.node, timeouts.release);
-    const disposerFailures = yield* runDisposers(cell, ready.disposers);
+    const disposerFailures = yield* drainLiveDisposers(cell, ready.disposers, timeouts.release);
     closeReadyNode(ready.node);
     return [...liveFailures, ...releaseFailures, ...disposerFailures];
   });
@@ -88,7 +89,7 @@ function runRelease(
   }
 
   const abortController = new AbortController();
-  const releaseDisposers: Array<() => void> = [];
+  const releaseDisposers: Array<Disposer> = [];
   const ctx = makeDisposeContext({
     node,
     abortController,
@@ -118,7 +119,10 @@ function runRelease(
       "driver-release",
       (cause) => Effect.succeed([toReleaseFailed(cell, cause)])
     );
-    const disposerFailures = yield* runDisposers(cell, releaseDisposers);
+    // Release-hook disposers get the same drain semantics as ready-data
+    // disposers: bounded per disposer, and one registered during the drain
+    // still runs and is awaited.
+    const disposerFailures = yield* drainLiveDisposers(cell, releaseDisposers, timeout);
 
     return [...releaseFailures, ...disposerFailures];
   });

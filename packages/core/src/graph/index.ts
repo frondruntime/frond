@@ -39,6 +39,7 @@ export {
   DependencyRefreshFailed,
   DependencyResultExpired,
   DisposerFailed,
+  DisposerTimedOut,
   DriverOperationTimedOut,
   DriverPromiseFailed,
   DuplicateNodeTag,

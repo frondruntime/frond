@@ -65,6 +65,17 @@ export class DisposerFailed extends Data.TaggedError("DisposerFailed")<{
   readonly cause: unknown;
 }> {}
 
+// Structured cause for an async disposer that outlived its per-disposer
+// `driverTimeouts.release` bound. Always surfaces wrapped as the `cause` of a
+// `DisposerFailed` (never a `ReleaseFailed` — a disposer that timed out is not
+// a failed release hook), so it is not part of the `GraphFailure` union.
+export class DisposerTimedOut extends Data.TaggedError("DisposerTimedOut")<{
+  readonly nodeId: NodeId;
+  readonly tag: string;
+  readonly timeout: number;
+  readonly cancellation: RuntimeCancellationReason;
+}> {}
+
 export class ReleaseFailed extends Data.TaggedError("ReleaseFailed")<{
   readonly nodeId: NodeId;
   readonly tag: string;

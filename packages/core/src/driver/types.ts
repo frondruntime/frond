@@ -413,6 +413,16 @@ export type DisposeContext<TNode extends object> = {
   readonly disposers: DisposerBag;
 };
 
+/**
+ * A disposer may be synchronous or return a promise. Async disposers are
+ * awaited by the graph bounded by the node's `driverTimeouts.release` per
+ * disposer; a disposer that outlives the bound keeps running detached and is
+ * reported as a `DisposerFailed` with a `DisposerTimedOut` cause. The registry
+ * guarantees each disposer function runs at most once across every cleanup
+ * path, so authors do not need to memoize their own cleanup.
+ */
+export type Disposer = () => void | Promise<void>;
+
 export type DisposerBag = {
-  readonly add: (disposer: () => void) => void;
+  readonly add: (disposer: Disposer) => void;
 };
