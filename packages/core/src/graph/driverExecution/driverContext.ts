@@ -33,6 +33,7 @@ export function makeDriverContext<TDeps extends object>(input: {
   readonly args: unknown;
   readonly deps: TDeps;
   readonly abortController: AbortController;
+  readonly nodeSignal: AbortSignal;
   readonly disposers: DisposerBag;
   readonly signals: RuntimeSignalAccess;
   readonly refreshDep: <K extends keyof TDeps & string>(
@@ -66,6 +67,9 @@ export function makeAcquireDriverContext<TDeps extends object>(input: {
   readonly args: unknown;
   readonly deps: TDeps;
   readonly abortController: AbortController;
+  // Contract: `abortController` is operation-scoped, `nodeSignal` spans the
+  // ready-node incarnation. See the ctx docs on DriverAcquireContext.
+  readonly nodeSignal: AbortSignal;
   readonly disposers: DisposerBag;
   readonly signals: RuntimeSignalAccess;
   readonly getCurrentResultState: () => ResultState;
@@ -129,6 +133,7 @@ export function makeAcquireDriverContext<TDeps extends object>(input: {
     args: input.args,
     deps: input.deps,
     signal: input.abortController.signal,
+    nodeSignal: input.nodeSignal,
     disposers: input.disposers,
     signals: input.signals,
     setResult: (next) =>
@@ -171,6 +176,7 @@ export function makeAcquireDriverContext<TDeps extends object>(input: {
     args: input.args,
     deps: input.deps,
     signal: input.abortController.signal,
+    nodeSignal: input.nodeSignal,
     disposers: input.disposers,
     signals: bridgeAsyncDriverSignals(input.signals),
     setResult,

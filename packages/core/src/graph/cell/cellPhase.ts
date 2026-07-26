@@ -63,6 +63,9 @@ export interface ReadyData extends CellBase {
   // through the bag and the teardown drain loop see one shared registry.
   readonly disposers: ReadonlyArray<Disposer>;
   readonly liveResource: LiveResourceState;
+  // Owner: node-lifetime controller for this ready incarnation. Handed off by
+  // the acquire commit; teardown aborts it exactly once when the node closes.
+  readonly nodeLifetime: AbortController;
 }
 
 export type CellPhaseBaseLookup =

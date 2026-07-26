@@ -17,6 +17,7 @@ import {
   ReleaseFailed,
 } from "../types";
 import { drainLiveDisposers } from "./disposers";
+import { nodeCloseCancellation } from "./nodeLifetime";
 
 export interface ReadyTeardownTimeouts {
   readonly release: DriverOperationTimeoutMs;
@@ -34,6 +35,10 @@ export function teardownReadyData(
   liveStopReason: LiveResourceStopReason
 ): Effect.Effect<ReadonlyArray<GraphFailure>> {
   return Effect.gen(function* () {
+    // Node-lifetime signal: aborts exactly once, before driver teardown hooks
+    // run, so long-lived callbacks bound to ctx.nodeSignal quiesce first.
+    // AbortController.abort is idempotent for repeated teardown entries.
+    ready.nodeLifetime.abort(nodeCloseCancellation(liveStopReason));
     const liveFailures = yield* stopCurrentLiveResource(
       cell,
       ready.liveResource,

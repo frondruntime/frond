@@ -419,6 +419,23 @@ function startLiveResource(
     const abortController = new AbortController();
     const ctx = makeLiveContext({ node, abortController });
 
+    // Interrupt atomicity: any resource returned from start must reach stop.
+    // Two escapes feed one dedupe gate: (1) the value crossed into the runtime
+    // but the fiber was interrupted before the state commit (`produced`);
+    // (2) a promise-based start settles after the operation was abandoned and
+    // reports through onAbandonedResource. Either way the resource is routed
+    // into a detached driver stop instead of being dropped.
+    let produced: { readonly resource: unknown } | undefined;
+    let settled = false;
+    const stopAbandonedResource = (resource: unknown): void => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      runDetachedAbandonedLiveStop(cell, node, resource, liveTimeout);
+    };
+
     const runStart = runTimedDriverOperation({
       cell,
       operation: "live.start",
@@ -427,7 +444,14 @@ function startLiveResource(
       abortController,
       spanName: "frond.graph.live.start",
       spanAttributes: liveSpanAttributes(cell, "start"),
-      run: () => live.run.start(ctx, demand),
+      run: () =>
+        live.run.start(ctx, demand, { onAbandonedResource: stopAbandonedResource }).pipe(
+          Effect.tap((resource) =>
+            Effect.sync(() => {
+              produced = { resource };
+            })
+          )
+        ),
     });
 
     return yield* trackLiveInterrupt(liveInterrupt, abortController, runStart).pipe(
@@ -440,6 +464,9 @@ function startLiveResource(
           }),
         onSuccess: (resource) =>
           Effect.gen(function* () {
+            // Committed resources are owned by cell state from here on; the
+            // abandoned-resource routing must never double-stop them.
+            settled = true;
             // Hazard: generation prevents a late start from overwriting a newer
             // live-resource transition if actor behavior changes later.
             yield* setLiveResourceState(
@@ -462,9 +489,74 @@ function startLiveResource(
       Effect.onInterrupt(() =>
         Effect.sync(() => {
           abortController.abort(interruptedCancellation());
+
+          if (produced !== undefined) {
+            stopAbandonedResource(produced.resource);
+          }
         })
       )
     );
+  });
+}
+
+// Detached by design: the operation that owned this start was already
+// interrupted or timed out, so no caller awaits this stop. Failures are
+// recorded on the cell as live failures rather than thrown into an
+// unobserved fiber.
+function runDetachedAbandonedLiveStop(
+  cell: GraphNodeCell,
+  node: object,
+  resource: unknown,
+  liveTimeout: DriverOperationTimeoutMs
+): void {
+  const { live } = cell.descriptor.driver;
+
+  if (live._tag === "Missing") {
+    return;
+  }
+
+  const abortController = new AbortController();
+  const ctx = makeLiveStopContext({
+    node,
+    abortController,
+    reason: { _tag: "StartInterrupted" },
+  });
+
+  const runStop = runTimedDriverOperation({
+    cell,
+    operation: "live.stop",
+    boundary: "driver-live",
+    timeout: liveTimeout,
+    abortController,
+    spanName: "frond.graph.live.stop",
+    spanAttributes: liveSpanAttributes(cell, "stop"),
+    run: () => live.run.stop(ctx, resource),
+  });
+
+  Effect.runFork(
+    runStop.pipe(
+      Effect.asVoid,
+      Effect.catch((cause) => recordDetachedLiveStopFailure(cell, cause)),
+      Effect.catchCause(() => Effect.void)
+    )
+  );
+}
+
+// Records a detached stop failure as the cell's live failure without touching
+// the live-resource slot: the abandoned resource never became current, so a
+// newer active resource (or Inactive) must not be clobbered from a detached
+// fiber.
+function recordDetachedLiveStopFailure(cell: GraphNodeCell, cause: unknown): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const liveFailure = yield* liveFailureFromFailures([liveDeliveryFailed(cell, "stop", cause)]);
+    yield* cell.state.transition((latest) => [
+      undefined,
+      {
+        ...latest,
+        phase: mapPhaseBase(latest.phase, (base) => ({ ...base, liveFailure })),
+      },
+    ]);
+    yield* cell.notifyChanged(cell.nodeId);
   });
 }
 

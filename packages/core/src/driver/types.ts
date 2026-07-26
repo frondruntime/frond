@@ -185,7 +185,24 @@ export interface AsyncRuntimeSignalSubscriber {
 export type AsyncAcquireDriverContext<TArgs, TDeps extends object, TResult> = {
   readonly args: TArgs;
   readonly deps: TDeps;
+  /**
+   * Operation-scoped abort signal: aborts when THIS driver operation
+   * (acquire/refresh/action) is interrupted or times out. It is not the node's
+   * lifetime — do not retain it in long-lived callbacks; use `nodeSignal` for
+   * anything that outlives the operation.
+   */
   readonly signal: AbortSignal;
+  /**
+   * Node-lifetime abort signal: one per ready-node incarnation, created before
+   * acquire runs so subscriptions can bind it immediately. Aborts exactly once
+   * when the incarnation closes — release, eviction, ready invalidation, or
+   * runtime stop — or when the acquire settles without committing a ready
+   * node. Every hook of the same incarnation sees the same signal; a recreated
+   * node gets a fresh one. Use it for long-lived callbacks registered during
+   * acquire (subscriptions, external listeners); use `signal` to cancel the
+   * operation's own in-flight work.
+   */
+  readonly nodeSignal: AbortSignal;
   readonly disposers: DisposerBag;
   readonly signals: AsyncRuntimeSignalAccess;
   /**
@@ -359,10 +376,22 @@ export type NormalizedLiveStopContext<TNode extends object> = {
   readonly async: AsyncLiveStopContext<TNode>;
 };
 
+export interface NormalizedLiveStartOptions {
+  /**
+   * Out-of-band escape hatch for interrupt atomicity: called when the start
+   * operation was interrupted (or timed out) but the driver's underlying work
+   * still settled with a resource. Promise-based drivers cannot cancel
+   * in-flight work, so the normalized layer keeps the promise reference and
+   * reports a late resource here instead of dropping it.
+   */
+  readonly onAbandonedResource?: ((resource: unknown) => void) | undefined;
+}
+
 export interface NormalizedLiveResource<TNode extends object> {
   readonly start: (
     ctx: NormalizedLiveContext<TNode>,
-    demand: ActiveNodeLiveDemandSnapshot
+    demand: ActiveNodeLiveDemandSnapshot,
+    options?: NormalizedLiveStartOptions
   ) => Effect.Effect<unknown, unknown>;
   readonly update?: (
     ctx: NormalizedLiveContext<TNode>,
@@ -385,7 +414,24 @@ export type DriverContext<TNode extends object, TArgs, TDeps extends object, TRe
 export type DriverAcquireContext<TArgs, TDeps extends object, TResult> = {
   readonly args: TArgs;
   readonly deps: TDeps;
+  /**
+   * Operation-scoped abort signal: aborts when THIS driver operation
+   * (acquire/refresh/action) is interrupted or times out. It is not the node's
+   * lifetime — do not retain it in long-lived callbacks; use `nodeSignal` for
+   * anything that outlives the operation.
+   */
   readonly signal: AbortSignal;
+  /**
+   * Node-lifetime abort signal: one per ready-node incarnation, created before
+   * acquire runs so subscriptions can bind it immediately. Aborts exactly once
+   * when the incarnation closes — release, eviction, ready invalidation, or
+   * runtime stop — or when the acquire settles without committing a ready
+   * node. Every hook of the same incarnation sees the same signal; a recreated
+   * node gets a fresh one. Use it for long-lived callbacks registered during
+   * acquire (subscriptions, external listeners); use `signal` to cancel the
+   * operation's own in-flight work.
+   */
+  readonly nodeSignal: AbortSignal;
   readonly disposers: DisposerBag;
   readonly signals: RuntimeSignalAccess;
   /**

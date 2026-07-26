@@ -40,6 +40,12 @@ export type LiveResourceStopReason =
     }
   | {
       readonly _tag: "ReadyInvalidated";
+    }
+  | {
+      // The start operation was interrupted (eviction, stop, or timeout race)
+      // but still produced a resource; the runtime routes it into stop instead
+      // of dropping it.
+      readonly _tag: "StartInterrupted";
     };
 
 export interface NodeLiveFailure {

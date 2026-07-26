@@ -66,6 +66,7 @@ export function completeAcquireState(input: {
     readonly resultState: ResultState;
     readonly resultValidityPolicy: NormalizedResultValidityPolicy;
     readonly disposers: ReadonlyArray<Disposer>;
+    readonly nodeLifetime: AbortController;
   };
 }):
   | { readonly _tag: "Committed"; readonly state: GraphNodeState }
@@ -94,6 +95,7 @@ export function completeAcquireState(input: {
         // Contract: a freshly ready node preserves accumulated live leases, but no
         // live resource exists until demand is delivered after the ready commit.
         liveResource: { _tag: "Inactive" },
+        nodeLifetime: input.ready.nodeLifetime,
       }),
     },
   };

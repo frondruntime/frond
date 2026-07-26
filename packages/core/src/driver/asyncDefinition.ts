@@ -14,6 +14,7 @@ import type {
   AsyncDriverVoidResult,
   Driver,
   NormalizedLiveResource,
+  NormalizedLiveStartOptions,
   ResultCommit,
 } from "./types";
 
@@ -87,8 +88,8 @@ function normalizeAsyncLiveResource<TNode extends object>(
   live: AsyncLiveResourceDescriptor<TNode, unknown>
 ): NormalizedLiveResource<TNode> {
   const resource = {
-    start: (ctx, demand) =>
-      runAsyncLiveResource(ctx.async, (liveCtx) => live.start(liveCtx, demand)),
+    start: (ctx, demand, options) =>
+      runAsyncLiveStart(ctx.async, (liveCtx) => live.start(liveCtx, demand), options),
     stop: (ctx, resource) => runAsyncLiveVoid(ctx.async, () => live.stop(ctx.async, resource)),
   } satisfies NormalizedLiveResource<TNode>;
 
@@ -137,11 +138,38 @@ function runAsyncResult<TValue>(
   );
 }
 
-function runAsyncLiveResource<TNode extends object, TValue>(
+function runAsyncLiveStart<TNode extends object, TValue>(
   ctx: AsyncLiveContext<TNode>,
-  run: (ctx: AsyncLiveContext<TNode>) => TValue | Promise<TValue>
+  run: (ctx: AsyncLiveContext<TNode>) => TValue | Promise<TValue>,
+  options: NormalizedLiveStartOptions | undefined
 ): Effect.Effect<TValue, AsyncDriverHookFailed> {
-  return runAsyncWithAbortSignal<TValue, TValue>((signal) => run({ ...ctx, signal }), succeedSync);
+  const onAbandonedResource = options?.onAbandonedResource;
+  // Hazard: interrupting an Effect built from a promise abandons the promise —
+  // it keeps running and can still settle with a real resource. Retain the
+  // promise so an interrupted start routes that late resource to the caller
+  // instead of dropping it (the caller stops it; see startLiveResource).
+  let pending: Promise<TValue> | undefined;
+
+  const start = Effect.tryPromise({
+    try: (signal) => {
+      pending = Promise.resolve(run({ ...ctx, signal }));
+      return pending;
+    },
+    catch: (cause) => new AsyncDriverHookFailed(cause),
+  });
+
+  return onAbandonedResource === undefined
+    ? start
+    : start.pipe(
+        Effect.onInterrupt(() =>
+          Effect.sync(() => {
+            pending?.then(
+              (resource) => onAbandonedResource(resource),
+              () => undefined
+            );
+          })
+        )
+      );
 }
 
 function runAsyncVoid(
