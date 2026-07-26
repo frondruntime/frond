@@ -3,6 +3,7 @@ import type { Driver } from "../driver";
 import { createEffectDriver } from "../driver/effectDefinition";
 import {
   type DependenciesRecord,
+  dependencies,
   FROND_NODE_SPEC_BRAND,
   type FrondNode,
   FrondNodeSpecError,
@@ -42,6 +43,15 @@ export interface MockSpecOverrides<
   readonly dependencies?: ((args: NodeSpecArgs<TSpec>) => TDerivedDeps) | undefined;
 }
 
+/**
+ * Test-isolation spec override: swap the driver and/or SEVER the node's
+ * dependencies (`dependencies: () => ({})` or a reduced record) so a node
+ * under test boots without its real graph neighborhood.
+ *
+ * For production driver swaps that must keep the original dependency
+ * topology, use the public `specWithDriver` from `@frondruntime/core`
+ * instead — withDriver keeps deps; mockSpec severs them.
+ */
 export function mockSpec<
   TSpec extends NodeSpecLike,
   TDerivedDeps extends DependenciesRecord = NodeSpecDeclaredDeps<TSpec>,
@@ -135,7 +145,10 @@ function specWithOverrides<
     kind: descriptor.kind,
     tag: descriptor.tag,
     key: descriptor.key,
-    dependencies: overrides.dependencies ?? descriptor.dependencies,
+    dependencies:
+      overrides.dependencies === undefined
+        ? descriptor.dependencies
+        : dependencies(overrides.dependencies),
     driver: overrides.driver ?? descriptor.driver,
   };
   Object.defineProperty(overrideDescriptor, FROND_NODE_SPEC_BRAND, {

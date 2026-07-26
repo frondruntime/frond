@@ -43,16 +43,32 @@ export function tag(value: string): NodeTag {
  * Use this for node-to-node dependencies. Do not call runtime clients, start
  * work, or read mutable app state here; planning may evaluate this before
  * readiness begins.
+ *
+ * Idempotent: an already-branded resolver — including one read back from
+ * `descriptor.dependencies` — passes through unchanged.
  */
 export function dependencies<TArgs, TDeps extends DependenciesRecord>(
   resolver: (args: TArgs) => TDeps
 ): DependencyResolver<TArgs, TDeps> {
+  if (isBrandedDependencyResolver(resolver)) {
+    return resolver;
+  }
+
   return Object.defineProperty(resolver, FROND_DEPENDENCIES_BRAND, {
     configurable: false,
     enumerable: false,
     value: true,
     writable: false,
   }) as unknown as DependencyResolver<TArgs, TDeps>;
+}
+
+function isBrandedDependencyResolver<TArgs, TDeps extends DependenciesRecord>(
+  resolver: (args: TArgs) => TDeps
+): resolver is DependencyResolver<TArgs, TDeps> {
+  return (
+    (resolver as { readonly [FROND_DEPENDENCIES_BRAND]?: unknown })[FROND_DEPENDENCIES_BRAND] ===
+    true
+  );
 }
 
 /**
@@ -247,13 +263,17 @@ export function validateNodeTag(value: unknown): NodeTag {
   return value as NodeTag;
 }
 
+const emptyDependencies: DependencyResolver<unknown, Record<string, never>> = dependencies(
+  () => ({})
+);
+
 function dependencyResolver<
   TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
 >(
   resolver: NodeSpecMeta<TSpec>["dependencies"] | undefined
 ): NodeDescriptor<TSpec>["dependencies"] {
   if (resolver === undefined) {
-    return () => ({}) as ReturnType<NodeDescriptor<TSpec>["dependencies"]>;
+    return emptyDependencies as unknown as NodeDescriptor<TSpec>["dependencies"];
   }
 
   if (resolver[FROND_DEPENDENCIES_BRAND] !== true) {
