@@ -123,7 +123,11 @@ function ReactTypeContractProbe(): null {
   const profileRead = useNodeRead(ProfileNode, { id: "profile-read" });
   profileRead._tag satisfies "Unwired" | "Idle" | "Pending" | "Ready" | "Error";
   if (profileRead._tag === "Ready") {
-    profileRead.result satisfies { readonly name: string } | undefined;
+    // Ready.result is definitively the declared result type — no `| undefined`
+    // arm to defend against — and Ready.node is the typed instance.
+    profileRead.result.name satisfies string;
+    profileRead.node satisfies ProfileNode;
+    profileRead.node.rename("Ada") satisfies Promise<{ readonly ok: true }>;
   }
 
   // @ts-expect-error node state does not expose raw driver result separately

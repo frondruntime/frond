@@ -1,4 +1,10 @@
-import type { NodeSpecArgs, NodeSpecLike, NodeSpecResult, Runtime } from "@frondruntime/core";
+import type {
+  NodeSpecArgs,
+  NodeSpecInstance,
+  NodeSpecLike,
+  NodeSpecResult,
+  Runtime,
+} from "@frondruntime/core";
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { getReactArgsFingerprint } from "./argsFingerprint";
 import { useRuntime } from "./context";
@@ -21,7 +27,7 @@ import type { ReactNodeSpec } from "./types";
 export function useNodeRead<TSpec extends NodeSpecLike>(
   spec: TSpec,
   args: NodeSpecArgs<TSpec>
-): Runtime.RuntimeNodeRead<NodeSpecResult<TSpec>> {
+): Runtime.RuntimeNodeRead<NodeSpecResult<TSpec>, ReadNodeInstance<TSpec>> {
   const runtime = useRuntime();
   const nodeId = runtime.resolveNodeIdSync({ spec, args });
   // Biome cannot see that nodeId is the canonical identity for spec and args.
@@ -29,12 +35,17 @@ export function useNodeRead<TSpec extends NodeSpecLike>(
   // biome-ignore lint/correctness/useExhaustiveDependencies: nodeId is the stable Frond identity.
   const store = useMemo(
     () =>
-      makeReactNodeStore<NodeSpecArgs<TSpec>, never, NodeSpecResult<TSpec>, object>(runtime, {
+      makeReactNodeStore<
+        NodeSpecArgs<TSpec>,
+        never,
+        NodeSpecResult<TSpec>,
+        ReadNodeInstance<TSpec>
+      >(runtime, {
         spec: spec as unknown as ReactNodeSpec<
           NodeSpecArgs<TSpec>,
           never,
           NodeSpecResult<TSpec>,
-          object
+          ReadNodeInstance<TSpec>
         >,
         args,
         nodeId,
@@ -57,3 +68,8 @@ export function useNodeRead<TSpec extends NodeSpecLike>(
 
   return store.peek();
 }
+
+// The ready author-node instance the Ready arm exposes; falls back to `object`
+// for opaque spec carriers whose instance type is not statically recoverable.
+type ReadNodeInstance<TSpec> =
+  NodeSpecInstance<TSpec> extends object ? NodeSpecInstance<TSpec> : object;

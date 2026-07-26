@@ -12,11 +12,11 @@ import type {
 
 export type RuntimeReadHost = Pick<Runtime, "getStatusSync" | "readNodeSnapshotSync">;
 
-export function readNode<TResult>(
+export function readNode<TResult, TNode extends object = object>(
   runtime: RuntimeReadHost,
   nodeId: NodeId
-): RuntimeNodeRead<TResult> {
-  return publicRuntimeNodeRead(readRawNode<TResult>(runtime, nodeId));
+): RuntimeNodeRead<TResult, TNode> {
+  return publicRuntimeNodeRead(readRawNode<TResult, TNode>(runtime, nodeId));
 }
 
 /**
@@ -37,17 +37,20 @@ export function readNodeRevision(runtime: RuntimeReadHost, nodeId: NodeId): numb
   return lookup._tag === "Missing" ? 0 : lookup.snapshot.revision;
 }
 
-export function readRawNode<TResult>(
+export function readRawNode<TResult, TNode extends object = object>(
   runtime: RuntimeReadHost,
   nodeId: NodeId
-): RawRuntimeNodeRead<TResult> {
+): RawRuntimeNodeRead<TResult, TNode> {
   if (runtime.getStatusSync() === "stopped") {
     return unavailableRuntimeNodeRead(nodeId);
   }
 
-  const nodeSnapshotLookup = runtime.readNodeSnapshotSync(
-    nodeId
-  ) as RuntimeNodeSnapshotLookup<TResult>;
+  // Trust boundary: the typed handle that owns this nodeId vouches for the
+  // node's result and instance types, exactly as it did for TResult alone.
+  const nodeSnapshotLookup = runtime.readNodeSnapshotSync(nodeId) as RuntimeNodeSnapshotLookup<
+    TResult,
+    TNode
+  >;
 
   if (nodeSnapshotLookup._tag === "Missing") {
     return { _tag: "Unwired", nodeId };
@@ -56,31 +59,34 @@ export function readRawNode<TResult>(
   const nodeSnapshot = nodeSnapshotLookup.snapshot;
 
   return Match.value(nodeSnapshot).pipe(
-    Match.tag("Unwired", () => ({ _tag: "Unwired", nodeId }) satisfies RawRuntimeNodeRead<TResult>),
-    Match.tag("Idle", (snapshot) => idleRuntimeNodeRead<TResult>(nodeId, snapshot)),
-    Match.tag("Pending", (snapshot) => pendingRuntimeNodeRead<TResult>(nodeId, snapshot)),
-    Match.tag("Ready", (snapshot) => readyRuntimeNodeRead<TResult>(nodeId, snapshot)),
-    Match.tag("ReadinessError", (snapshot) =>
-      errorRuntimeNodeRead<TResult>(nodeId, snapshot, snapshot.error)
+    Match.tag(
+      "Unwired",
+      () => ({ _tag: "Unwired", nodeId }) satisfies RawRuntimeNodeRead<TResult, TNode>
     ),
-    Match.tag("Releasing", (snapshot) => idleRuntimeNodeRead<TResult>(nodeId, snapshot)),
+    Match.tag("Idle", (snapshot) => idleRuntimeNodeRead<TResult, TNode>(nodeId, snapshot)),
+    Match.tag("Pending", (snapshot) => pendingRuntimeNodeRead<TResult, TNode>(nodeId, snapshot)),
+    Match.tag("Ready", (snapshot) => readyRuntimeNodeRead<TResult, TNode>(nodeId, snapshot)),
+    Match.tag("ReadinessError", (snapshot) =>
+      errorRuntimeNodeRead<TResult, TNode>(nodeId, snapshot, snapshot.error)
+    ),
+    Match.tag("Releasing", (snapshot) => idleRuntimeNodeRead<TResult, TNode>(nodeId, snapshot)),
     Match.tag("Invalid", (snapshot) =>
-      invalidRuntimeNodeRead<TResult>(nodeId, snapshot, snapshot.error)
+      invalidRuntimeNodeRead<TResult, TNode>(nodeId, snapshot, snapshot.error)
     ),
     Match.exhaustive
   );
 }
 
-export function bootingRuntimeNodeRead<TResult>(
+export function bootingRuntimeNodeRead<TResult, TNode extends object = object>(
   nodeId: NodeId,
   attempt: Promise<NodeRead>
-): RuntimeNodeRead<TResult> {
+): RuntimeNodeRead<TResult, TNode> {
   return { _tag: "Pending", nodeId, attempt, operation: idleOperation, busy: false };
 }
 
-function publicRuntimeNodeRead<TResult>(
-  read: RawRuntimeNodeRead<TResult>
-): RuntimeNodeRead<TResult> {
+function publicRuntimeNodeRead<TResult, TNode extends object>(
+  read: RawRuntimeNodeRead<TResult, TNode>
+): RuntimeNodeRead<TResult, TNode> {
   return Match.value(read).pipe(
     Match.tag("Unwired", (unwired) => unwired),
     Match.tag("Idle", (idle) => idle),
@@ -95,7 +101,7 @@ function publicRuntimeNodeRead<TResult>(
           operation,
           busy,
           operationFailure,
-        }) satisfies RuntimeNodeRead<TResult>
+        }) satisfies RuntimeNodeRead<TResult, TNode>
     ),
     Match.tag("Ready", (ready) => {
       if (ready.resultValidity._tag === "Expired") {
@@ -105,13 +111,13 @@ function publicRuntimeNodeRead<TResult>(
           operation: ready.operation,
           busy: ready.busy,
           operationFailure: ready.operationFailure,
-        } satisfies RuntimeNodeRead<TResult>;
+        } satisfies RuntimeNodeRead<TResult, TNode>;
       }
 
       return {
         ...ready,
         resultValidity: ready.resultValidity,
-      } satisfies RuntimeNodeRead<TResult>;
+      } satisfies RuntimeNodeRead<TResult, TNode>;
     }),
     Match.tag(
       "Expired",
@@ -122,7 +128,7 @@ function publicRuntimeNodeRead<TResult>(
           operation,
           busy,
           operationFailure,
-        }) satisfies RuntimeNodeRead<TResult>
+        }) satisfies RuntimeNodeRead<TResult, TNode>
     ),
     Match.tag("Error", (error) => ({ ...error, kind: "readiness" as const })),
     Match.tag(
@@ -136,7 +142,7 @@ function publicRuntimeNodeRead<TResult>(
           operation,
           busy,
           operationFailure,
-        }) satisfies RuntimeNodeRead<TResult>
+        }) satisfies RuntimeNodeRead<TResult, TNode>
     ),
     Match.tag(
       "Unavailable",
@@ -149,7 +155,7 @@ function publicRuntimeNodeRead<TResult>(
           operation,
           busy,
           operationFailure,
-        }) satisfies RuntimeNodeRead<TResult>
+        }) satisfies RuntimeNodeRead<TResult, TNode>
     ),
     Match.exhaustive
   );
@@ -163,10 +169,10 @@ function operationReadFields(snapshot: RuntimeNodeSnapshot<unknown>) {
   };
 }
 
-function readyRuntimeNodeRead<TResult>(
+function readyRuntimeNodeRead<TResult, TNode extends object>(
   nodeId: NodeId,
-  nodeSnapshot: Extract<RuntimeNodeSnapshot<unknown>, { readonly _tag: "Ready" }>
-): RawRuntimeNodeRead<TResult> {
+  nodeSnapshot: Extract<RuntimeNodeSnapshot<TResult, TNode>, { readonly _tag: "Ready" }>
+): RawRuntimeNodeRead<TResult, TNode> {
   const currentNode = nodeSnapshot.node;
 
   if (nodeSnapshot.resultValidity?._tag === "Expired") {
@@ -175,69 +181,71 @@ function readyRuntimeNodeRead<TResult>(
       nodeId,
       resultValidity: nodeSnapshot.resultValidity,
       ...operationReadFields(nodeSnapshot),
-    } satisfies RawRuntimeNodeRead<TResult>;
+    } satisfies RawRuntimeNodeRead<TResult, TNode>;
   }
 
   return {
     _tag: "Ready",
     nodeId,
     node: currentNode,
-    result: nodeSnapshot.result as TResult | undefined,
+    result: nodeSnapshot.result,
     resultValidity: nodeSnapshot.resultValidity ?? { _tag: "Current" },
     ...operationReadFields(nodeSnapshot),
-  } satisfies RawRuntimeNodeRead<TResult>;
+  } satisfies RawRuntimeNodeRead<TResult, TNode>;
 }
 
-function idleRuntimeNodeRead<TResult>(
+function idleRuntimeNodeRead<TResult, TNode extends object>(
   nodeId: NodeId,
   nodeSnapshot: Extract<RuntimeNodeSnapshot<unknown>, { readonly _tag: "Idle" | "Releasing" }>
-): RawRuntimeNodeRead<TResult> {
+): RawRuntimeNodeRead<TResult, TNode> {
   return {
     _tag: "Idle",
     nodeId,
     ...operationReadFields(nodeSnapshot),
-  } satisfies RawRuntimeNodeRead<TResult>;
+  } satisfies RawRuntimeNodeRead<TResult, TNode>;
 }
 
-function errorRuntimeNodeRead<TResult>(
+function errorRuntimeNodeRead<TResult, TNode extends object>(
   nodeId: NodeId,
   nodeSnapshot: Extract<RuntimeNodeSnapshot<unknown>, { readonly _tag: "ReadinessError" }>,
   error: unknown
-): RawRuntimeNodeRead<TResult> {
+): RawRuntimeNodeRead<TResult, TNode> {
   return {
     _tag: "Error",
     nodeId,
     error,
     ...operationReadFields(nodeSnapshot),
-  } satisfies RawRuntimeNodeRead<TResult>;
+  } satisfies RawRuntimeNodeRead<TResult, TNode>;
 }
 
-function invalidRuntimeNodeRead<TResult>(
+function invalidRuntimeNodeRead<TResult, TNode extends object>(
   nodeId: NodeId,
   nodeSnapshot: RuntimeNodeSnapshot<unknown>,
   error: unknown
-): RawRuntimeNodeRead<TResult> {
+): RawRuntimeNodeRead<TResult, TNode> {
   return {
     _tag: "Invalid",
     nodeId,
     error,
     ...operationReadFields(nodeSnapshot),
-  } satisfies RawRuntimeNodeRead<TResult>;
+  } satisfies RawRuntimeNodeRead<TResult, TNode>;
 }
 
-function pendingRuntimeNodeRead<TResult>(
+function pendingRuntimeNodeRead<TResult, TNode extends object>(
   nodeId: NodeId,
   nodeSnapshot: Extract<RuntimeNodeSnapshot<unknown>, { readonly _tag: "Pending" }>
-): RawRuntimeNodeRead<TResult> {
+): RawRuntimeNodeRead<TResult, TNode> {
   return {
     _tag: "Pending",
     nodeId,
     attempt: nodeSnapshot.attempt,
     ...operationReadFields(nodeSnapshot),
-  } satisfies RawRuntimeNodeRead<TResult>;
+  } satisfies RawRuntimeNodeRead<TResult, TNode>;
 }
 
-function unavailableRuntimeNodeRead<TResult>(nodeId: NodeId): RawRuntimeNodeRead<TResult> {
+function unavailableRuntimeNodeRead<TResult, TNode extends object = object>(
+  nodeId: NodeId
+): RawRuntimeNodeRead<TResult, TNode> {
   return {
     _tag: "Unavailable",
     nodeId,

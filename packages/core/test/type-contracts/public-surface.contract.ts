@@ -81,6 +81,29 @@ export type PublicReadyValidityIsDisplayable = Expect<
     "Current" | "Stale"
   >
 >;
+// DEFINITIVE: Ready.result is exactly TResult — never `TResult | undefined`.
+// A Ready read always carries the committed result; `undefined` is observable
+// only when `undefined` is a valid member of the node's declared result type.
+// (A consumer auth fail-closed path depends on this being unambiguous.)
+export type PublicReadyResultIsExactlyTResult = Expect<
+  Equal<Extract<RuntimeRead, { readonly _tag: "Ready" }>["result"], { readonly ok: true }>
+>;
+type UndefinedResultRead = Frond.Runtime.RuntimeNodeRead<undefined>;
+export type ReadyUndefinedResultStaysExpressible = Expect<
+  Equal<Extract<UndefinedResultRead, { readonly _tag: "Ready" }>["result"], undefined>
+>;
+export type SnapshotReadyResultIsExactlyTResult = Expect<
+  Equal<Extract<RuntimeSnapshot, { readonly _tag: "Ready" }>["result"], { readonly ok: true }>
+>;
+// Ready.node threads the typed instance; the untyped default stays `object`
+// for genuinely spec-less (unsafe/diagnostic) reads.
+export type PublicReadyNodeDefaultsToObject = Expect<
+  Equal<Extract<RuntimeRead, { readonly _tag: "Ready" }>["node"], object>
+>;
+type TypedNodeRead = Frond.Runtime.RuntimeNodeRead<{ readonly ok: true }, { readonly probe: 1 }>;
+export type PublicReadyNodeCarriesInstanceType = Expect<
+  Equal<Extract<TypedNodeRead, { readonly _tag: "Ready" }>["node"], { readonly probe: 1 }>
+>;
 export type UnsafeReadKeepsRawTags = Expect<
   Equal<
     UnsafeRead["_tag"],

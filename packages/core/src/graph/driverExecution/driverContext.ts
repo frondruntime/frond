@@ -191,12 +191,34 @@ function clonePatchableResult(
   }
 
   if (isPlainObject(value)) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [
-        key,
-        clonePatchableResult(entry, options, context),
-      ])
-    );
+    // Copy EVERY own property — string and symbol keys, enumerable or not —
+    // with its original descriptor, and keep the original prototype (plain
+    // objects may be null-prototype). Enumerable string-keyed data values are
+    // cloned recursively, matching the historical staging-isolation semantics
+    // for patchable data. Everything else (symbol-keyed slots such as the
+    // result envelope's internal, non-enumerable properties, accessors) is
+    // carried by reference: those are identity-bearing internals, not
+    // patchable data, and cloning them would break or reject non-plain values
+    // like sockets and AbortControllers.
+    const descriptors = Object.getOwnPropertyDescriptors(value) as Record<
+      PropertyKey,
+      PropertyDescriptor
+    >;
+
+    for (const key of Reflect.ownKeys(descriptors)) {
+      const descriptor = descriptors[key];
+
+      if (
+        descriptor !== undefined &&
+        typeof key === "string" &&
+        descriptor.enumerable === true &&
+        "value" in descriptor
+      ) {
+        descriptor.value = clonePatchableResult(descriptor.value, options, context);
+      }
+    }
+
+    return Object.create(Object.getPrototypeOf(value), descriptors);
   }
 
   if (typeof value === "object" && value !== null) {

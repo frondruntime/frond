@@ -37,7 +37,8 @@ export interface FrondTestNodeHandle<TSpec extends NodeSpecLike>
     NodeSpecArgs<TSpec>,
     NodeSpecResult<TSpec>,
     NodeSpecActions<TSpec>,
-    NodeSpecMode<TSpec>
+    NodeSpecMode<TSpec>,
+    NodeSpecInstance<TSpec> & object
   > {
   readonly [FROND_TEST_SPEC]?: TSpec;
 }
