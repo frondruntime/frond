@@ -55,16 +55,26 @@ export type SpecWithDriverReplacement<
  * The class returned by `specWithDriver`: constructs the original node type
  * (instances remain `instanceof` the original class) and carries a descriptor
  * whose shape and mode match the original's, so the override is assignable
- * wherever the original class is expected. The construct signature is
- * concrete for parity with authored node classes; constructing it directly
- * throws outside graph readiness, exactly like the original.
+ * wherever the original class is expected. The construct signature mirrors
+ * the original's abstractness: an override of a concrete node class is
+ * concrete (parity with authored node classes), and an override of an
+ * abstract original stays abstract, so `new Override()` is rejected where
+ * `new Original()` would be. Either way, direct construction throws
+ * `FrondNodeConstructionUnavailable` at runtime outside graph readiness, and
+ * abstract members of the original remain unimplemented on the override.
  */
 export type SpecWithDriverClass<
   TSpec extends NodeSpecLike,
   TMode extends DriverMode = NodeSpecMode<TSpec>,
-> = (new (
+> = (TSpec extends new (
   ...args: ReadonlyArray<never>
-) => NodeSpecInstance<TSpec>) & {
+) => object
+  ? new (
+      ...args: ReadonlyArray<never>
+    ) => NodeSpecInstance<TSpec>
+  : abstract new (
+      ...args: ReadonlyArray<never>
+    ) => NodeSpecInstance<TSpec>) & {
   readonly prototype: NodeSpecInstance<TSpec>;
   readonly spec: NodeDescriptor<SpecWithDriverSpec<TSpec>, TMode>;
 };

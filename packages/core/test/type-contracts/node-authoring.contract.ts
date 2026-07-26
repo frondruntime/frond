@@ -122,7 +122,8 @@ class RChannelRejectedNode extends NodeBase<ServiceBackedSpec> {
   });
 }
 
-RChannelRejectedNode.spec satisfies unknown;
+// Usage marker: the class exists to host the @ts-expect-error pin above.
+void RChannelRejectedNode.spec;
 
 type CounterSpec = import("../../src").NodeSpec<{
   readonly mode: "async";
@@ -438,6 +439,20 @@ const profileInstanceAsClass: ProfileNode = profileInstance;
 profileInstanceAsClass satisfies ProfileNode;
 profileInstance.actions.rename({ name: "Ada" }) satisfies Promise<{ readonly ok: true }>;
 
+// A hand-written class that merely carries a spec is not a node: only the
+// `NodeBase` constructor wires the runtime action facade, so
+// `NodeSpecInstance` must not fabricate a typed `actions` surface that never
+// exists at runtime.
+class HandwrittenSpecCarrier {
+  static readonly spec = EffectNode.spec;
+  readonly handwritten = true;
+}
+
+declare const handwrittenInstance: NodeSpecInstance<typeof HandwrittenSpecCarrier>;
+handwrittenInstance.handwritten satisfies boolean;
+// @ts-expect-error non-NodeBase spec carriers get no fabricated action facade
+handwrittenInstance.actions;
+
 serviceSpec.effect<EffectSpec>({
   tag: tag("types/effect-node-actions"),
   key: () => Key.singleton(),
@@ -528,6 +543,41 @@ nodeSpec.fromDriver<EffectCounterSpec>({
   driver: asyncCounterDriver,
 });
 
+// The one-declaration mode contract holds at the escape hatch too: a shape
+// whose mode is still the full `"async" | "effect"` union is rejected for
+// BOTH driver flavors — narrow the shape's mode before wiring a driver.
+type UnionModeCounterSpec = import("../../src").NodeSpec<{
+  readonly mode: "async" | "effect";
+  readonly args: Args.None;
+  readonly key: Key.Singleton;
+  readonly result: { readonly count: number };
+}>;
+
+const asyncPlainCounterDriver = Driver.Async<
+  import("../../src").NodeSpec<{
+    readonly mode: "async";
+    readonly args: Args.None;
+    readonly key: Key.Singleton;
+    readonly result: { readonly count: number };
+  }>
+>({
+  acquire: Driver.Acquire(() => ({ count: 1 })),
+});
+
+// @ts-expect-error fromDriver rejects a spec shape whose declared mode is the full union
+nodeSpec.fromDriver<UnionModeCounterSpec>({
+  tag: tag("types/counter-union-from-driver-async"),
+  key: () => Key.singleton(),
+  driver: asyncPlainCounterDriver,
+});
+
+// @ts-expect-error fromDriver rejects a spec shape whose declared mode is the full union
+nodeSpec.fromDriver<UnionModeCounterSpec>({
+  tag: tag("types/counter-union-from-driver-effect"),
+  key: () => Key.singleton(),
+  driver: effectCounterDriver,
+});
+
 // The deleted requirements parameter shifted explicit action maps up one
 // position: `.effect<Spec, typeof actions>`, with no middle `never`.
 const effectPingActions = {
@@ -581,7 +631,8 @@ const liveContractResource = Driver.Live({
     ctx.signal satisfies AbortSignal;
     demand.isLive satisfies true;
     demand.sources[0] satisfies "manual" | "mobx";
-    demand.scopes[0] satisfies unknown;
+    // Active demand always carries at least one scope: the tuple is non-empty.
+    demand.scopes satisfies readonly [unknown, ...ReadonlyArray<unknown>];
     // @ts-expect-error live transition contexts do not own node-scope disposers
     ctx.disposers;
     return { close: () => undefined };

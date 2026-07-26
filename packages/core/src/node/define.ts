@@ -106,6 +106,18 @@ export type EffectNodeSpecInput<
 > = NodeSpecMeta<TSpec> & EffectInput<TSpec, TActions>;
 
 /**
+ * Rejects a spec shape whose recovered mode is still the full `DriverMode`
+ * union. `fromDriver` is an escape hatch for pre-built drivers, not an escape
+ * from the one-declaration mode contract: a shape must narrow its `mode` to
+ * `"async"` or `"effect"` before it can be wired to a driver.
+ */
+type RequireDeclaredMode<TSpec> = [DriverMode] extends [NodeSpecMode<TSpec>]
+  ? {
+      readonly 'fromDriver requires a spec shape declaring a single mode: "async" or "effect"': never;
+    }
+  : unknown;
+
+/**
  * A mode-flavored node spec factory.
  *
  * `.async` builds a Promise-facing node whose actions are Promise-native; `.effect`
@@ -129,21 +141,23 @@ export interface NodeSpecFactory {
   ) => NodeDescriptor<TSpec, "effect">;
   // Escape hatch for a pre-built driver (deferred/mock test drivers, or a driver
   // shared across nodes). Prefer `.async` / `.effect` for authored nodes. The
-  // driver's mode literal must agree with the shape-declared mode.
+  // driver's mode literal must agree with the shape-declared mode, and the
+  // shape must declare a single mode — union-mode shapes are rejected.
   readonly fromDriver: <
     TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
     TMode extends NodeSpecMode<TSpec> = NodeSpecMode<TSpec>,
   >(
-    input: NodeSpecMeta<TSpec> & {
-      readonly driver: Driver<
-        NodeBase<TSpec>,
-        NodeSpecArgs<TSpec>,
-        NodeSpecResolvedDeps<TSpec>,
-        NodeSpecResult<TSpec>,
-        NodeSpecActions<TSpec>,
-        TMode
-      >;
-    }
+    input: NodeSpecMeta<TSpec> &
+      RequireDeclaredMode<TSpec> & {
+        readonly driver: Driver<
+          NodeBase<TSpec>,
+          NodeSpecArgs<TSpec>,
+          NodeSpecResolvedDeps<TSpec>,
+          NodeSpecResult<TSpec>,
+          NodeSpecActions<TSpec>,
+          TMode
+        >;
+      }
   ) => NodeDescriptor<TSpec, TMode>;
 }
 
@@ -167,16 +181,17 @@ function makeNodeSpecFactory(kind: NodeKind): NodeSpecFactory {
       TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
       TMode extends NodeSpecMode<TSpec> = NodeSpecMode<TSpec>,
     >(
-      input: NodeSpecMeta<TSpec> & {
-        readonly driver: Driver<
-          NodeBase<TSpec>,
-          NodeSpecArgs<TSpec>,
-          NodeSpecResolvedDeps<TSpec>,
-          NodeSpecResult<TSpec>,
-          NodeSpecActions<TSpec>,
-          TMode
-        >;
-      }
+      input: NodeSpecMeta<TSpec> &
+        RequireDeclaredMode<TSpec> & {
+          readonly driver: Driver<
+            NodeBase<TSpec>,
+            NodeSpecArgs<TSpec>,
+            NodeSpecResolvedDeps<TSpec>,
+            NodeSpecResult<TSpec>,
+            NodeSpecActions<TSpec>,
+            TMode
+          >;
+        }
     ): NodeDescriptor<TSpec, TMode> => buildDescriptor<TSpec, TMode>(kind, input, input.driver),
   };
 }

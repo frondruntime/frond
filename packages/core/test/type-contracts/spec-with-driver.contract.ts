@@ -92,12 +92,12 @@ specWithDriver(EffectTransportNode, asyncReplacement);
 // The override is assignable where the original class is expected.
 const transportSlot: typeof TransportNode = OverriddenTransport;
 const effectTransportSlot: typeof EffectTransportNode = OverriddenEffectTransport;
-transportSlot satisfies unknown;
-effectTransportSlot satisfies unknown;
+void transportSlot;
+void effectTransportSlot;
 
 // A dependency declared against the original accepts the override.
 const overriddenDep: Dep<typeof TransportNode> = dep(OverriddenTransport, Args.none);
-overriddenDep satisfies unknown;
+void overriddenDep;
 
 // The override instance type is exactly the original instance type, so ready
 // handles keep prototype-authored members.
@@ -106,14 +106,30 @@ export type OverriddenInstanceOfNodeSpec = Expect<
 >;
 declare const overriddenInstance: InstanceType<typeof OverriddenTransport>;
 const asOriginalInstance: TransportNode = overriddenInstance;
-asOriginalInstance satisfies unknown;
+void asOriginalInstance;
+
+// The override mirrors the original's abstractness: a concrete original keeps
+// a concrete construct signature (parity with authored node classes; direct
+// construction still throws FrondNodeConstructionUnavailable at runtime), and
+// an abstract original yields an abstract override.
+void new OverriddenTransport();
+
+abstract class AbstractTransportNode extends TransportNode {
+  abstract label(): string;
+}
+
+const OverriddenAbstractTransport = specWithDriver(AbstractTransportNode, asyncReplacement);
+// @ts-expect-error an override of an abstract original stays abstract
+new OverriddenAbstractTransport();
+const abstractSlot: typeof AbstractTransportNode = OverriddenAbstractTransport;
+void abstractSlot;
 
 // The override is accepted by createRuntime specOverrides and the client.
 const runtime = createRuntime({
   specOverrides: [{ from: TransportNode, to: OverriddenTransport }],
 });
 const handle = runtime.client.node(OverriddenTransport, Args.none);
-handle satisfies unknown;
+void handle;
 
 // A branded resolver read back from a descriptor is accepted by the public
 // factories directly — no `dependencies(args => resolver(args))` closure.

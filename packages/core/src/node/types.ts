@@ -166,12 +166,17 @@ export type NodeSpecInstance<TSpec> = TSpec extends { readonly prototype: infer 
         // from the spec shape), so keep the nominal class type: private
         // members and `instanceof` narrowing survive.
         TNode
-      : Omit<TNode, "actions"> & {
-          // The node's own type parameter is the spec shape, which carries no
-          // driver, so `NodeBase.actions` can't know the mode. Inject it here,
-          // where the class (`typeof Foo`) — and thus its authored mode — is known.
-          readonly actions: NodeActions<NodeSpecActions<TSpec>, NodeSpecMode<TSpec>>;
-        }
+      : TNode extends { readonly actions: unknown }
+        ? Omit<TNode, "actions"> & {
+            // The node's own type parameter is the spec shape, which carries no
+            // driver, so `NodeBase.actions` can't know the mode. Inject it here,
+            // where the class (`typeof Foo`) — and thus its authored mode — is known.
+            readonly actions: NodeActions<NodeSpecActions<TSpec>, NodeSpecMode<TSpec>>;
+          }
+        : // A hand-written class that merely carries a spec has no runtime
+          // action facade (only the `NodeBase` constructor wires one), so no
+          // typed `actions` surface is fabricated for it.
+          TNode
     : TNode
   : never;
 
@@ -187,10 +192,12 @@ type NodeSpecDriver<TSpec> = TSpec extends { readonly spec: { readonly driver: i
  * The authored driver mode of a node spec: `"async"` or `"effect"`.
  *
  * Recovered from the mode declared in the spec shape
- * (`NodeSpec<{ mode: "effect" }>`), which every shape must declare. When no
- * shape is recoverable (an opaque `NodeSpecLike` carrier), falls back to the
- * driver's `mode` literal, and finally degrades to `"async"` so the surface
- * presents the Promise representation.
+ * (`NodeSpec<{ mode: "effect" }>`), which every shape must declare. When the
+ * shape itself is not statically recoverable, falls back to the driver's
+ * `mode` literal. For an opaque `NodeSpecLike` carrier the shape inference
+ * lands on its constraint, so the recovered mode degrades to the full
+ * `"async" | "effect"` union — deliberately noncommittal rather than
+ * pretending one representation.
  */
 export type NodeSpecMode<TSpec> =
   NodeSpecCarrier<TSpec> extends NodeSpec<infer TShape>

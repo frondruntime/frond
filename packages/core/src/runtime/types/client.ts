@@ -95,12 +95,17 @@ export interface RuntimeClient {
 /**
  * The ready author-node instance type a typed handle exposes on `Ready` reads.
  *
- * `NodeSpecInstance` recovers the nominal class instance; the intersection with
- * `object` keeps the type parameter within the read surface's `TNode extends
- * object` constraint for opaque `NodeSpecLike` carriers whose instance type is
- * not statically recoverable.
+ * `NodeSpecInstance` recovers the nominal class instance. For opaque
+ * `NodeSpecLike` carriers whose instance type is not statically recoverable,
+ * `NodeSpecInstance` collapses to `any` (the lib `Function.prototype` is
+ * `any`), so the `0 extends 1 & T` guard detects that collapse and degrades
+ * the surface to `object` instead of `any`; the intersection with `object`
+ * keeps every other instance type within the read surface's `TNode extends
+ * object` constraint.
  */
-export type RuntimeHandleNode<TSpec extends NodeSpecLike> = NodeSpecInstance<TSpec> & object;
+export type RuntimeHandleNode<TSpec extends NodeSpecLike> = 0 extends 1 & NodeSpecInstance<TSpec>
+  ? object
+  : NodeSpecInstance<TSpec> & object;
 
 /**
  * A node handle's typed, mode-native action surface.

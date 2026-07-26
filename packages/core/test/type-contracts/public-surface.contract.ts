@@ -119,6 +119,13 @@ export type UnsafeReadKeepsRawTags = Expect<
   >
 >;
 
+// An opaque NodeSpecLike carrier must not collapse the typed handle's node
+// surface to `any` (lib `Function.prototype` is `any`); the documented
+// degrade for statically unrecoverable instance types is `object`.
+export type OpaqueHandleNodeIsObject = Expect<
+  Equal<Frond.Runtime.RuntimeHandleNode<Frond.NodeSpecLike>, object>
+>;
+
 export type NoRootRuntimeNodeHandle = Expect<
   Equal<"RuntimeNodeHandle" extends keyof typeof Frond ? true : false, false>
 >;
