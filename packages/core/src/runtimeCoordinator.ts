@@ -24,12 +24,12 @@ export type RuntimeLease<TValue> = Readonly<{
  * `dispose()` before it completed. The superseded boot disposes its own lease
  * before rejecting, so nothing leaks.
  */
-export class RuntimeBootSupersededError extends Error {
-  readonly _tag = "RuntimeBootSupersededError";
+export class FrondRuntimeBootSuperseded extends Error {
+  readonly _tag = "FrondRuntimeBootSuperseded";
 
   constructor() {
     super("Frond runtime boot was superseded by a newer start() or dispose() before it completed.");
-    this.name = "RuntimeBootSupersededError";
+    this.name = "FrondRuntimeBootSuperseded";
   }
 }
 
@@ -46,7 +46,7 @@ export type RuntimeCoordinator<TValue> = Readonly<{
  * has fully settled. Each `start` claims a generation; if a newer `start` or
  * `dispose` claims a later generation while a boot is in flight, the
  * superseded boot disposes its own lease and rejects with
- * `RuntimeBootSupersededError`.
+ * `FrondRuntimeBootSuperseded`.
  */
 export function createRuntimeCoordinator<TValue>(): RuntimeCoordinator<TValue> {
   let generation = 0;
@@ -63,7 +63,7 @@ export function createRuntimeCoordinator<TValue>(): RuntimeCoordinator<TValue> {
       const lease = await createLease();
       if (generation !== bootGeneration) {
         await lease.dispose();
-        throw new RuntimeBootSupersededError();
+        throw new FrondRuntimeBootSuperseded();
       }
       current = lease;
       return lease.value;

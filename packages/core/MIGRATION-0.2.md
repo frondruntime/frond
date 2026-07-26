@@ -28,7 +28,7 @@ static readonly spec = Frond.serviceSpec.async<SessionSpec>({
 });
 ```
 
-Effect-native nodes use `.effect` the same way. `Driver.Async` / `Driver.Effect` remain public for pre-built or shared drivers; pass the result through `nodeSpec.fromDriver` (or `specWithDriver`, below). Both builders and `.fromDriver` carry the same shape-mode constraint as the factories: the driver's mode literal must agree with the shape-declared mode.
+Effect-native nodes use `.effect` the same way. `Driver.Async` / `Driver.Effect` remain public for pre-built or shared drivers; pass the result through `nodeSpec.fromDriver` (or `specWithDriver`, below). Both builders and `.fromDriver` carry the same shape-mode constraint as the factories: the driver's mode literal must agree with the shape-declared mode, and a shape whose `mode` is still the full `"async" | "effect"` union is rejected by all three - `fromDriver` names the failure explicitly (`fromDriver requires a spec shape declaring a single mode: "async" or "effect"`).
 
 ### 2. Spec shapes must declare `mode`
 
@@ -102,7 +102,28 @@ yield* session.actions.refreshToken({ force: true });
 
 `unwrapEffect` rejects with the original typed error value (so `catch` sees what the Effect failed with); defects and interruption reject with the failure `Cause` so crashes never masquerade as typed failures. The MobX and React adapters bridge internally - hooks like `useNode` and the MobX helpers need no changes at call sites that only render or read nodes.
 
-### 6. `Ready.result` is exactly the declared result type
+### 6. MobX observable results are classified non-plain for `patchResult` staging
+
+`patchResult` clones plain objects and arrays before running the recipe so failed operations can roll back staged mutations. In 0.1.0, a MobX observable result slipped through that classification: patching it silently staged a plain-object snapshot, and a committed patch could replace the observable with the de-observabilized copy. 0.2.0 enforces the `ResultPatchOptions` contract that was already documented - an observable (or any class-instance) result is non-plain, and a patch without `resultPatch: { nonPlainClone: ... }` fails loudly (`driver patchResult requires resultPatch.nonPlainClone for non-plain result values`) instead of committing a fake observable.
+
+```ts
+// 0.1.0 - patching an observable result silently staged a plain snapshot
+ctx.patchResult((draft) => {
+  draft.count += 1;
+});
+
+// 0.2.0 - declare staging semantics on the driver, or the patch fails loudly
+static readonly spec = Frond.serviceSpec.effect<CounterSpec>({
+  tag: Frond.tag("app/counter"),
+  key: () => Frond.Key.singleton(),
+  resultPatch: { nonPlainClone: "share" },
+  acquire: Frond.Driver.Acquire(() => Effect.succeed(observable({ count: 0 }))),
+});
+```
+
+Choose the semantics deliberately: use `"share"` only when shared-reference staging is acceptable - recipe mutations are visible immediately, and if the operation later fails the mutation remains observable on the failed node's result because the stored result is the same shared reference. Provide a clone function when the result type has a domain-specific copy operation and you need real staging isolation. Or sidestep `patchResult` entirely and mutate through node domain methods.
+
+### 7. `Ready.result` is exactly the declared result type
 
 `RuntimeNodeRead`'s `Ready.result` (and `Ready` in `RuntimeNodeSnapshot`) is `TResult`, no longer `TResult | undefined`. Every path that commits the Ready phase carries a committed result, so the `undefined` widening was a phantom state. Delete the compensations:
 
@@ -120,7 +141,7 @@ if (read._tag === "Ready") {
 
 `result === undefined` remains representable only when `undefined` is a member of your declared result type.
 
-### 7. `read().node` is the typed class instance
+### 8. `read().node` is the typed class instance
 
 Typed handles (`runtime.client.node(SessionNode, args)` and the React hooks) now thread the authored class through reads: `Ready.node` is the node class instance, not `object`. Delete the casts:
 
@@ -134,7 +155,7 @@ const node = read.node; // already SessionNode
 
 The same typing flows through `handle.snapshot()` lookups and the new `RuntimeHandleNode<TSpec>` alias (see below).
 
-### 8. Handle and read types gained type parameters
+### 9. Handle and read types gained type parameters
 
 Only affects code that spells out all type arguments; inference and partially-applied forms are unchanged.
 
@@ -143,7 +164,7 @@ Only affects code that spells out all type arguments; inference and partially-ap
 
 If you aliased these with explicit arguments, append the new parameters (or drop the explicit spelling and let `client.node(Spec, args)` infer everything from the spec).
 
-### 9. Inherited 0.1.0 breaking changes
+### 10. Inherited 0.1.0 breaking changes
 
 The snapshot API and event constructor changes (plus canonical args and result staging) shipped in 0.1.0 and are unchanged in 0.2.0. If you are jumping from 0.0.x, read the [0.1.0 release notes](./CHANGELOG.md#010-2026-07-15) first.
 
@@ -157,7 +178,7 @@ Nothing here requires migration; adopt as needed.
 
 - **`specWithDriver(Original, driver)`** - production spec override that swaps only the driver, preserving tag, key, kind, dependencies, and class identity (`instanceof Original` keeps working). Pair with `createRuntime({ specOverrides })`.
 - **Result envelope: `withInternal` / `internalOf` / `carryInternal`** - a Frond-owned non-enumerable slot for imperative per-node internals (SDK handles, sockets) that never leaks into serialization, spreads, or projections.
-- **`createRuntimeCoordinator`** - serialized runtime replacement for dev HMR and test isolation; boot/dispose of runtime generations never overlap. Pairs with `RuntimeLease` and `RuntimeBootSupersededError`.
+- **`createRuntimeCoordinator`** - serialized runtime replacement for dev HMR and test isolation; boot/dispose of runtime generations never overlap. Pairs with `RuntimeLease` and `FrondRuntimeBootSuperseded`.
 - **`ctx.nodeSignal`** - node-lifetime `AbortSignal` on driver contexts, one per ready-node incarnation, for subscriptions and long-lived callbacks; `ctx.signal` stays operation-scoped.
 - **`RuntimeHandleNode<TSpec>`** - the ready node instance type a typed handle exposes; useful for typing helpers around `handle.read()`.
 - **`DisposerTimedOut`** - structured cause (wrapped in `DisposerFailed`) for async disposers that outlive the per-disposer `driverTimeouts.release` bound; disposers are now once-only and shutdown never wedges on a hung disposer.

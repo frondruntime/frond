@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createRuntimeCoordinator, RuntimeBootSupersededError, type RuntimeLease } from "../src";
+import { createRuntimeCoordinator, FrondRuntimeBootSuperseded, type RuntimeLease } from "../src";
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -76,7 +76,7 @@ describe("runtime coordinator", () => {
 
     const rejection = await rejectionOf(coordinator.start(async () => trackedLease("b", []).lease));
     expect(rejection).toBeInstanceOf(Error);
-    expect(rejection).not.toBeInstanceOf(RuntimeBootSupersededError);
+    expect(rejection).not.toBeInstanceOf(FrondRuntimeBootSuperseded);
     expect((rejection as Error).message).toContain("already active");
     expect(active.disposeCount()).toBe(0);
   });
@@ -102,8 +102,8 @@ describe("runtime coordinator", () => {
     bootGate.resolve();
 
     const rejection = await firstRejection;
-    expect(rejection).toBeInstanceOf(RuntimeBootSupersededError);
-    expect((rejection as RuntimeBootSupersededError)._tag).toBe("RuntimeBootSupersededError");
+    expect(rejection).toBeInstanceOf(FrondRuntimeBootSuperseded);
+    expect((rejection as FrondRuntimeBootSuperseded)._tag).toBe("FrondRuntimeBootSuperseded");
 
     expect(await secondBoot).toBe("b");
     // The superseded boot disposed its own lease, fully, before the
@@ -128,7 +128,7 @@ describe("runtime coordinator", () => {
 
     bootGate.resolve();
 
-    expect(await bootRejection).toBeInstanceOf(RuntimeBootSupersededError);
+    expect(await bootRejection).toBeInstanceOf(FrondRuntimeBootSuperseded);
     await disposal;
     expect(first.disposeCount()).toBe(1);
     expect(log).toEqual(["dispose:a:begin", "dispose:a:end"]);

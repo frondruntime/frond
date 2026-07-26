@@ -68,5 +68,5 @@ export {
 export * as Runtime from "./runtime";
 export { createRuntime, createRuntimeClient } from "./runtime";
 export type { RuntimeCoordinator, RuntimeLease } from "./runtimeCoordinator";
-export { createRuntimeCoordinator, RuntimeBootSupersededError } from "./runtimeCoordinator";
+export { createRuntimeCoordinator, FrondRuntimeBootSuperseded } from "./runtimeCoordinator";
 export * as Signals from "./signals";
