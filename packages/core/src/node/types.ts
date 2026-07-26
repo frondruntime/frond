@@ -34,27 +34,54 @@ export namespace Args {
  * The optional `_shape` field exists only for inference. Runtime identity and
  * execution come from the descriptor created by `nodeSpec`/`serviceSpec`/
  * `resourceSpec`/`facadeSpec`.
+ *
+ * `mode` declares the driver mode as part of the spec shape and is required in
+ * every shape: `NodeSpec<{ mode: "effect"; ... }>` for Effect-native nodes,
+ * `NodeSpec<{ mode: "async"; ... }>` for Promise-facing ones. The flavored spec
+ * factories (`.async` / `.effect`) and the `Driver.Async` / `Driver.Effect`
+ * builders reject a shape whose mode disagrees, and `NodeBase` derives its
+ * action surface from it, so the mode is declared exactly once.
+ *
+ * `services` is a reserved shape member for the runtime-services proposal:
+ * structural typing cannot forbid writing it today, but it is IGNORED by the
+ * runtime and carries no typing behavior until that proposal lands.
  */
 export interface NodeSpec<
   TShape extends {
+    readonly mode: DriverMode;
     readonly args?: KeyInput;
     readonly key?: unknown;
     readonly deps?: DependenciesRecord;
     readonly result?: unknown;
     readonly actions?: ActionContracts;
-  } = { readonly result: unknown },
+  } = { readonly mode: DriverMode; readonly result: unknown },
 > {
   readonly _shape?: TShape | undefined;
 }
 
+/**
+ * Spec shapes accepted by async-flavored entry points (`.async` factories,
+ * `Driver.Async`): the shape must declare `readonly mode: "async"`.
+ */
+export type AsyncModeSpec = NodeSpec<{ readonly mode: "async"; readonly result?: unknown }>;
+
+/**
+ * Spec shapes accepted by effect-flavored entry points (`.effect` factories,
+ * `Driver.Effect`): the shape must declare `readonly mode: "effect"`. The spec
+ * shape is the single source of truth `NodeBase` derives `this.actions` from,
+ * so it can never disagree with the authored driver flavor.
+ */
+export type EffectModeSpec = NodeSpec<{ readonly mode: "effect"; readonly result?: unknown }>;
+
 export type NodeSpecClass<
   TSpec extends NodeSpec<{
+    readonly mode: DriverMode;
     readonly args?: KeyInput;
     readonly key?: unknown;
     readonly deps?: DependenciesRecord;
     readonly result?: unknown;
     readonly actions?: ActionContracts;
-  }> = NodeSpec<{ readonly result: unknown }>,
+  }> = NodeSpec<{ readonly mode: DriverMode; readonly result: unknown }>,
   TNode extends object = NodeBase<TSpec>,
 > = (abstract new (
   ...args: ReadonlyArray<never>
@@ -135,9 +162,9 @@ export type NodeSpecInstance<TSpec> = TSpec extends { readonly prototype: infer 
     ? TNode extends {
         readonly actions: NodeActions<NodeSpecActions<TSpec>, NodeSpecMode<TSpec>>;
       }
-      ? // The class already declares the authored mode (`NodeBase<Spec, "effect">`
-        // for effect drivers, the async default otherwise), so keep the nominal
-        // class type: private members and `instanceof` narrowing survive.
+      ? // The class already carries the authored mode (`NodeBase` derives it
+        // from the spec shape), so keep the nominal class type: private
+        // members and `instanceof` narrowing survive.
         TNode
       : Omit<TNode, "actions"> & {
           // The node's own type parameter is the spec shape, which carries no
@@ -159,11 +186,22 @@ type NodeSpecDriver<TSpec> = TSpec extends { readonly spec: { readonly driver: i
 /**
  * The authored driver mode of a node spec: `"async"` or `"effect"`.
  *
- * Recovered from the driver's `mode` literal, which `Driver.Async`/`Driver.Effect`
- * fix. Defaults to `"async"` when the mode cannot be recovered so the surface
- * degrades to the Promise representation.
+ * Recovered from the mode declared in the spec shape
+ * (`NodeSpec<{ mode: "effect" }>`), which every shape must declare. When no
+ * shape is recoverable (an opaque `NodeSpecLike` carrier), falls back to the
+ * driver's `mode` literal, and finally degrades to `"async"` so the surface
+ * presents the Promise representation.
  */
 export type NodeSpecMode<TSpec> =
+  NodeSpecCarrier<TSpec> extends NodeSpec<infer TShape>
+    ? TShape extends { readonly mode: infer TMode extends DriverMode }
+      ? TMode
+      : NodeSpecDriverMode<TSpec>
+    : NodeSpecDriverMode<TSpec>;
+
+// The driver's authored mode literal, for carriers whose spec shape is not
+// statically recoverable.
+type NodeSpecDriverMode<TSpec> =
   NodeSpecDriver<TSpec> extends {
     readonly mode: infer TMode extends DriverMode;
   }
@@ -183,7 +221,7 @@ export class FrondNodeSpecError extends TypeError {
 }
 
 export type NodeDescriptor<
-  TSpec extends NodeSpec<{ readonly result?: unknown }>,
+  TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
   TMode extends DriverMode = DriverMode,
 > = {
   readonly kind: NodeKind;
@@ -201,7 +239,7 @@ export type NodeDescriptor<
 };
 
 export type NodeSpecInput<
-  TSpec extends NodeSpec<{ readonly result?: unknown }>,
+  TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
   TMode extends DriverMode = DriverMode,
 > = {
   readonly tag: NodeTag;

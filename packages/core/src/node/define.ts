@@ -9,8 +9,10 @@ import {
 import type { Driver, DriverMode } from "../driver/types";
 import type { NodeBase } from "./runtime";
 import type {
+  AsyncModeSpec,
   DependenciesRecord,
   DependencyResolver,
+  EffectModeSpec,
   NodeDescriptor,
   NodeKind,
   NodeSpec,
@@ -18,6 +20,7 @@ import type {
   NodeSpecArgs,
   NodeSpecDeclaredDeps,
   NodeSpecKey,
+  NodeSpecMode,
   NodeSpecResolvedDeps,
   NodeSpecResult,
   NodeTag,
@@ -58,7 +61,9 @@ export function dependencies<TArgs, TDeps extends DependenciesRecord>(
  * The driver hooks (`acquire`, `actions`, …) live alongside this metadata in the
  * flattened spec input; the mode is chosen by the `.async` / `.effect` factory.
  */
-type NodeSpecMeta<TSpec extends NodeSpec<{ readonly result?: unknown }>> = {
+type NodeSpecMeta<
+  TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
+> = {
   readonly tag: NodeTag;
   readonly key: (args: NodeSpecArgs<TSpec>) => NodeSpecKey<TSpec>;
   readonly dependencies?:
@@ -71,7 +76,7 @@ type NodeSpecMeta<TSpec extends NodeSpec<{ readonly result?: unknown }>> = {
  * hooks. Passed to `nodeSpec.async` / `serviceSpec.async` / etc.
  */
 export type AsyncNodeSpecInput<
-  TSpec extends NodeSpec<{ readonly result?: unknown }>,
+  TSpec extends AsyncModeSpec,
   TActions extends AsyncActionImplementations<TSpec> = AsyncActionImplementations<TSpec>,
 > = NodeSpecMeta<TSpec> & AsyncInput<TSpec, TActions>;
 
@@ -80,37 +85,38 @@ export type AsyncNodeSpecInput<
  * hooks. Passed to `nodeSpec.effect` / `serviceSpec.effect` / etc.
  */
 export type EffectNodeSpecInput<
-  TSpec extends NodeSpec<{ readonly result?: unknown }>,
-  R extends never = never,
-  TActions extends EffectActionImplementations<TSpec, R> = EffectActionImplementations<TSpec, R>,
-> = NodeSpecMeta<TSpec> & EffectInput<TSpec, R, TActions>;
+  TSpec extends EffectModeSpec,
+  TActions extends EffectActionImplementations<TSpec> = EffectActionImplementations<TSpec>,
+> = NodeSpecMeta<TSpec> & EffectInput<TSpec, TActions>;
 
 /**
  * A mode-flavored node spec factory.
  *
  * `.async` builds a Promise-facing node whose actions are Promise-native; `.effect`
- * builds an Effect-native node whose actions are Effect-native. The chosen mode is
- * fixed into the descriptor type so the public action surface follows it.
+ * builds an Effect-native node whose actions are Effect-native. The mode is
+ * declared once, in the spec shape (`NodeSpec<{ mode: "effect"; ... }>`); each
+ * flavor rejects a shape whose mode disagrees, and the descriptor type fixes
+ * the mode so the public action surface follows it.
  */
 export interface NodeSpecFactory {
   readonly async: <
-    TSpec extends NodeSpec<{ readonly result?: unknown }>,
+    TSpec extends AsyncModeSpec,
     TActions extends AsyncActionImplementations<TSpec> = AsyncActionImplementations<TSpec>,
   >(
     input: AsyncNodeSpecInput<TSpec, TActions>
   ) => NodeDescriptor<TSpec, "async">;
   readonly effect: <
-    TSpec extends NodeSpec<{ readonly result?: unknown }>,
-    R extends never = never,
-    TActions extends EffectActionImplementations<TSpec, R> = EffectActionImplementations<TSpec, R>,
+    TSpec extends EffectModeSpec,
+    TActions extends EffectActionImplementations<TSpec> = EffectActionImplementations<TSpec>,
   >(
-    input: EffectNodeSpecInput<TSpec, R, TActions>
+    input: EffectNodeSpecInput<TSpec, TActions>
   ) => NodeDescriptor<TSpec, "effect">;
   // Escape hatch for a pre-built driver (deferred/mock test drivers, or a driver
-  // shared across nodes). Prefer `.async` / `.effect` for authored nodes.
+  // shared across nodes). Prefer `.async` / `.effect` for authored nodes. The
+  // driver's mode literal must agree with the shape-declared mode.
   readonly fromDriver: <
-    TSpec extends NodeSpec<{ readonly result?: unknown }>,
-    TMode extends DriverMode = DriverMode,
+    TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
+    TMode extends NodeSpecMode<TSpec> = NodeSpecMode<TSpec>,
   >(
     input: NodeSpecMeta<TSpec> & {
       readonly driver: Driver<
@@ -128,26 +134,22 @@ export interface NodeSpecFactory {
 function makeNodeSpecFactory(kind: NodeKind): NodeSpecFactory {
   return {
     async: <
-      TSpec extends NodeSpec<{ readonly result?: unknown }>,
+      TSpec extends AsyncModeSpec,
       TActions extends AsyncActionImplementations<TSpec> = AsyncActionImplementations<TSpec>,
     >(
       input: AsyncNodeSpecInput<TSpec, TActions>
     ): NodeDescriptor<TSpec, "async"> =>
       buildDescriptor<TSpec, "async">(kind, input, Async<TSpec, TActions>(input)),
     effect: <
-      TSpec extends NodeSpec<{ readonly result?: unknown }>,
-      R extends never = never,
-      TActions extends EffectActionImplementations<TSpec, R> = EffectActionImplementations<
-        TSpec,
-        R
-      >,
+      TSpec extends EffectModeSpec,
+      TActions extends EffectActionImplementations<TSpec> = EffectActionImplementations<TSpec>,
     >(
-      input: EffectNodeSpecInput<TSpec, R, TActions>
+      input: EffectNodeSpecInput<TSpec, TActions>
     ): NodeDescriptor<TSpec, "effect"> =>
-      buildDescriptor<TSpec, "effect">(kind, input, Effect<TSpec, R, TActions>(input)),
+      buildDescriptor<TSpec, "effect">(kind, input, Effect<TSpec, TActions>(input)),
     fromDriver: <
-      TSpec extends NodeSpec<{ readonly result?: unknown }>,
-      TMode extends DriverMode = DriverMode,
+      TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
+      TMode extends NodeSpecMode<TSpec> = NodeSpecMode<TSpec>,
     >(
       input: NodeSpecMeta<TSpec> & {
         readonly driver: Driver<
@@ -199,7 +201,7 @@ export const resourceSpec: NodeSpecFactory = makeNodeSpecFactory("resource");
 export const facadeSpec: NodeSpecFactory = makeNodeSpecFactory("facade");
 
 function buildDescriptor<
-  TSpec extends NodeSpec<{ readonly result?: unknown }>,
+  TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
   TMode extends DriverMode,
 >(
   kind: NodeKind,
@@ -245,7 +247,9 @@ export function validateNodeTag(value: unknown): NodeTag {
   return value as NodeTag;
 }
 
-function dependencyResolver<TSpec extends NodeSpec<{ readonly result?: unknown }>>(
+function dependencyResolver<
+  TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
+>(
   resolver: NodeSpecMeta<TSpec>["dependencies"] | undefined
 ): NodeDescriptor<TSpec>["dependencies"] {
   if (resolver === undefined) {
