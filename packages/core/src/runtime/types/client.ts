@@ -23,6 +23,7 @@ import type { NodeRead } from "../../graph/types/reads";
 import type {
   NodeSpecActions,
   NodeSpecArgs,
+  NodeSpecInstance,
   NodeSpecLike,
   NodeSpecMode,
   NodeSpecResult,
@@ -85,10 +86,21 @@ export interface RuntimeClient {
     NodeSpecArgs<TSpec>,
     NodeSpecResult<TSpec>,
     NodeSpecActions<TSpec>,
-    NodeSpecMode<TSpec>
+    NodeSpecMode<TSpec>,
+    RuntimeHandleNode<TSpec>
   >;
   readonly __unsafe: RuntimeClientUnsafe;
 }
+
+/**
+ * The ready author-node instance type a typed handle exposes on `Ready` reads.
+ *
+ * `NodeSpecInstance` recovers the nominal class instance; the intersection with
+ * `object` keeps the type parameter within the read surface's `TNode extends
+ * object` constraint for opaque `NodeSpecLike` carriers whose instance type is
+ * not statically recoverable.
+ */
+export type RuntimeHandleNode<TSpec extends NodeSpecLike> = NodeSpecInstance<TSpec> & object;
 
 /**
  * A node handle's typed, mode-native action surface.
@@ -116,21 +128,27 @@ export type HandleActions<TActions extends ActionContracts, TMode extends Driver
  * The handle can schedule readiness, actions, refresh, release, eviction, and
  * explicit live leases. It is not a ready author node; call `read`/`boot` or a
  * React/MobX adapter to project current state.
+ *
+ * `TNode` is the ready author-node instance type exposed by `read()`/`boot()`
+ * `Ready` arms and by `snapshot()`. Handles created through
+ * `client.node(Spec, args)` carry `NodeSpecInstance<Spec>`; the `object`
+ * default remains for loosely-typed adapter handles.
  */
 export interface RuntimeNodeHandle<
   TArgs,
   TResult,
   TActions extends ActionContracts = Record<string, never>,
   TMode extends DriverMode = "async",
+  TNode extends object = object,
 > {
   readonly nodeId: NodeRead["nodeId"];
   readonly args: TArgs;
-  readonly read: () => RuntimeNodeRead<TResult>;
+  readonly read: () => RuntimeNodeRead<TResult, TNode>;
   // Monotonic revision of this node's committed state. Stable across calls when
   // nothing changed, so it is the `getSnapshot` for a `useSyncExternalStore`
   // integration outside the React hooks, in place of hashing `read()` by hand.
   readonly readVersion: () => number;
-  readonly boot: (metadata?: RuntimeWorkMetadata | undefined) => RuntimeNodeRead<TResult>;
+  readonly boot: (metadata?: RuntimeWorkMetadata | undefined) => RuntimeNodeRead<TResult, TNode>;
   readonly subscribe: (listener: () => void) => () => void;
   readonly ensure: (metadata?: RuntimeWorkMetadata | undefined) => Promise<NodeRead>;
   readonly ensureReady: (metadata?: RuntimeWorkMetadata | undefined) => Promise<NodeRead>;
@@ -162,7 +180,7 @@ export interface RuntimeNodeHandle<
     scope: unknown,
     metadata?: RuntimeWorkMetadata | undefined
   ) => Promise<RuntimeNodeLiveLeaseResult>;
-  readonly snapshot: () => Promise<RuntimeNodeSnapshotLookup<TResult>>;
+  readonly snapshot: () => Promise<RuntimeNodeSnapshotLookup<TResult, TNode>>;
 }
 
 /**

@@ -21,6 +21,7 @@ export type {
   RuntimeError,
   RuntimeEvent,
   RuntimeEventRecord,
+  RuntimeHandleNode,
   RuntimeId,
   RuntimeInput,
   RuntimeNodeHandle,

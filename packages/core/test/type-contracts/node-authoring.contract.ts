@@ -269,6 +269,28 @@ unwrapEffect(handle.action("rename", { name: "Ada" })) satisfies Promise<unknown
 handle.action("rename", { name: "Ada" }) satisfies Effect.Effect<unknown, unknown>;
 // Monotonic revision for external-store getSnapshot stability.
 handle.readVersion() satisfies number;
+// The typed read surface: Ready.result is exactly the declared result type
+// (never `| undefined`), and Ready.node is the nominal class instance — no
+// `as ProfileNode` cast at the consumer.
+{
+  const profileHandleRead = handle.read();
+  if (profileHandleRead._tag === "Ready") {
+    type ReadyResultIsExact = Expect<Equal<typeof profileHandleRead.result, ProfileResult>>;
+    const readyResultIsExact: ReadyResultIsExact = true;
+    readyResultIsExact satisfies true;
+    profileHandleRead.result.name satisfies string;
+    profileHandleRead.node satisfies ProfileNode;
+    const readNodeAsClass: ProfileNode = profileHandleRead.node;
+    readNodeAsClass.rename("Ada") satisfies Promise<{ readonly ok: true }>;
+  }
+
+  // The typed snapshot lookup carries the same node/result typing.
+  const profileSnapshotLookup = await handle.snapshot();
+  if (profileSnapshotLookup._tag === "Found" && profileSnapshotLookup.snapshot._tag === "Ready") {
+    profileSnapshotLookup.snapshot.result satisfies ProfileResult;
+    profileSnapshotLookup.snapshot.node satisfies ProfileNode;
+  }
+}
 const started = await harness.startNode(ProfileNode, { id: "profile-4" });
 started.rename("Dorothy") satisfies Promise<{ readonly ok: true }>;
 

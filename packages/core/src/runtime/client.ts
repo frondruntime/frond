@@ -20,6 +20,7 @@ import type {
   RuntimeClient,
   RuntimeCommand,
   RuntimeError,
+  RuntimeHandleNode,
   RuntimeHostService,
   RuntimeNodeHandle,
   RuntimeNodeLiveLease,
@@ -69,7 +70,7 @@ export function createRuntimeClient(
 ): RuntimeClient {
   return {
     node: <TSpec extends NodeSpecLike>(spec: TSpec, args: NodeSpecArgs<TSpec>) =>
-      createRuntimeNodeHandle<NodeSpecArgs<TSpec>, NodeSpecResult<TSpec>>(
+      createRuntimeNodeHandle<NodeSpecArgs<TSpec>, NodeSpecResult<TSpec>, RuntimeHandleNode<TSpec>>(
         host,
         runner,
         spec,
@@ -78,18 +79,19 @@ export function createRuntimeClient(
         NodeSpecArgs<TSpec>,
         NodeSpecResult<TSpec>,
         NodeSpecActions<TSpec>,
-        NodeSpecMode<TSpec>
+        NodeSpecMode<TSpec>,
+        RuntimeHandleNode<TSpec>
       >,
     __unsafe: createUnsafeRuntimeClient(host, runner),
   };
 }
 
-function createRuntimeNodeHandle<TArgs, TResult>(
+function createRuntimeNodeHandle<TArgs, TResult, TNode extends object = object>(
   host: RuntimeClientHost,
   runner: RuntimeEffectBridgeRunner,
   spec: unknown,
   args: TArgs
-): RuntimeNodeHandle<TArgs, TResult> {
+): RuntimeNodeHandle<TArgs, TResult, Record<string, never>, "async", TNode> {
   let currentArgs = args;
   const request = () => ({ spec, args: currentArgs });
   const nodeId = host.resolveNodeIdSync(request());
@@ -121,16 +123,19 @@ function createRuntimeNodeHandle<TArgs, TResult>(
     get args() {
       return currentArgs;
     },
-    read: () => readNode<TResult>(host, nodeId),
+    read: () => readNode<TResult, TNode>(host, nodeId),
     readVersion: () => readNodeRevision(host, nodeId),
-    boot: (metadata): RuntimeNodeRead<TResult> => {
+    boot: (metadata): RuntimeNodeRead<TResult, TNode> => {
       validateRuntimeWorkMetadata(metadata);
-      const read = readNode<TResult>(host, nodeId);
+      const read = readNode<TResult, TNode>(host, nodeId);
 
       // Contract: boot may trigger only the first passive readiness attempt.
       // Existing pending/ready/error state is projected as-is for consumers.
       if (read._tag === "Unwired" || read._tag === "Idle") {
-        return bootingRuntimeNodeRead(nodeId, settleBootAttempt(nodeId, ensureReady(metadata)));
+        return bootingRuntimeNodeRead<TResult, TNode>(
+          nodeId,
+          settleBootAttempt(nodeId, ensureReady(metadata))
+        );
       }
 
       return read;
@@ -288,7 +293,10 @@ function createRuntimeNodeHandle<TArgs, TResult>(
         }
       ),
     snapshot: async () =>
-      (await runner.run(host.readNodeSnapshot(nodeId))) as RuntimeNodeSnapshotLookup<TResult>,
+      (await runner.run(host.readNodeSnapshot(nodeId))) as RuntimeNodeSnapshotLookup<
+        TResult,
+        TNode
+      >,
   };
 }
 

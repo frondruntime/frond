@@ -2,18 +2,48 @@ import type { NodeOperation, NodeOperationFailure } from "../../graph/types/oper
 import type { NodeRead, NodeSnapshot } from "../../graph/types/reads";
 import type { ResultValidity } from "../../graph/types/resultValidity";
 
-export type RuntimeNodeSnapshot<TResult> = NodeSnapshot extends infer TSnapshot
+/**
+ * `Ready.result` is definitively `TResult`, never a separate "missing" state.
+ *
+ * Every path that commits the Ready phase carries a committed result state:
+ * acquire success commits the driver hook's returned `TResult` (or
+ * `ResultCommit<TResult>.result`, or a value staged through the typed
+ * `setResult`/`patchResult` helpers) before the Ready phase exists, and
+ * refresh/action/args operations seed their staged state from the previous
+ * ready result. A driver hook may only return `undefined` when `undefined` is
+ * a member of its `TResult` (the async/effect acquire signatures are
+ * result-typed), so `result === undefined` occurs exactly when `undefined` is
+ * a valid result value for the node (`TResult = undefined` or
+ * `TResult = T | undefined`) — it is never a runtime-fabricated placeholder.
+ * Consumers must not treat `undefined` on a node whose `TResult` excludes it
+ * as a reachable state; there is no "Ready without result".
+ *
+ * The one escape hatch is `client.__unsafe.updateNode`, which can write an
+ * arbitrary result. That surface is typed `unknown` (`UnsafeNodeRead`) and,
+ * like any cast, can violate the typed contract — typed reads stay sound as
+ * long as unsafe writes respect the node's declared result type.
+ *
+ * `TNode` is the ready author-node instance type. Typed handles created via
+ * `client.node(Spec, args)` thread `NodeSpecInstance<Spec>` through here; the
+ * default stays `object` for genuinely spec-less paths (unsafe/diagnostic
+ * reads).
+ */
+export type RuntimeNodeSnapshot<
+  TResult,
+  TNode extends object = object,
+> = NodeSnapshot extends infer TSnapshot
   ? TSnapshot extends { readonly _tag: "Ready" }
-    ? Omit<TSnapshot, "result"> & {
-        readonly result: TResult | undefined;
+    ? Omit<TSnapshot, "result" | "node"> & {
+        readonly node: TNode;
+        readonly result: TResult;
       }
     : TSnapshot
   : never;
 
-export type RuntimeNodeSnapshotLookup<TResult = unknown> =
+export type RuntimeNodeSnapshotLookup<TResult = unknown, TNode extends object = object> =
   | {
       readonly _tag: "Found";
-      readonly snapshot: RuntimeNodeSnapshot<TResult>;
+      readonly snapshot: RuntimeNodeSnapshot<TResult, TNode>;
     }
   | {
       readonly _tag: "Missing";
@@ -28,7 +58,7 @@ type RuntimeNodeReadOperationFields = {
 
 export type DisplayableResultValidity = Exclude<ResultValidity, { readonly _tag: "Expired" }>;
 
-export type RuntimeNodeRead<TResult> =
+export type RuntimeNodeRead<TResult, TNode extends object = object> =
   | {
       readonly _tag: "Unwired";
       readonly nodeId: NodeRead["nodeId"];
@@ -45,8 +75,10 @@ export type RuntimeNodeRead<TResult> =
   | ({
       readonly _tag: "Ready";
       readonly nodeId: NodeRead["nodeId"];
-      readonly node: object;
-      readonly result: TResult | undefined;
+      readonly node: TNode;
+      // Always the committed result; `undefined` only when `undefined` is a
+      // valid member of TResult. See the module doc comment above.
+      readonly result: TResult;
       readonly resultValidity: DisplayableResultValidity;
     } & RuntimeNodeReadOperationFields)
   | ({
@@ -56,8 +88,8 @@ export type RuntimeNodeRead<TResult> =
       readonly error: unknown;
     } & RuntimeNodeReadOperationFields);
 
-export type RawRuntimeNodeRead<TResult> =
-  | RuntimeNodeRead<TResult>
+export type RawRuntimeNodeRead<TResult, TNode extends object = object> =
+  | RuntimeNodeRead<TResult, TNode>
   | {
       readonly _tag: "Booting";
       readonly nodeId: NodeRead["nodeId"];
@@ -69,8 +101,8 @@ export type RawRuntimeNodeRead<TResult> =
   | ({
       readonly _tag: "Ready";
       readonly nodeId: NodeRead["nodeId"];
-      readonly node: object;
-      readonly result: TResult | undefined;
+      readonly node: TNode;
+      readonly result: TResult;
       readonly resultValidity: ResultValidity;
     } & RuntimeNodeReadOperationFields)
   | ({
