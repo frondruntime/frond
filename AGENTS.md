@@ -72,7 +72,7 @@ Frond keeps the MobX-facing public model and runs runtime execution through Effe
 
 - Runtime must enforce node identity, readiness, operation admission, liveness, cancellation, lifecycle/resource ownership, and stale-commit rules.
 - React consumers use node classes, useNode, useNodes, Suspense, ErrorBoundary, computed fields, and domain methods.
-- Driver authors use Frond Driver.Async or Driver.Effect hooks through node specs.
+- Driver authors write flattened hooks through the flavored spec factories (`serviceSpec.async` / `.effect`); `Driver.Async`/`Driver.Effect` build pre-built or shared drivers for `.fromDriver`/`specWithDriver`.
 - Runtime owns graph identity, dependency readiness, per-node serialization, cancellation, lifecycle/resource ownership, release, telemetry, and command execution.
 - Graph/runtime owns node construction, lifecycle state, attempts, eviction, and liveness demand records.
 - Node owns MobX domain state, computed getters, domain methods, and observation-derived liveness signals.
