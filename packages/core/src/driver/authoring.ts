@@ -330,25 +330,36 @@ export function Live(resource: object): DriverHookDescriptor<"live", object> {
  * Defines a serialized domain action.
  *
  * The default admission policy queues per node. Use join admission only when
- * equal inputs should share one in-flight operation.
+ * equal inputs should share one in-flight operation. Void-input actions omit
+ * `admissionKey` and join on a constant per-node/action key: every concurrent
+ * invocation shares the one in-flight run.
  */
 export function Action<TContext, TInput, TOutput>(
   run: { bivarianceHack(ctx: TContext, input: TInput): TOutput }["bivarianceHack"],
   options?: ActionOptions<TInput>
 ): DriverActionDescriptor<typeof run> {
+  const joinAdmissionKey =
+    options?.admission === "join"
+      ? (options as { readonly admissionKey?: unknown }).admissionKey
+      : undefined;
+
   if (
     options?.admission === "join" &&
-    typeof (options as { readonly admissionKey?: unknown }).admissionKey !== "function"
+    joinAdmissionKey !== undefined &&
+    typeof joinAdmissionKey !== "function"
   ) {
-    throw new TypeError("Frond.Driver.Action join admission requires admissionKey(input).");
+    throw new TypeError("Frond.Driver.Action join admissionKey must be a function when provided.");
   }
 
   const admission =
     options?.admission === "join"
-      ? {
-          policy: "join" as const,
-          admissionKey: options.admissionKey as (input: unknown) => unknown,
-        }
+      ? joinAdmissionKey === undefined
+        ? // Void-input join: constant per-node/action admission key.
+          { policy: "join" as const }
+        : {
+            policy: "join" as const,
+            admissionKey: joinAdmissionKey as (input: unknown) => unknown,
+          }
       : ({ policy: options?.admission ?? "queue" } as const);
 
   return {

@@ -44,7 +44,11 @@ export type ActionAdmission =
     }
   | {
       readonly policy: "join";
-      readonly admissionKey: (input: unknown) => unknown;
+      /**
+       * Absent for void-input actions: they join on a constant per-node/action
+       * key, so every concurrent invocation shares the one in-flight run.
+       */
+      readonly admissionKey?: ((input: unknown) => unknown) | undefined;
     };
 
 export type ActionOptions<TInput> =
@@ -52,7 +56,13 @@ export type ActionOptions<TInput> =
       readonly admission?: "queue" | "reject" | undefined;
     }
   | (TInput extends void
-      ? never
+      ? {
+          // Void-input actions have no input to derive a key from: join
+          // admission uses a constant per-node/action key and rejects an
+          // explicit admissionKey.
+          readonly admission: "join";
+          readonly admissionKey?: never;
+        }
       : {
           readonly admission: "join";
           readonly admissionKey: (input: TInput) => unknown;
