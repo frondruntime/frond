@@ -337,6 +337,61 @@ resourceSpec.async<ProfileSpec, typeof phantomProfileActions>({
   actions: phantomProfileActions,
 });
 
+// --- action admission contracts --------------------------------------------
+
+type SessionSpec = import("../../src").NodeSpec<{
+  readonly mode: "async";
+  readonly args: Args.None;
+  readonly key: Key.Singleton;
+  readonly result: { readonly session: string };
+  readonly actions: {
+    readonly expire: ActionContract<void, string>;
+  };
+}>;
+
+type SessionActionContext = AsyncDriverContext<
+  NodeBase<SessionSpec>,
+  NodeSpecArgs<SessionSpec>,
+  NodeSpecResolvedDeps<SessionSpec>,
+  { readonly session: string }
+>;
+
+// Void-input actions may declare join admission with no admissionKey: the
+// runtime joins concurrent invocations on a constant per-node/action key.
+serviceSpec.async<SessionSpec>({
+  tag: tag("types/session-void-join"),
+  key: () => Key.singleton(),
+  acquire: Driver.Acquire(() => ({ session: "s" })),
+  actions: {
+    expire: Driver.Action((_ctx: SessionActionContext) => "expired", {
+      admission: "join",
+    }),
+  },
+});
+
+// The void-input join surface is strict: there is no input to derive a key
+// from, so an explicit admissionKey is rejected instead of silently ignored.
+Driver.Action<SessionActionContext, void, string>((_ctx) => "expired", {
+  admission: "join",
+  // @ts-expect-error void-input join admission does not accept admissionKey
+  admissionKey: () => "constant",
+});
+
+// Input-bearing actions still require admissionKey for join admission.
+Driver.Action(
+  (_ctx: ProfileNodeContext, _input: { readonly name: string }) => ({ ok: true as const }),
+  // @ts-expect-error join admission on input-bearing actions requires admissionKey(input)
+  { admission: "join" }
+);
+
+Driver.Action(
+  (_ctx: ProfileNodeContext, input: { readonly name: string }) => ({ ok: true as const, input }),
+  {
+    admission: "join",
+    admissionKey: (input) => input.name,
+  }
+);
+
 type EffectSpec = import("../../src").NodeSpec<{
   readonly mode: "effect";
   readonly args: Args.None;

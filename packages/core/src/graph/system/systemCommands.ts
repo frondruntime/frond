@@ -430,8 +430,11 @@ function readActionAdmissionKey(
       readonly cause: unknown;
     } {
   try {
+    // A join admission without an authored admissionKey (void-input actions)
+    // falls through to the same constant per-node/action key reject uses, so
+    // every concurrent invocation shares the one in-flight run.
     const raw =
-      admission.policy === "join"
+      admission.policy === "join" && admission.admissionKey !== undefined
         ? admission.admissionKey(request.input)
         : { nodeId: cell.nodeId, action: request.action };
     return {

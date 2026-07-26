@@ -173,8 +173,17 @@ describe("static-spec authoring", () => {
     expect(() =>
       Driver.Action((_ctx: unknown, _input: { readonly id: string }) => undefined, {
         admission: "join",
+        admissionKey: "not-a-function",
       } as never)
     ).toThrow("admissionKey");
+  });
+
+  test("Driver.Action accepts join admission without admissionKey for void input", () => {
+    const descriptor = Driver.Action<unknown, void, undefined>((_ctx) => undefined, {
+      admission: "join",
+    });
+
+    expect(descriptor.admission).toEqual({ policy: "join" });
   });
 });
 
