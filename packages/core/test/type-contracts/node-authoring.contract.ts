@@ -477,6 +477,8 @@ function liveStopReasonLabel(reason: LiveResourceStopReason): string {
       return "GraphStopped";
     case "ReadyInvalidated":
       return "ReadyInvalidated";
+    case "StartInterrupted":
+      return "StartInterrupted";
   }
 }
 

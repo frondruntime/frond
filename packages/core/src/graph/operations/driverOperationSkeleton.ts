@@ -89,6 +89,9 @@ export function runReadyDriverOperation<TValue, TResult extends BackgroundOperat
       args: phaseArgs(input.phase),
       deps: depsResult.deps,
       abortController,
+      // Same incarnation, same node-lifetime signal as the acquire that
+      // committed this ready data; only the operation signal is fresh.
+      nodeSignal: input.readyData.nodeLifetime.signal,
       disposers: operationDisposers,
       signals: input.env.signals,
       refreshDep: (dependencyName) => refreshDependencyValue(input.env, input.cell, dependencyName),

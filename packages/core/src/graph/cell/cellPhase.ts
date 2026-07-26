@@ -59,6 +59,9 @@ export interface ReadyData extends CellBase {
   readonly resultValidityPolicy: NormalizedResultValidityPolicy;
   readonly disposers: ReadonlyArray<() => void>;
   readonly liveResource: LiveResourceState;
+  // Owner: node-lifetime controller for this ready incarnation. Handed off by
+  // the acquire commit; teardown aborts it exactly once when the node closes.
+  readonly nodeLifetime: AbortController;
 }
 
 export type CellPhaseBaseLookup =
