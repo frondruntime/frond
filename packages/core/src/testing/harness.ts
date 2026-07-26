@@ -69,6 +69,18 @@ export interface FrondTestHarness {
   readonly startNodes: <TMap extends FrondTestNodeInputMap>(
     map: TMap
   ) => Promise<FrondTestReadyNodeMap<TMap>>;
+  /**
+   * Ready-or-throw over a test handle, returning the full Ready READ (not just
+   * the node) with spec-typed deps/result access via `FrondTestReadyRead`.
+   *
+   * The public handle now carries its own ready-or-throw method —
+   * `handle.readReady()` returns only the typed node instance and throws the
+   * typed `FrondNodeNotReady` for non-ready phases. This harness helper remains
+   * for tests that need the spec-typed read surface (node with `deps`,
+   * `result`, `resultValidity`) and the harness's diagnostic error messages; it
+   * intentionally does not delegate because its return shape and error texts
+   * are part of the testing contract.
+   */
   readonly readReady: <TSpec extends NodeSpecLike>(
     handle: FrondTestNodeHandle<TSpec>
   ) => FrondTestReadyRead<

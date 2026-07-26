@@ -15,6 +15,7 @@ import type {
   ActionResult,
   EvictResult,
   EvictSubgraphRequest,
+  NodeOperation,
   NodeRequest,
   RefreshResult,
   UpdateNodeArgsResult,
@@ -70,6 +71,33 @@ export interface Runtime {
   readonly getSnapshotSync: () => RuntimeSnapshot;
   readonly getSnapshot: () => Promise<RuntimeSnapshot>;
   readonly observe: (observer: RuntimeObserver) => RuntimeSubscription;
+  /**
+   * Instantaneous projection of the nodes whose current operation is `Running`,
+   * derived from `getSnapshotSync().graph.nodes[].operation` (no new graph
+   * state). Like `getSnapshotSync`, it answers on a not-yet-started or stopped
+   * runtime (empty graph projects an empty list).
+   *
+   * This is an observability/barrier-building read, NOT an await-quiescence
+   * primitive: operations may start or settle between the read and any code
+   * acting on it, so polling it is not a robust barrier. A real
+   * await-quiescence surface is deliberately deferred — drain admission policy
+   * is a 0.3.0 design question.
+   */
+  readonly pendingOperations: () => ReadonlyArray<RuntimePendingOperation>;
+  /**
+   * `pendingOperations().length === 0` — the same instantaneous read, with the
+   * same non-barrier caveat.
+   */
+  readonly isQuiescent: () => boolean;
+}
+
+/**
+ * One node's in-flight operation as projected by `runtime.pendingOperations()`.
+ */
+export interface RuntimePendingOperation {
+  readonly nodeId: NodeRead["nodeId"];
+  readonly tag: string;
+  readonly operation: Extract<NodeOperation, { readonly _tag: "Running" }>;
 }
 
 /**
@@ -157,6 +185,15 @@ export interface RuntimeNodeHandle<
   readonly subscribe: (listener: () => void) => () => void;
   readonly ensure: (metadata?: RuntimeWorkMetadata | undefined) => Promise<NodeRead>;
   readonly ensureReady: (metadata?: RuntimeWorkMetadata | undefined) => Promise<NodeRead>;
+  // Synchronous ready-or-throw projection of `read()`: Ready returns the typed
+  // node instance; Error rethrows the read's underlying error; any other phase
+  // throws `FrondNodeNotReady` carrying the observed readiness. Never schedules
+  // graph work.
+  readonly readReady: () => TNode;
+  // One awaited readiness attempt (`ensureReady`) followed by the same
+  // `readReady` projection, for call sites that want the typed node or a
+  // thrown error in a single await.
+  readonly ensureReadyNode: (metadata?: RuntimeWorkMetadata | undefined) => Promise<TNode>;
   // Typed, mode-native action surface: `handle.actions.<name>(input)`.
   readonly actions: HandleActions<TActions, TMode>;
   // Untyped Effect primitive for dynamic action names and metadata-bearing calls

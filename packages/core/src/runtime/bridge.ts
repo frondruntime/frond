@@ -9,6 +9,7 @@ import type {
   RuntimeInput,
   RuntimeObserver,
   RuntimeOptions,
+  RuntimePendingOperation,
   RuntimeQuery,
   RuntimeSignal,
   RuntimeSignalSubscriber,
@@ -65,8 +66,25 @@ export function bridgeRuntimeHost(
     observe: (observer: RuntimeObserver) => runner.runSync(host.observe(observer)),
   };
 
+  // Quiescence READ, not a barrier: a pure projection over the operation state
+  // `getSnapshotSync` already carries. Kept on the Runtime facade only — node
+  // handles stay per-node surfaces.
+  const pendingOperations = (): ReadonlyArray<RuntimePendingOperation> => {
+    const pending: Array<RuntimePendingOperation> = [];
+
+    for (const node of runtimeHost.getSnapshotSync().graph.nodes) {
+      if (node.operation._tag === "Running") {
+        pending.push({ nodeId: node.nodeId, tag: node.tag, operation: node.operation });
+      }
+    }
+
+    return pending;
+  };
+
   return {
     ...runtimeHost,
+    pendingOperations,
+    isQuiescent: () => pendingOperations().length === 0,
     // The client is built over the Effect-native host directly (not the Promise
     // facade above) and owns its own Effect→Promise bridging via the runner.
     client: createRuntimeClient(host, runner),
