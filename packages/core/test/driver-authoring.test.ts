@@ -33,6 +33,7 @@ describe("driver authoring modes", () => {
   test("async driver stages acquire, refresh, action, and release through runtime paths", async () => {
     const released: Array<string> = [];
     type AsyncAuthoringSpec = NodeSpec<{
+      readonly mode: "async";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -104,6 +105,7 @@ describe("driver authoring modes", () => {
   test("async driver refresh rejection is a typed driver boundary failure", async () => {
     const cause = new TypeError("refresh transport rejected");
     type AsyncRefreshFailureSpec = NodeSpec<{
+      readonly mode: "async";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;

@@ -32,13 +32,14 @@ describe("graph execution", () => {
   test("GraphSystemLive finalizer stops graph actors and releases resources", async () => {
     const releases: Array<string> = [];
     type ScopedGraphSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class ScopedGraphNode extends NodeBase<ScopedGraphSpec, "effect"> {
+    class ScopedGraphNode extends NodeBase<ScopedGraphSpec> {
       static readonly spec = serviceSpec.effect<ScopedGraphSpec>({
         tag: "services/graph-live-finalizer",
         key: () => Key.singleton(),
@@ -86,13 +87,14 @@ describe("graph execution", () => {
 
   test("undefined acquire result is still an explicit ready result", async () => {
     type UndefinedResultSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: undefined;
     }>;
 
-    class UndefinedResultNode extends NodeBase<UndefinedResultSpec, "effect"> {
+    class UndefinedResultNode extends NodeBase<UndefinedResultSpec> {
       static readonly spec = resourceSpec.effect<UndefinedResultSpec>({
         tag: "resources/undefined-result",
         key: () => Key.singleton(),
@@ -121,6 +123,7 @@ describe("graph execution", () => {
 
   test("ready author node exposes runtime identity args deps result and domain getters", async () => {
     type ReadyFieldsSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly suffix: string };
       readonly key: Key.Structure<{ readonly suffix: string }>;
       readonly deps: {
@@ -129,7 +132,7 @@ describe("graph execution", () => {
       readonly result: { readonly label: string };
     }>;
 
-    class ReadyFieldsNode extends NodeBase<ReadyFieldsSpec, "effect"> {
+    class ReadyFieldsNode extends NodeBase<ReadyFieldsSpec> {
       static readonly spec = resourceSpec.effect<ReadyFieldsSpec>({
         tag: "resources/ready-fields",
         key: (args) => Key.structure({ suffix: args.suffix }),
@@ -179,6 +182,7 @@ describe("graph execution", () => {
     let disposed = 0;
     let capturedSignalAborted: boolean | undefined;
     type ContextOnlySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly id: string };
       readonly key: Key.Structure<{ readonly id: string }>;
       readonly deps: {
@@ -187,7 +191,7 @@ describe("graph execution", () => {
       readonly result: { readonly value: string };
     }>;
 
-    class ContextOnlyNode extends NodeBase<ContextOnlySpec, "effect"> {
+    class ContextOnlyNode extends NodeBase<ContextOnlySpec> {
       static readonly spec = resourceSpec.effect<ContextOnlySpec>({
         tag: "resources/context-only-acquire",
         key: (args) => Key.structure({ id: args.id }),
@@ -234,13 +238,14 @@ describe("graph execution", () => {
 
   test("acquire timeout records readiness failure", async () => {
     type AcquireTimeoutSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class AcquireTimeoutNode extends NodeBase<AcquireTimeoutSpec, "effect"> {
+    class AcquireTimeoutNode extends NodeBase<AcquireTimeoutSpec> {
       static readonly spec = serviceSpec.effect<AcquireTimeoutSpec>({
         tag: "services/acquire-timeout",
         key: () => Key.singleton(),
@@ -273,13 +278,14 @@ describe("graph execution", () => {
 
   test("release timeout is recorded as cleanup failure and completes", async () => {
     type ReleaseTimeoutSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class ReleaseTimeoutNode extends NodeBase<ReleaseTimeoutSpec, "effect"> {
+    class ReleaseTimeoutNode extends NodeBase<ReleaseTimeoutSpec> {
       static readonly spec = serviceSpec.effect<ReleaseTimeoutSpec>({
         tag: "services/release-timeout",
         key: () => Key.singleton(),
@@ -318,6 +324,7 @@ describe("graph execution", () => {
     const transport = snapshot.nodes.find((node) => node.tag === "services/transport");
 
     type CaptureSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -326,7 +333,7 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class CaptureNode extends NodeBase<CaptureSpec, "effect"> {
+    class CaptureNode extends NodeBase<CaptureSpec> {
       static readonly spec = resourceSpec.effect<CaptureSpec>({
         tag: "resources/capture-transport-node",
         key: () => Key.singleton(),
@@ -355,13 +362,14 @@ describe("graph execution", () => {
     let leftResolved = false;
 
     type LeftSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class LeftNode extends NodeBase<LeftSpec, "effect"> {
+    class LeftNode extends NodeBase<LeftSpec> {
       static readonly spec = serviceSpec.effect<LeftSpec>({
         tag: "services/parallel-left",
         key: () => Key.singleton(),
@@ -376,13 +384,14 @@ describe("graph execution", () => {
     }
 
     type RightSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class RightNode extends NodeBase<RightSpec, "effect"> {
+    class RightNode extends NodeBase<RightSpec> {
       static readonly spec = serviceSpec.effect<RightSpec>({
         tag: "services/parallel-right",
         key: () => Key.singleton(),
@@ -398,6 +407,7 @@ describe("graph execution", () => {
     }
 
     type RootSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -407,7 +417,7 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class RootNode extends NodeBase<RootSpec, "effect"> {
+    class RootNode extends NodeBase<RootSpec> {
       static readonly spec = resourceSpec.effect<RootSpec>({
         tag: "resources/parallel-root",
         key: () => Key.singleton(),
@@ -444,13 +454,14 @@ describe("graph execution", () => {
     let acquireCount = 0;
 
     type LeftSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class LeftNode extends NodeBase<LeftSpec, "effect"> {
+    class LeftNode extends NodeBase<LeftSpec> {
       static readonly spec = serviceSpec.effect<LeftSpec>({
         tag: "services/aggregate-left",
         key: () => Key.singleton(),
@@ -460,13 +471,14 @@ describe("graph execution", () => {
     }
 
     type RightSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class RightNode extends NodeBase<RightSpec, "effect"> {
+    class RightNode extends NodeBase<RightSpec> {
       static readonly spec = serviceSpec.effect<RightSpec>({
         tag: "services/aggregate-right",
         key: () => Key.singleton(),
@@ -482,6 +494,7 @@ describe("graph execution", () => {
     }
 
     type RootSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -491,7 +504,7 @@ describe("graph execution", () => {
       readonly result: string;
     }>;
 
-    class RootNode extends NodeBase<RootSpec, "effect"> {
+    class RootNode extends NodeBase<RootSpec> {
       static readonly spec = resourceSpec.effect<RootSpec>({
         tag: "resources/aggregate-root",
         key: () => Key.singleton(),
@@ -541,6 +554,7 @@ describe("graph execution", () => {
 
   test("ensureReady accepts async driver acquire functions", async () => {
     type AsyncSpec = NodeSpec<{
+      readonly mode: "async";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -568,6 +582,7 @@ describe("graph execution", () => {
   test("ensureReady wraps async driver rejections as typed readiness causes", async () => {
     const cause = new TypeError("async backend failed");
     type AsyncRejectedSpec = NodeSpec<{
+      readonly mode: "async";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -603,13 +618,14 @@ describe("graph execution", () => {
   test("ensureReady records acquire failure as run error", async () => {
     const cause = { _tag: "AcquireFailed" };
     type FailingSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class FailingNode extends NodeBase<FailingSpec, "effect"> {
+    class FailingNode extends NodeBase<FailingSpec> {
       static readonly spec = serviceSpec.effect<FailingSpec>({
         tag: "services/failing",
         key: () => Key.singleton(),
@@ -645,13 +661,14 @@ describe("graph execution", () => {
     }> = [];
     let disposed = false;
     type FailingDisposerSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class FailingDisposerNode extends NodeBase<FailingDisposerSpec, "effect"> {
+    class FailingDisposerNode extends NodeBase<FailingDisposerSpec> {
       static readonly spec = serviceSpec.effect<FailingDisposerSpec>({
         tag: "services/failing-acquire-disposer",
         key: () => Key.singleton(),
@@ -696,13 +713,14 @@ describe("graph execution", () => {
   test("expired acquire closes disposers registered before expiry rejection", async () => {
     let disposed = false;
     type ExpiredDisposerSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class ExpiredDisposerNode extends NodeBase<ExpiredDisposerSpec, "effect"> {
+    class ExpiredDisposerNode extends NodeBase<ExpiredDisposerSpec> {
       static readonly spec = serviceSpec.effect<ExpiredDisposerSpec>({
         tag: "services/expired-acquire-disposer",
         key: () => Key.singleton(),
@@ -734,13 +752,14 @@ describe("graph execution", () => {
   test("ensureReady normalizes acquire defects as readiness errors", async () => {
     const cause = new TypeError("driver typo");
     type DefectSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class DefectNode extends NodeBase<DefectSpec, "effect"> {
+    class DefectNode extends NodeBase<DefectSpec> {
       static readonly spec = serviceSpec.effect<DefectSpec>({
         tag: "services/acquire-defect",
         key: () => Key.singleton(),
@@ -769,13 +788,14 @@ describe("graph execution", () => {
   test("release closes registered disposers", async () => {
     let disposed = false;
     type DisposableSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class DisposableNode extends NodeBase<DisposableSpec, "effect"> {
+    class DisposableNode extends NodeBase<DisposableSpec> {
       static readonly spec = serviceSpec.effect<DisposableSpec>({
         tag: "services/disposable",
         key: () => Key.singleton(),
@@ -809,13 +829,14 @@ describe("graph execution", () => {
   test("release closes disposers registered by release hook", async () => {
     let disposed = false;
     type ReleaseDisposableSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class ReleaseDisposableNode extends NodeBase<ReleaseDisposableSpec, "effect"> {
+    class ReleaseDisposableNode extends NodeBase<ReleaseDisposableSpec> {
       static readonly spec = serviceSpec.effect<ReleaseDisposableSpec>({
         tag: "services/release-disposable",
         key: () => Key.singleton(),
@@ -844,13 +865,14 @@ describe("graph execution", () => {
     const cause = { _tag: "ReleaseRejected" };
     let disposed = false;
     type ReleaseFailingDisposerSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class ReleaseFailingDisposerNode extends NodeBase<ReleaseFailingDisposerSpec, "effect"> {
+    class ReleaseFailingDisposerNode extends NodeBase<ReleaseFailingDisposerSpec> {
       static readonly spec = serviceSpec.effect<ReleaseFailingDisposerSpec>({
         tag: "services/release-failing-disposer",
         key: () => Key.singleton(),
@@ -886,13 +908,14 @@ describe("graph execution", () => {
     const started = await Effect.runPromise(Deferred.make<void>());
     const gate = await Effect.runPromise(Deferred.make<string>());
     type SlowSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class SlowNode extends NodeBase<SlowSpec, "effect"> {
+    class SlowNode extends NodeBase<SlowSpec> {
       static readonly spec = serviceSpec.effect<SlowSpec>({
         tag: "services/slow",
         key: () => Key.singleton(),
@@ -935,13 +958,14 @@ describe("graph execution", () => {
     const gate = await Effect.runPromise(Deferred.make<string>());
     let acquireCount = 0;
     type SlowSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class SlowNode extends NodeBase<SlowSpec, "effect"> {
+    class SlowNode extends NodeBase<SlowSpec> {
       static readonly spec = serviceSpec.effect<SlowSpec>({
         tag: "services/one-acquire",
         key: () => Key.singleton(),
@@ -974,6 +998,7 @@ describe("graph execution", () => {
     const actionGate = await Effect.runPromise(Deferred.make<void>());
     let disposed = false;
     type ReleasableSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -983,7 +1008,7 @@ describe("graph execution", () => {
       };
     }>;
 
-    class ReleasableNode extends NodeBase<ReleasableSpec, "effect"> {
+    class ReleasableNode extends NodeBase<ReleasableSpec> {
       static readonly spec = resourceSpec.effect<ReleasableSpec>({
         tag: "resources/release-during-action",
         key: () => Key.singleton(),
@@ -1038,13 +1063,14 @@ describe("graph execution", () => {
   test("GraphSystem.stop shuts down cell actors and releases active resources", async () => {
     let disposed = false;
     type StopSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class StopNode extends NodeBase<StopSpec, "effect"> {
+    class StopNode extends NodeBase<StopSpec> {
       static readonly spec = serviceSpec.effect<StopSpec>({
         tag: "services/stop-release",
         key: () => Key.singleton(),
@@ -1075,13 +1101,14 @@ describe("graph execution", () => {
   test("GraphSystem.stop interrupts active cell work", async () => {
     const started = await Effect.runPromise(Deferred.make<void>());
     type HangingSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class HangingNode extends NodeBase<HangingSpec, "effect"> {
+    class HangingNode extends NodeBase<HangingSpec> {
       static readonly spec = serviceSpec.effect<HangingSpec>({
         tag: "services/hanging-stop",
         key: () => Key.singleton(),
@@ -1154,13 +1181,14 @@ describe("graph execution", () => {
   test("release failures are recorded on the graph snapshot", async () => {
     const cause = { _tag: "ReleaseRejected" };
     type ReleaseFailSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class ReleaseFailNode extends NodeBase<ReleaseFailSpec, "effect"> {
+    class ReleaseFailNode extends NodeBase<ReleaseFailSpec> {
       static readonly spec = serviceSpec.effect<ReleaseFailSpec>({
         tag: "services/release-failure",
         key: () => Key.singleton(),
@@ -1186,13 +1214,14 @@ describe("graph execution", () => {
   test("release defects preserve Effect cause in cleanup failure", async () => {
     const cause = new TypeError("release died");
     type ReleaseDefectSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class ReleaseDefectNode extends NodeBase<ReleaseDefectSpec, "effect"> {
+    class ReleaseDefectNode extends NodeBase<ReleaseDefectSpec> {
       static readonly spec = serviceSpec.effect<ReleaseDefectSpec>({
         tag: "services/release-defect",
         key: () => Key.singleton(),
@@ -1222,13 +1251,14 @@ describe("graph execution", () => {
   test("disposer failures are recorded on the graph snapshot", async () => {
     const cause = new Error("dispose rejected");
     type DisposerFailSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class DisposerFailNode extends NodeBase<DisposerFailSpec, "effect"> {
+    class DisposerFailNode extends NodeBase<DisposerFailSpec> {
       static readonly spec = serviceSpec.effect<DisposerFailSpec>({
         tag: "services/disposer-failure",
         key: () => Key.singleton(),
@@ -1261,13 +1291,14 @@ describe("graph execution", () => {
     const releaseCause = new Error("release failed first");
     const disposerCause = new Error("disposer failed second");
     type CleanupOrderSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class CleanupOrderNode extends NodeBase<CleanupOrderSpec, "effect"> {
+    class CleanupOrderNode extends NodeBase<CleanupOrderSpec> {
       static readonly spec = serviceSpec.effect<CleanupOrderSpec>({
         tag: "services/cleanup-failure-order",
         key: () => Key.singleton(),

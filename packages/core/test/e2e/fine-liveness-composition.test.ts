@@ -22,12 +22,13 @@ const fineLiveUpdates: Array<NodeLiveDemandSnapshot> = [];
 const fineLiveStops: Array<NodeLiveDemandSnapshot> = [];
 
 type FineRatesSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Args.None;
   readonly key: Key.Singleton;
   readonly result: RatesResult;
 }>;
 
-class FineRatesNode extends NodeBase<FineRatesSpec, "effect"> {
+class FineRatesNode extends NodeBase<FineRatesSpec> {
   static readonly spec = resourceSpec.effect<FineRatesSpec>({
     tag: tag("e2e/fine-liveness/rates"),
     key: () => Key.singleton(),

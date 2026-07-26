@@ -17,6 +17,7 @@ import {
 } from "../src";
 
 type StaticCounterSpec = import("../src").NodeSpec<{
+  readonly mode: "async";
   readonly args: Args.None;
   readonly key: Key.Singleton;
   readonly result: { readonly count: number };
@@ -51,6 +52,7 @@ class StaticCounterNode extends NodeBase<StaticCounterSpec> {
 }
 
 type AdmissionSpec = import("../src").NodeSpec<{
+  readonly mode: "async";
   readonly args: Args.None;
   readonly key: Key.Singleton;
   readonly result: string;

@@ -127,6 +127,7 @@ describe("graph actions", () => {
 
   test("patching an empty result fails with structured graph context", async () => {
     type EmptyPatchSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -136,7 +137,7 @@ describe("graph actions", () => {
       };
     }>;
 
-    class EmptyPatchNode extends NodeBase<EmptyPatchSpec, "effect"> {
+    class EmptyPatchNode extends NodeBase<EmptyPatchSpec> {
       static readonly spec = resourceSpec.effect<EmptyPatchSpec>({
         tag: "resources/empty-patch",
         key: () => Key.singleton(),
@@ -185,6 +186,7 @@ describe("graph actions", () => {
   test("action defects preserve Effect cause in action failure", async () => {
     const cause = new TypeError("action died");
     type DefectActionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -194,7 +196,7 @@ describe("graph actions", () => {
       };
     }>;
 
-    class DefectActionNode extends NodeBase<DefectActionSpec, "effect"> {
+    class DefectActionNode extends NodeBase<DefectActionSpec> {
       static readonly spec = resourceSpec.effect<DefectActionSpec>({
         tag: "resources/action-defect",
         key: () => Key.singleton(),
@@ -231,6 +233,7 @@ describe("graph actions", () => {
     const cause = new TypeError("action disposer defect");
     let disposed = 0;
     type DisposingActionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -240,7 +243,7 @@ describe("graph actions", () => {
       };
     }>;
 
-    class DisposingActionNode extends NodeBase<DisposingActionSpec, "effect"> {
+    class DisposingActionNode extends NodeBase<DisposingActionSpec> {
       static readonly spec = resourceSpec.effect<DisposingActionSpec>({
         tag: "resources/action-defect-disposer",
         key: () => Key.singleton(),
@@ -328,6 +331,7 @@ describe("graph actions", () => {
     const started = await Effect.runPromise(Deferred.make<void>());
     const gate = await Effect.runPromise(Deferred.make<MutableProfile>());
     type SlowActionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -340,7 +344,7 @@ describe("graph actions", () => {
       };
     }>;
 
-    class SlowActionNode extends NodeBase<SlowActionSpec, "effect"> {
+    class SlowActionNode extends NodeBase<SlowActionSpec> {
       static readonly spec = resourceSpec.effect<SlowActionSpec>({
         tag: "resources/slow-action-profile",
         key: () => Key.singleton(),
@@ -395,6 +399,7 @@ describe("graph actions", () => {
     let overlapped = false;
     const order: Array<string> = [];
     type OrderedSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -404,7 +409,7 @@ describe("graph actions", () => {
       };
     }>;
 
-    class OrderedNode extends NodeBase<OrderedSpec, "effect"> {
+    class OrderedNode extends NodeBase<OrderedSpec> {
       static readonly spec = resourceSpec.effect<OrderedSpec>({
         tag: "resources/ordered-actions",
         key: () => Key.singleton(),
@@ -459,6 +464,7 @@ describe("graph actions", () => {
     const actionStarted = await Effect.runPromise(Deferred.make<void>());
     const actionGate = await Effect.runPromise(Deferred.make<void>());
     type SlowActionOperationSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -468,7 +474,7 @@ describe("graph actions", () => {
       };
     }>;
 
-    class SlowActionNode extends NodeBase<SlowActionOperationSpec, "effect"> {
+    class SlowActionNode extends NodeBase<SlowActionOperationSpec> {
       static readonly spec = resourceSpec.effect<SlowActionOperationSpec>({
         tag: "resources/slow-action-operation",
         key: () => Key.singleton(),
@@ -527,6 +533,7 @@ describe("graph actions", () => {
     const actionStarted = await Effect.runPromise(Deferred.make<void>());
     const actionGate = await Effect.runPromise(Deferred.make<void>());
     type StopActionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -587,6 +594,7 @@ describe("graph actions", () => {
     const actionGate = await Effect.runPromise(Deferred.make<void>());
     let actionRuns = 0;
     type JoinActionAdmissionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -652,6 +660,7 @@ describe("graph actions", () => {
     const secondStarted = await Effect.runPromise(Deferred.make<void>());
     const gate = await Effect.runPromise(Deferred.make<void>());
     type ParallelSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly id: string };
       readonly key: Key.Structure<{ readonly id: string }>;
       readonly deps: Record<string, never>;
@@ -661,7 +670,7 @@ describe("graph actions", () => {
       };
     }>;
 
-    class ParallelNode extends NodeBase<ParallelSpec, "effect"> {
+    class ParallelNode extends NodeBase<ParallelSpec> {
       static readonly spec = resourceSpec.effect<ParallelSpec>({
         tag: "resources/parallel-actions",
         key: (args) => Key.structure({ id: args.id }),
@@ -716,6 +725,7 @@ describe("graph actions", () => {
   test("action after release re-acquires before running", async () => {
     let acquireCount = 0;
     type ReacquireSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -725,7 +735,7 @@ describe("graph actions", () => {
       };
     }>;
 
-    class ReacquireNode extends NodeBase<ReacquireSpec, "effect"> {
+    class ReacquireNode extends NodeBase<ReacquireSpec> {
       static readonly spec = resourceSpec.effect<ReacquireSpec>({
         tag: "resources/reacquire-action",
         key: () => Key.singleton(),
@@ -770,13 +780,14 @@ describe("graph actions", () => {
 
   test("action dependency value collection aggregates multiple dependency failures", async () => {
     type LeftSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class LeftNode extends NodeBase<LeftSpec, "effect"> {
+    class LeftNode extends NodeBase<LeftSpec> {
       static readonly spec = serviceSpec.effect<LeftSpec>({
         tag: "services/action-aggregate-left",
         key: () => Key.singleton(),
@@ -786,13 +797,14 @@ describe("graph actions", () => {
     }
 
     type RightSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class RightNode extends NodeBase<RightSpec, "effect"> {
+    class RightNode extends NodeBase<RightSpec> {
       static readonly spec = serviceSpec.effect<RightSpec>({
         tag: "services/action-aggregate-right",
         key: () => Key.singleton(),
@@ -802,6 +814,7 @@ describe("graph actions", () => {
     }
 
     type ParentSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -814,7 +827,7 @@ describe("graph actions", () => {
       };
     }>;
 
-    class ParentNode extends NodeBase<ParentSpec, "effect"> {
+    class ParentNode extends NodeBase<ParentSpec> {
       static readonly spec = resourceSpec.effect<ParentSpec>({
         tag: "resources/action-aggregate-parent",
         key: () => Key.singleton(),
@@ -866,6 +879,7 @@ describe("graph actions", () => {
 
   test("action timeout returns failure without changing readiness", async () => {
     type TimeoutActionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -875,7 +889,7 @@ describe("graph actions", () => {
       };
     }>;
 
-    class TimeoutActionNode extends NodeBase<TimeoutActionSpec, "effect"> {
+    class TimeoutActionNode extends NodeBase<TimeoutActionSpec> {
       static readonly spec = resourceSpec.effect<TimeoutActionSpec>({
         tag: "resources/action-timeout",
         key: () => Key.singleton(),

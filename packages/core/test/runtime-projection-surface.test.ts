@@ -178,13 +178,14 @@ describe("runtime projection surface", () => {
     const loadedAt = Date.now();
     let now = loadedAt;
     type SyncClockSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class SyncClockNode extends NodeBase<SyncClockSpec, "effect"> {
+    class SyncClockNode extends NodeBase<SyncClockSpec> {
       static readonly spec = resourceSpec.effect<SyncClockSpec>({
         tag: "projection-surface/sync-clock",
         key: () => Key.singleton(),
@@ -292,13 +293,14 @@ describe("runtime projection surface", () => {
     const acquireStarted = await Effect.runPromise(Deferred.make<void>());
     const acquireGate = await Effect.runPromise(Deferred.make<{ readonly value: string }>());
     type PendingSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class PendingNode extends NodeBase<PendingSpec, "effect"> {
+    class PendingNode extends NodeBase<PendingSpec> {
       static readonly spec = serviceSpec.effect<PendingSpec>({
         tag: "projection-surface/pending",
         key: () => Key.singleton(),
@@ -337,6 +339,7 @@ describe("runtime projection surface", () => {
     const actionStarted = await Effect.runPromise(Deferred.make<void>());
     const actionGate = await Effect.runPromise(Deferred.make<void>());
     type BusySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -346,7 +349,7 @@ describe("runtime projection surface", () => {
       };
     }>;
 
-    class BusyNode extends NodeBase<BusySpec, "effect"> {
+    class BusyNode extends NodeBase<BusySpec> {
       static readonly spec = serviceSpec.effect<BusySpec>({
         tag: "projection-surface/busy",
         key: () => Key.singleton(),
@@ -461,13 +464,14 @@ async function eventSequences(runtime: Runtime): Promise<ReadonlyArray<number>> 
 }
 
 type ProjectionReadySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: { readonly value: string };
 }>;
 
-class ProjectionReadyNode extends NodeBase<ProjectionReadySpec, "effect"> {
+class ProjectionReadyNode extends NodeBase<ProjectionReadySpec> {
   static readonly spec = serviceSpec.effect<ProjectionReadySpec>({
     tag: "projection-surface/ready",
     key: () => Key.singleton(),
@@ -477,13 +481,14 @@ class ProjectionReadyNode extends NodeBase<ProjectionReadySpec, "effect"> {
 }
 
 type ProjectionFailingSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: { readonly value: string };
 }>;
 
-class ProjectionFailingNode extends NodeBase<ProjectionFailingSpec, "effect"> {
+class ProjectionFailingNode extends NodeBase<ProjectionFailingSpec> {
   static readonly spec = serviceSpec.effect<ProjectionFailingSpec>({
     tag: "projection-surface/failing",
     key: () => Key.singleton(),
@@ -493,13 +498,14 @@ class ProjectionFailingNode extends NodeBase<ProjectionFailingSpec, "effect"> {
 }
 
 type InvalidKeySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: string;
 }>;
 
-class InvalidKeyNode extends NodeBase<InvalidKeySpec, "effect"> {
+class InvalidKeyNode extends NodeBase<InvalidKeySpec> {
   static readonly spec = serviceSpec.effect<InvalidKeySpec>({
     tag: "projection-surface/invalid-key",
     key: () => {
@@ -511,13 +517,14 @@ class InvalidKeyNode extends NodeBase<InvalidKeySpec, "effect"> {
 }
 
 type ConstructorFailureSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: string;
 }>;
 
-class ConstructorFailureNode extends NodeBase<ConstructorFailureSpec, "effect"> {
+class ConstructorFailureNode extends NodeBase<ConstructorFailureSpec> {
   static readonly spec = serviceSpec.effect<ConstructorFailureSpec>({
     tag: "projection-surface/constructor-failure",
     key: () => Key.singleton(),
@@ -532,13 +539,14 @@ class ConstructorFailureNode extends NodeBase<ConstructorFailureSpec, "effect"> 
 }
 
 type ProjectionTimeBoundSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: { readonly value: string };
 }>;
 
-class ProjectionTimeBoundNode extends NodeBase<ProjectionTimeBoundSpec, "effect"> {
+class ProjectionTimeBoundNode extends NodeBase<ProjectionTimeBoundSpec> {
   static readonly spec = resourceSpec.effect<ProjectionTimeBoundSpec>({
     tag: "projection-surface/time-bound",
     key: () => Key.singleton(),
@@ -562,6 +570,7 @@ class ProjectionTimeBoundNode extends NodeBase<ProjectionTimeBoundSpec, "effect"
 
 let manualExpirationAcquireCount = 0;
 type ProjectionManualExpirationSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -571,7 +580,7 @@ type ProjectionManualExpirationSpec = NodeSpec<{
   };
 }>;
 
-class ProjectionManualExpirationNode extends NodeBase<ProjectionManualExpirationSpec, "effect"> {
+class ProjectionManualExpirationNode extends NodeBase<ProjectionManualExpirationSpec> {
   static readonly spec = resourceSpec.effect<ProjectionManualExpirationSpec>({
     tag: "projection-surface/manual-expiration",
     key: () => Key.singleton(),

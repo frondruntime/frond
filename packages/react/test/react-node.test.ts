@@ -22,13 +22,14 @@ type Profile = {
 };
 
 type ReactProfileSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: Profile;
 }>;
 
-class ReactProfileNode extends NodeBase<ReactProfileSpec, "effect"> {
+class ReactProfileNode extends NodeBase<ReactProfileSpec> {
   static readonly spec = resourceSpec.effect<ReactProfileSpec>({
     tag: "react/resources/profile",
     key: () => Key.singleton(),
@@ -42,13 +43,14 @@ class ReactProfileNode extends NodeBase<ReactProfileSpec, "effect"> {
 }
 
 type ReactArgsRollbackSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: { readonly filter: string };
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: Profile;
 }>;
 
-class ReactArgsRollbackNode extends NodeBase<ReactArgsRollbackSpec, "effect"> {
+class ReactArgsRollbackNode extends NodeBase<ReactArgsRollbackSpec> {
   static readonly spec = resourceSpec.effect<ReactArgsRollbackSpec>({
     tag: "react/resources/args-rollback",
     key: () => Key.singleton(),
@@ -64,7 +66,7 @@ class ReactArgsRollbackNode extends NodeBase<ReactArgsRollbackSpec, "effect"> {
 
 // Refresh succeeds for any filter except "fail" — exercises the rollback race
 // where the older updateArgs fails after the newer one has already succeeded.
-class ReactArgsSelectiveNode extends NodeBase<ReactArgsRollbackSpec, "effect"> {
+class ReactArgsSelectiveNode extends NodeBase<ReactArgsRollbackSpec> {
   static readonly spec = resourceSpec.effect<ReactArgsRollbackSpec>({
     tag: "react/resources/args-selective",
     key: () => Key.singleton(),
@@ -177,13 +179,14 @@ describe("React node store", () => {
     const started = await Effect.runPromise(Deferred.make<void>());
     const gate = await Effect.runPromise(Deferred.make<Profile>());
     type SlowDisposeSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: Profile;
     }>;
 
-    class SlowDisposeNode extends NodeBase<SlowDisposeSpec, "effect"> {
+    class SlowDisposeNode extends NodeBase<SlowDisposeSpec> {
       static readonly spec = resourceSpec.effect<SlowDisposeSpec>({
         tag: "react/resources/slow-dispose",
         key: () => Key.singleton(),
@@ -586,13 +589,14 @@ test("nodes store throws one stable composite attempt until children become read
   const gateB = await Effect.runPromise(Deferred.make<Profile>());
 
   type SlowNodeASpec = NodeSpec<{
+    readonly mode: "effect";
     readonly args: Record<string, never>;
     readonly key: Key.Singleton;
     readonly deps: Record<string, never>;
     readonly result: Profile;
   }>;
 
-  class SlowNodeA extends NodeBase<SlowNodeASpec, "effect"> {
+  class SlowNodeA extends NodeBase<SlowNodeASpec> {
     static readonly spec = resourceSpec.effect<SlowNodeASpec>({
       tag: "react/resources/slow-a",
       key: () => Key.singleton(),
@@ -607,13 +611,14 @@ test("nodes store throws one stable composite attempt until children become read
   }
 
   type SlowNodeBSpec = NodeSpec<{
+    readonly mode: "effect";
     readonly args: Record<string, never>;
     readonly key: Key.Singleton;
     readonly deps: Record<string, never>;
     readonly result: Profile;
   }>;
 
-  class SlowNodeB extends NodeBase<SlowNodeBSpec, "effect"> {
+  class SlowNodeB extends NodeBase<SlowNodeBSpec> {
     static readonly spec = resourceSpec.effect<SlowNodeBSpec>({
       tag: "react/resources/slow-b",
       key: () => Key.singleton(),

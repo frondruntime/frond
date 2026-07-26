@@ -16,6 +16,7 @@ import {
 test("interrupted in-flight action settles the operation phase for later work", async () => {
   const started = await Effect.runPromise(Deferred.make<void>());
   type ReproSpec = NodeSpec<{
+    readonly mode: "effect";
     readonly args: Record<string, never>;
     readonly key: Key.Singleton;
     readonly deps: Record<string, never>;
@@ -26,7 +27,7 @@ test("interrupted in-flight action settles the operation phase for later work", 
     };
   }>;
 
-  class ReproNode extends NodeBase<ReproSpec, "effect"> {
+  class ReproNode extends NodeBase<ReproSpec> {
     static readonly spec = resourceSpec.effect<ReproSpec>({
       tag: "resources/interrupt-phase-repro",
       key: () => Key.singleton(),

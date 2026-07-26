@@ -474,13 +474,14 @@ describe("result validity", () => {
 });
 
 type DefaultValiditySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: { readonly value: string };
 }>;
 
-class DefaultValidityNode extends NodeBase<DefaultValiditySpec, "effect"> {
+class DefaultValidityNode extends NodeBase<DefaultValiditySpec> {
   static readonly spec = resourceSpec.effect<DefaultValiditySpec>({
     tag: "result-validity/default",
     key: () => Key.singleton(),
@@ -490,13 +491,14 @@ class DefaultValidityNode extends NodeBase<DefaultValiditySpec, "effect"> {
 }
 
 type ManualStaleSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: { readonly value: string };
 }>;
 
-class ManualStaleNode extends NodeBase<ManualStaleSpec, "effect"> {
+class ManualStaleNode extends NodeBase<ManualStaleSpec> {
   static readonly spec = resourceSpec.effect<ManualStaleSpec>({
     tag: "result-validity/manual-stale",
     key: () => Key.singleton(),
@@ -516,13 +518,14 @@ class ManualStaleNode extends NodeBase<ManualStaleSpec, "effect"> {
 }
 
 type BareCommitSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: { readonly result: { readonly value: string } };
 }>;
 
-class BareCommitNode extends NodeBase<BareCommitSpec, "effect"> {
+class BareCommitNode extends NodeBase<BareCommitSpec> {
   static readonly spec = resourceSpec.effect<BareCommitSpec>({
     tag: "result-validity/bare-commit",
     key: () => Key.singleton(),
@@ -532,13 +535,14 @@ class BareCommitNode extends NodeBase<BareCommitSpec, "effect"> {
 }
 
 type TimeBoundStaleSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: { readonly value: string };
 }>;
 
-class TimeBoundStaleNode extends NodeBase<TimeBoundStaleSpec, "effect"> {
+class TimeBoundStaleNode extends NodeBase<TimeBoundStaleSpec> {
   static readonly spec = resourceSpec.effect<TimeBoundStaleSpec>({
     tag: "result-validity/time-bound-stale",
     key: () => Key.singleton(),
@@ -562,13 +566,14 @@ class TimeBoundStaleNode extends NodeBase<TimeBoundStaleSpec, "effect"> {
 }
 
 type TimeBoundExpiredSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: { readonly value: string };
 }>;
 
-class TimeBoundExpiredNode extends NodeBase<TimeBoundExpiredSpec, "effect"> {
+class TimeBoundExpiredNode extends NodeBase<TimeBoundExpiredSpec> {
   static readonly spec = resourceSpec.effect<TimeBoundExpiredSpec>({
     tag: "result-validity/time-bound-expired",
     key: () => Key.singleton(),
@@ -594,6 +599,7 @@ let acquireAfterExpirationCount = 0;
 const actionExpiresLiveStarts: Array<unknown> = [];
 const actionExpiresLiveStops: Array<string> = [];
 type ActionExpiresSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -603,7 +609,7 @@ type ActionExpiresSpec = NodeSpec<{
   };
 }>;
 
-class ActionExpiresNode extends NodeBase<ActionExpiresSpec, "effect"> {
+class ActionExpiresNode extends NodeBase<ActionExpiresSpec> {
   static readonly spec = resourceSpec.effect<ActionExpiresSpec>({
     tag: "result-validity/action-expires",
     key: () => Key.singleton(),
@@ -637,13 +643,14 @@ class ActionExpiresNode extends NodeBase<ActionExpiresSpec, "effect"> {
 }
 
 type StaleRefreshFailureSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: { readonly value: string };
 }>;
 
-class StaleRefreshFailureNode extends NodeBase<StaleRefreshFailureSpec, "effect"> {
+class StaleRefreshFailureNode extends NodeBase<StaleRefreshFailureSpec> {
   static readonly spec = resourceSpec.effect<StaleRefreshFailureSpec>({
     tag: "result-validity/stale-refresh-failure",
     key: () => Key.singleton(),
@@ -665,6 +672,7 @@ class StaleRefreshFailureNode extends NodeBase<StaleRefreshFailureSpec, "effect"
 
 let expiredRefreshCalls = 0;
 type RefreshRejectedWhenExpiredSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -674,7 +682,7 @@ type RefreshRejectedWhenExpiredSpec = NodeSpec<{
   };
 }>;
 
-class RefreshRejectedWhenExpiredNode extends NodeBase<RefreshRejectedWhenExpiredSpec, "effect"> {
+class RefreshRejectedWhenExpiredNode extends NodeBase<RefreshRejectedWhenExpiredSpec> {
   static readonly spec = resourceSpec.effect<RefreshRejectedWhenExpiredSpec>({
     tag: "result-validity/refresh-rejected-when-expired",
     key: () => Key.singleton(),
@@ -692,13 +700,14 @@ class RefreshRejectedWhenExpiredNode extends NodeBase<RefreshRejectedWhenExpired
 }
 
 type SoonExpiringInvalidationSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: { readonly value: string };
 }>;
 
-class SoonExpiringInvalidationNode extends NodeBase<SoonExpiringInvalidationSpec, "effect"> {
+class SoonExpiringInvalidationNode extends NodeBase<SoonExpiringInvalidationSpec> {
   static readonly spec = resourceSpec.effect<SoonExpiringInvalidationSpec>({
     tag: "result-validity/soon-expiring-invalidation",
     key: () => Key.singleton(),
@@ -715,13 +724,14 @@ let expiryTeardownReleaseRuns = 0;
 let expiryTeardownDisposerRuns = 0;
 let expiryTeardownAcquireRuns = 0;
 type ExpiryTeardownSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: { readonly value: string };
 }>;
 
-class ExpiryTeardownNode extends NodeBase<ExpiryTeardownSpec, "effect"> {
+class ExpiryTeardownNode extends NodeBase<ExpiryTeardownSpec> {
   static readonly spec = resourceSpec.effect<ExpiryTeardownSpec>({
     tag: "result-validity/expiry-teardown",
     key: () => Key.singleton(),
@@ -750,6 +760,7 @@ class ExpiryTeardownNode extends NodeBase<ExpiryTeardownSpec, "effect"> {
 }
 
 type ActionPreservesValiditySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -759,7 +770,7 @@ type ActionPreservesValiditySpec = NodeSpec<{
   };
 }>;
 
-class ActionPreservesValidityNode extends NodeBase<ActionPreservesValiditySpec, "effect"> {
+class ActionPreservesValidityNode extends NodeBase<ActionPreservesValiditySpec> {
   static readonly spec = resourceSpec.effect<ActionPreservesValiditySpec>({
     tag: "result-validity/action-preserves-validity",
     key: () => Key.singleton(),
@@ -783,6 +794,7 @@ class ActionPreservesValidityNode extends NodeBase<ActionPreservesValiditySpec, 
 
 let failingInvalidationAcquireCount = 0;
 type FailingExpiredInvalidationSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -792,7 +804,7 @@ type FailingExpiredInvalidationSpec = NodeSpec<{
   };
 }>;
 
-class FailingExpiredInvalidationNode extends NodeBase<FailingExpiredInvalidationSpec, "effect"> {
+class FailingExpiredInvalidationNode extends NodeBase<FailingExpiredInvalidationSpec> {
   static readonly spec = resourceSpec.effect<FailingExpiredInvalidationSpec>({
     tag: "result-validity/failing-expired-invalidation",
     key: () => Key.singleton(),
@@ -812,13 +824,14 @@ class FailingExpiredInvalidationNode extends NodeBase<FailingExpiredInvalidation
 }
 
 type StaleDependencySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: { readonly value: string };
 }>;
 
-class StaleDependencyNode extends NodeBase<StaleDependencySpec, "effect"> {
+class StaleDependencyNode extends NodeBase<StaleDependencySpec> {
   static readonly spec = resourceSpec.effect<StaleDependencySpec>({
     tag: "result-validity/stale-dependency",
     key: () => Key.singleton(),
@@ -838,6 +851,7 @@ class StaleDependencyNode extends NodeBase<StaleDependencySpec, "effect"> {
 }
 
 type DependentOnStaleDependencySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: {
@@ -846,7 +860,7 @@ type DependentOnStaleDependencySpec = NodeSpec<{
   readonly result: { readonly value: string };
 }>;
 
-class DependentOnStaleDependencyNode extends NodeBase<DependentOnStaleDependencySpec, "effect"> {
+class DependentOnStaleDependencyNode extends NodeBase<DependentOnStaleDependencySpec> {
   static readonly spec = resourceSpec.effect<DependentOnStaleDependencySpec>({
     tag: "result-validity/dependent-on-stale",
     key: () => Key.singleton(),
@@ -858,13 +872,14 @@ class DependentOnStaleDependencyNode extends NodeBase<DependentOnStaleDependency
 }
 
 type ExpiredDependencySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: { readonly value: string };
 }>;
 
-class ExpiredDependencyNode extends NodeBase<ExpiredDependencySpec, "effect"> {
+class ExpiredDependencyNode extends NodeBase<ExpiredDependencySpec> {
   static readonly spec = resourceSpec.effect<ExpiredDependencySpec>({
     tag: "result-validity/expired-dependency",
     key: () => Key.singleton(),
@@ -884,6 +899,7 @@ class ExpiredDependencyNode extends NodeBase<ExpiredDependencySpec, "effect"> {
 }
 
 type DependentOnExpiredDependencySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: {
@@ -892,10 +908,7 @@ type DependentOnExpiredDependencySpec = NodeSpec<{
   readonly result: { readonly value: string };
 }>;
 
-class DependentOnExpiredDependencyNode extends NodeBase<
-  DependentOnExpiredDependencySpec,
-  "effect"
-> {
+class DependentOnExpiredDependencyNode extends NodeBase<DependentOnExpiredDependencySpec> {
   static readonly spec = resourceSpec.effect<DependentOnExpiredDependencySpec>({
     tag: "result-validity/dependent-on-expired",
     key: () => Key.singleton(),
@@ -907,13 +920,14 @@ class DependentOnExpiredDependencyNode extends NodeBase<
 }
 
 type InvalidPolicySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: { readonly value: string };
 }>;
 
-class InvalidPolicyNode extends NodeBase<InvalidPolicySpec, "effect"> {
+class InvalidPolicyNode extends NodeBase<InvalidPolicySpec> {
   static readonly spec = resourceSpec.effect<InvalidPolicySpec>({
     tag: "result-validity/invalid-policy",
     key: () => Key.singleton(),
@@ -929,13 +943,14 @@ class InvalidPolicyNode extends NodeBase<InvalidPolicySpec, "effect"> {
 
 let slowTimeBoundAcquireRuns = 0;
 type SlowTimeBoundAcquireSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: { readonly value: string };
 }>;
 
-class SlowTimeBoundAcquireNode extends NodeBase<SlowTimeBoundAcquireSpec, "effect"> {
+class SlowTimeBoundAcquireNode extends NodeBase<SlowTimeBoundAcquireSpec> {
   static readonly spec = resourceSpec.effect<SlowTimeBoundAcquireSpec>({
     tag: "result-validity/slow-time-bound-acquire",
     key: () => Key.singleton(),
@@ -956,13 +971,14 @@ class SlowTimeBoundAcquireNode extends NodeBase<SlowTimeBoundAcquireSpec, "effec
 
 const argsUpdateAcquireSeen: Array<{ readonly page: number }> = [];
 type ArgsUpdateReacquireSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: { readonly page: number };
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: { readonly page: number };
 }>;
 
-class ArgsUpdateReacquireNode extends NodeBase<ArgsUpdateReacquireSpec, "effect"> {
+class ArgsUpdateReacquireNode extends NodeBase<ArgsUpdateReacquireSpec> {
   static readonly spec = resourceSpec.effect<ArgsUpdateReacquireSpec>({
     tag: "result-validity/args-update-reacquire",
     key: () => Key.singleton(),
@@ -981,13 +997,14 @@ class ArgsUpdateReacquireNode extends NodeBase<ArgsUpdateReacquireSpec, "effect"
 }
 
 type ClockExpiredDependencySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: { readonly value: string };
 }>;
 
-class ClockExpiredDependencyNode extends NodeBase<ClockExpiredDependencySpec, "effect"> {
+class ClockExpiredDependencyNode extends NodeBase<ClockExpiredDependencySpec> {
   static readonly spec = resourceSpec.effect<ClockExpiredDependencySpec>({
     tag: "result-validity/clock-expired-dependency",
     key: () => Key.singleton(),
@@ -1003,6 +1020,7 @@ class ClockExpiredDependencyNode extends NodeBase<ClockExpiredDependencySpec, "e
 let clockExpiredDependencyRefreshRuns = 0;
 let clockExpiredDependencyActionRuns = 0;
 type DependentOnClockExpiredDependencySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: {
@@ -1014,10 +1032,7 @@ type DependentOnClockExpiredDependencySpec = NodeSpec<{
   };
 }>;
 
-class DependentOnClockExpiredDependencyNode extends NodeBase<
-  DependentOnClockExpiredDependencySpec,
-  "effect"
-> {
+class DependentOnClockExpiredDependencyNode extends NodeBase<DependentOnClockExpiredDependencySpec> {
   static readonly spec = resourceSpec.effect<DependentOnClockExpiredDependencySpec>({
     tag: "result-validity/dependent-on-clock-expired",
     key: () => Key.singleton(),
@@ -1039,13 +1054,14 @@ class DependentOnClockExpiredDependencyNode extends NodeBase<
 }
 
 type InvalidCommitSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: { readonly value: string };
 }>;
 
-class InvalidCommitNode extends NodeBase<InvalidCommitSpec, "effect"> {
+class InvalidCommitNode extends NodeBase<InvalidCommitSpec> {
   static readonly spec = resourceSpec.effect<InvalidCommitSpec>({
     tag: "result-validity/invalid-commit",
     key: () => Key.singleton(),

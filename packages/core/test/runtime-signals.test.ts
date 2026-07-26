@@ -260,13 +260,14 @@ describe("runtime signals", () => {
   test("driver can read retained signals explicitly", async () => {
     const delivered: Array<string> = [];
     type SignalReaderSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class SignalNode extends NodeBase<SignalReaderSpec, "effect"> {
+    class SignalNode extends NodeBase<SignalReaderSpec> {
       static readonly spec = serviceSpec.effect<SignalReaderSpec>({
         tag: "services/runtime-signal-reader-node",
         key: () => Key.singleton(),
@@ -292,13 +293,14 @@ describe("runtime signals", () => {
   test("Effect runtime construction wires graph driver signal access", async () => {
     const delivered: Array<string> = [];
     type EffectRuntimeSignalSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class SignalNode extends NodeBase<EffectRuntimeSignalSpec, "effect"> {
+    class SignalNode extends NodeBase<EffectRuntimeSignalSpec> {
       static readonly spec = serviceSpec.effect<EffectRuntimeSignalSpec>({
         tag: "services/effect-runtime-signal-reader",
         key: () => Key.singleton(),
@@ -386,13 +388,14 @@ describe("runtime signals", () => {
   test("driver can publish and subscribe through scoped signal access", async () => {
     const delivered: Array<string> = [];
     type ScopedSignalSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class SignalNode extends NodeBase<ScopedSignalSpec, "effect"> {
+    class SignalNode extends NodeBase<ScopedSignalSpec> {
       static readonly spec = serviceSpec.effect<ScopedSignalSpec>({
         tag: "services/runtime-signal-node",
         key: () => Key.singleton(),
@@ -430,6 +433,7 @@ describe("runtime signals", () => {
   test("async driver signal subscription uses Promise-facing handlers", async () => {
     const delivered: Array<string> = [];
     type AsyncSignalSpec = NodeSpec<{
+      readonly mode: "async";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;

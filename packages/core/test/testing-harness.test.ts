@@ -48,6 +48,7 @@ describe("Frond testing harness", () => {
     const deferred = createDeferredDriver<string>();
 
     type FailingHarnessSpec = NodeSpec<{
+      readonly mode: "async";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -90,6 +91,7 @@ describe("Frond testing harness", () => {
     const deferred = createDeferredDriver<string>();
 
     type ReadReadyFailureSpec = NodeSpec<{
+      readonly mode: "async";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -151,13 +153,14 @@ describe("Frond testing harness", () => {
 
   test("startNode returns a typed ready node with domain methods", async () => {
     type DomainHarnessSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class DomainHarnessNode extends NodeBase<DomainHarnessSpec, "effect"> {
+    class DomainHarnessNode extends NodeBase<DomainHarnessSpec> {
       static readonly spec = serviceSpec.effect<DomainHarnessSpec>({
         tag: "testing/resources/domain-harness",
         key: () => Key.singleton(),
@@ -182,13 +185,14 @@ describe("Frond testing harness", () => {
 
   test("startNodes preserves keyed ready-node map typing and values", async () => {
     type LeftHarnessSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class LeftHarnessNode extends NodeBase<LeftHarnessSpec, "effect"> {
+    class LeftHarnessNode extends NodeBase<LeftHarnessSpec> {
       static readonly spec = serviceSpec.effect<LeftHarnessSpec>({
         tag: "testing/resources/left-harness",
         key: () => Key.singleton(),
@@ -198,13 +202,14 @@ describe("Frond testing harness", () => {
     }
 
     type RightHarnessSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: number;
     }>;
 
-    class RightHarnessNode extends NodeBase<RightHarnessSpec, "effect"> {
+    class RightHarnessNode extends NodeBase<RightHarnessSpec> {
       static readonly spec = serviceSpec.effect<RightHarnessSpec>({
         tag: "testing/resources/right-harness",
         key: () => Key.singleton(),
@@ -229,6 +234,7 @@ describe("Frond testing harness", () => {
     const deferred = createDeferredDriver<string>({ refresh: true });
 
     type RefreshHarnessSpec = NodeSpec<{
+      readonly mode: "async";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -271,6 +277,7 @@ describe("Frond testing harness", () => {
     const deferred = createDeferredDriver<string>({ refresh: true });
 
     type RefreshValueHarnessSpec = NodeSpec<{
+      readonly mode: "async";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -313,6 +320,7 @@ describe("Frond testing harness", () => {
     const deferred = createDeferredDriver<string>();
 
     type WaitHarnessSpec = NodeSpec<{
+      readonly mode: "async";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -350,6 +358,7 @@ describe("Frond testing harness", () => {
 
   test("waitForRuntimeEventCount accumulates matching events across polls", async () => {
     type ReadyHarnessSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -357,7 +366,7 @@ describe("Frond testing harness", () => {
     }>;
 
     const readyNode = (tag: string) =>
-      class extends NodeBase<ReadyHarnessSpec, "effect"> {
+      class extends NodeBase<ReadyHarnessSpec> {
         static readonly spec = serviceSpec.effect<ReadyHarnessSpec>({
           tag,
           key: () => Key.singleton(),
@@ -471,6 +480,7 @@ describe("Frond testing harness", () => {
     const deferred = createDeferredDriver<number>({ actions: ["increment"] });
 
     type ActionHarnessSpec = NodeSpec<{
+      readonly mode: "async";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -530,6 +540,7 @@ describe("Frond testing harness", () => {
     const deferred = createDeferredDriver<string>({ release: true });
 
     type ReleaseHarnessSpec = NodeSpec<{
+      readonly mode: "async";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -573,13 +584,14 @@ describe("Frond testing harness", () => {
 
   test("mockSpec and readySpec preserve tag and dependency wiring", async () => {
     type BaseDependencySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class BaseDependencyNode extends NodeBase<BaseDependencySpec, "effect"> {
+    class BaseDependencyNode extends NodeBase<BaseDependencySpec> {
       static readonly spec = serviceSpec.effect<BaseDependencySpec>({
         tag: "testing/resources/base-dependency",
         key: () => Key.singleton(),
@@ -589,6 +601,7 @@ describe("Frond testing harness", () => {
     }
 
     type ConsumerSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -597,7 +610,7 @@ describe("Frond testing harness", () => {
       readonly result: string;
     }>;
 
-    class ConsumerNode extends NodeBase<ConsumerSpec, "effect"> {
+    class ConsumerNode extends NodeBase<ConsumerSpec> {
       static readonly spec = serviceSpec.effect<ConsumerSpec>({
         tag: "testing/resources/consumer",
         key: () => Key.singleton(),

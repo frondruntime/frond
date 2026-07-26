@@ -176,13 +176,14 @@ describe("runtime events", () => {
 
   test("unsafe node update emits a node change event", async () => {
     type UnsafeSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { value: string };
     }>;
 
-    class UnsafeNode extends NodeBase<UnsafeSpec, "effect"> {
+    class UnsafeNode extends NodeBase<UnsafeSpec> {
       static readonly spec = serviceSpec.effect<UnsafeSpec>({
         tag: "services/runtime-events-unsafe-update",
         key: () => Key.singleton(),
@@ -285,13 +286,14 @@ describe("runtime events", () => {
     const spans = makeTestTracerSpans();
     const runtimeId = "trace-runtime" as RuntimeId;
     type TraceSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class TraceNode extends NodeBase<TraceSpec, "effect"> {
+    class TraceNode extends NodeBase<TraceSpec> {
       static readonly spec = serviceSpec.effect<TraceSpec>({
         tag: "services/runtime-trace",
         key: () => Key.singleton(),
@@ -360,13 +362,14 @@ describe("runtime events", () => {
     const releases: Array<string> = [];
     const eventTags: Array<string> = [];
     type ScopedSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class ScopedNode extends NodeBase<ScopedSpec, "effect"> {
+    class ScopedNode extends NodeBase<ScopedSpec> {
       static readonly spec = serviceSpec.effect<ScopedSpec>({
         tag: "services/runtime-scoped-finalizer",
         key: () => Key.singleton(),
@@ -415,13 +418,14 @@ describe("runtime events", () => {
     const releases: Array<string> = [];
     const stoppedEvents: Array<string> = [];
     type IdempotentSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class IdempotentNode extends NodeBase<IdempotentSpec, "effect"> {
+    class IdempotentNode extends NodeBase<IdempotentSpec> {
       static readonly spec = serviceSpec.effect<IdempotentSpec>({
         tag: "services/runtime-idempotent-finalizer",
         key: () => Key.singleton(),
@@ -493,13 +497,14 @@ describe("runtime events", () => {
     const releaseGate = await Effect.runPromise(Deferred.make<void>());
     let releaseRuns = 0;
     type SlowReleaseSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class SlowReleaseNode extends NodeBase<SlowReleaseSpec, "effect"> {
+    class SlowReleaseNode extends NodeBase<SlowReleaseSpec> {
       static readonly spec = serviceSpec.effect<SlowReleaseSpec>({
         tag: "services/runtime-stop-slow-release",
         key: () => Key.singleton(),
@@ -547,6 +552,7 @@ describe("runtime events", () => {
     const releaseGate = await Effect.runPromise(Deferred.make<void>());
     let releaseRuns = 0;
     type InterruptStopSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -618,13 +624,14 @@ describe("runtime events", () => {
     const gate = await Effect.runPromise(Deferred.make<void>());
     let attempts = 0;
     type RetrySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class RetryNode extends NodeBase<RetrySpec, "effect"> {
+    class RetryNode extends NodeBase<RetrySpec> {
       static readonly spec = serviceSpec.effect<RetrySpec>({
         tag: "services/runtime-readiness-retry-events",
         key: () => Key.singleton(),
@@ -668,13 +675,14 @@ describe("runtime events", () => {
     const cause = new Error("release rejected");
     const sinkFailures: Array<unknown> = [];
     type ReleaseFailSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class ReleaseFailNode extends NodeBase<ReleaseFailSpec, "effect"> {
+    class ReleaseFailNode extends NodeBase<ReleaseFailSpec> {
       static readonly spec = serviceSpec.effect<ReleaseFailSpec>({
         tag: "services/runtime-release-failure",
         key: () => Key.singleton(),
@@ -714,13 +722,14 @@ describe("runtime events", () => {
   test("runtime release event carries release defects as typed cleanup failures", async () => {
     const cause = new TypeError("release died");
     type ReleaseDefectSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class ReleaseDefectNode extends NodeBase<ReleaseDefectSpec, "effect"> {
+    class ReleaseDefectNode extends NodeBase<ReleaseDefectSpec> {
       static readonly spec = serviceSpec.effect<ReleaseDefectSpec>({
         tag: "services/runtime-release-defect",
         key: () => Key.singleton(),
@@ -748,13 +757,14 @@ describe("runtime events", () => {
   test("runtime release event carries live stop failures as cleanup failures", async () => {
     const cause = new Error("unsubscribe failed");
     type LiveStopFailureSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class LiveStopFailureNode extends NodeBase<LiveStopFailureSpec, "effect"> {
+    class LiveStopFailureNode extends NodeBase<LiveStopFailureSpec> {
       static readonly spec = resourceSpec.effect<LiveStopFailureSpec>({
         tag: "resources/runtime-live-stop-release-failure",
         key: () => Key.singleton(),
@@ -824,6 +834,7 @@ describe("runtime events", () => {
     const secondActionStarted = await Effect.runPromise(Deferred.make<void>());
     let actionRuns = 0;
     type QueuedActionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -833,7 +844,7 @@ describe("runtime events", () => {
       };
     }>;
 
-    class QueuedActionNode extends NodeBase<QueuedActionSpec, "effect"> {
+    class QueuedActionNode extends NodeBase<QueuedActionSpec> {
       static readonly spec = resourceSpec.effect<QueuedActionSpec>({
         tag: "resources/runtime-action-start-boundary",
         key: () => Key.singleton(),
@@ -898,6 +909,7 @@ describe("runtime events", () => {
     const secondActionStarted = await Effect.runPromise(Deferred.make<void>());
     let actionRuns = 0;
     type QueuedDomainActionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -907,7 +919,7 @@ describe("runtime events", () => {
       };
     }>;
 
-    class QueuedDomainActionNode extends NodeBase<QueuedDomainActionSpec, "effect"> {
+    class QueuedDomainActionNode extends NodeBase<QueuedDomainActionSpec> {
       static readonly spec = resourceSpec.effect<QueuedDomainActionSpec>({
         tag: "resources/runtime-domain-action-start-boundary",
         key: () => Key.singleton(),
@@ -966,6 +978,7 @@ describe("runtime events", () => {
     const actionGate = await Effect.runPromise(Deferred.make<void>());
     const refreshStarted = await Effect.runPromise(Deferred.make<void>());
     type QueuedMaintenanceSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly filter: string };
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -975,7 +988,7 @@ describe("runtime events", () => {
       };
     }>;
 
-    class QueuedMaintenanceNode extends NodeBase<QueuedMaintenanceSpec, "effect"> {
+    class QueuedMaintenanceNode extends NodeBase<QueuedMaintenanceSpec> {
       static readonly spec = serviceSpec.effect<QueuedMaintenanceSpec>({
         tag: "services/runtime-maintenance-start-boundary",
         key: () => Key.singleton(),
@@ -1027,13 +1040,14 @@ describe("runtime events", () => {
   test("runtime emits refresh lifecycle events and sinks observe failures", async () => {
     const sinkEvents: Array<string> = [];
     type FailingRefreshSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class FailingRefreshNode extends NodeBase<FailingRefreshSpec, "effect"> {
+    class FailingRefreshNode extends NodeBase<FailingRefreshSpec> {
       static readonly spec = resourceSpec.effect<FailingRefreshSpec>({
         tag: "resources/runtime-refresh-failure",
         key: () => Key.singleton(),
@@ -1136,13 +1150,14 @@ describe("runtime events", () => {
   test("runtime sinks can project failure-bearing events into diagnostics reports", async () => {
     const reports: Array<string> = [];
     type FailingRefreshSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class FailingRefreshNode extends NodeBase<FailingRefreshSpec, "effect"> {
+    class FailingRefreshNode extends NodeBase<FailingRefreshSpec> {
       static readonly spec = resourceSpec.effect<FailingRefreshSpec>({
         tag: "resources/runtime-refresh-diagnostics",
         key: () => Key.singleton(),
@@ -1186,13 +1201,14 @@ describe("runtime events", () => {
     const refreshGate = await Effect.runPromise(Deferred.make<void>());
     let refreshCount = 0;
     type SlowRefreshSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class SlowRefreshNode extends NodeBase<SlowRefreshSpec, "effect"> {
+    class SlowRefreshNode extends NodeBase<SlowRefreshSpec> {
       static readonly spec = resourceSpec.effect<SlowRefreshSpec>({
         tag: "resources/runtime-refresh-singleflight",
         key: () => Key.singleton(),
@@ -1245,13 +1261,14 @@ describe("runtime events", () => {
   test("runtime emits args reconciliation failure events and sinks observe failures", async () => {
     const sinkEvents: Array<string> = [];
     type ArgsFailureSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly filter: string };
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class ArgsFailureNode extends NodeBase<ArgsFailureSpec, "effect"> {
+    class ArgsFailureNode extends NodeBase<ArgsFailureSpec> {
       static readonly spec = serviceSpec.effect<ArgsFailureSpec>({
         tag: "services/runtime-args-failure",
         key: () => Key.singleton(),
@@ -1290,13 +1307,14 @@ describe("runtime events", () => {
     const cause = new Error("socket refused");
     const sinkEvents: Array<string> = [];
     type LiveFailureSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class LiveFailureNode extends NodeBase<LiveFailureSpec, "effect"> {
+    class LiveFailureNode extends NodeBase<LiveFailureSpec> {
       static readonly spec = serviceSpec.effect<LiveFailureSpec>({
         tag: "services/runtime-live-failure",
         key: () => Key.singleton(),
@@ -1340,13 +1358,14 @@ describe("runtime events", () => {
     const cleanupCause = new Error("acquire cleanup rejected");
     const sinkEvents: Array<string> = [];
     type AcquireCleanupFailureSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class AcquireCleanupFailureNode extends NodeBase<AcquireCleanupFailureSpec, "effect"> {
+    class AcquireCleanupFailureNode extends NodeBase<AcquireCleanupFailureSpec> {
       static readonly spec = serviceSpec.effect<AcquireCleanupFailureSpec>({
         tag: "services/runtime-acquire-cleanup-failure",
         key: () => Key.singleton(),
@@ -1399,13 +1418,14 @@ describe("runtime events", () => {
     const cause = new Error("release rejected");
     const sinkEvents: Array<string> = [];
     type StopReleaseFailureSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
 
-    class StopReleaseFailureNode extends NodeBase<StopReleaseFailureSpec, "effect"> {
+    class StopReleaseFailureNode extends NodeBase<StopReleaseFailureSpec> {
       static readonly spec = serviceSpec.effect<StopReleaseFailureSpec>({
         tag: "services/runtime-stop-release-failure",
         key: () => Key.singleton(),
@@ -1485,6 +1505,7 @@ describe("runtime events", () => {
 
   test("runtime report sink handler failure is observed as a sink failure", async () => {
     type ReportSinkFailureSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1494,7 +1515,7 @@ describe("runtime events", () => {
       };
     }>;
 
-    class ReportSinkFailureNode extends NodeBase<ReportSinkFailureSpec, "effect"> {
+    class ReportSinkFailureNode extends NodeBase<ReportSinkFailureSpec> {
       static readonly spec = serviceSpec.effect<ReportSinkFailureSpec>({
         tag: "services/runtime-report-sink-failure",
         key: () => Key.singleton(),

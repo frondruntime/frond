@@ -39,6 +39,7 @@ type Profile = {
 type EmptyArgs = Record<string, never>;
 
 type ProfileSpec<TArgs = EmptyArgs, TKey = Key.Singleton> = NodeSpec<{
+  readonly mode: "effect";
   readonly args: TArgs;
   readonly key: TKey;
   readonly deps: Record<string, never>;
@@ -113,7 +114,7 @@ describe("React DOM useNodeRead", () => {
   test("cold mount renders Pending inline and lands Ready without a Suspense boundary", async () => {
     const gate = await Effect.runPromise(Deferred.make<Profile>());
 
-    class ReadColdProfileNode extends NodeBase<ProfileSpec, "effect"> {
+    class ReadColdProfileNode extends NodeBase<ProfileSpec> {
       static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom-read/resources/cold-profile",
         key: () => Key.singleton(),
@@ -156,7 +157,7 @@ describe("React DOM useNodeRead", () => {
   });
 
   test("failing acquire renders the Error tag inline without throwing to a boundary", async () => {
-    class ReadFailingProfileNode extends NodeBase<ProfileSpec, "effect"> {
+    class ReadFailingProfileNode extends NodeBase<ProfileSpec> {
       static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom-read/resources/failing-profile",
         key: () => Key.singleton(),
@@ -193,7 +194,7 @@ describe("React DOM useNodeRead", () => {
   });
 
   test("StrictMode replay keeps one live subscription and still lands Ready", async () => {
-    class StrictReadProfileNode extends NodeBase<ProfileSpec, "effect"> {
+    class StrictReadProfileNode extends NodeBase<ProfileSpec> {
       static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom-read/resources/strict-profile",
         key: () => Key.singleton(),
@@ -238,7 +239,7 @@ describe("React DOM useNodeRead", () => {
       Key.Structure<{ readonly id: string }>
     >;
 
-    class KeyedReadProfileNode extends NodeBase<KeyedReadSpec, "effect"> {
+    class KeyedReadProfileNode extends NodeBase<KeyedReadSpec> {
       static readonly spec = resourceSpec.effect<KeyedReadSpec>({
         tag: "react-dom-read/resources/keyed-profile",
         key: (args) => Key.structure({ id: args.id }),
@@ -293,7 +294,7 @@ describe("React DOM useNodeRead", () => {
   });
 
   test("unmount releases the runtime subscription", async () => {
-    class ReadUnmountProfileNode extends NodeBase<ProfileSpec, "effect"> {
+    class ReadUnmountProfileNode extends NodeBase<ProfileSpec> {
       static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom-read/resources/unmount-profile",
         key: () => Key.singleton(),

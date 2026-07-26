@@ -374,6 +374,7 @@ describe("driver staging coherence", () => {
 type ResultShape = { readonly value: string };
 
 type AcquireStagedSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -413,6 +414,7 @@ class AcquireReturnPrecedenceNode extends NodeBase<AcquireStagedSpec> {
 }
 
 type RefreshStagingSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -453,6 +455,7 @@ class RefreshReturnPrecedenceNode extends NodeBase<RefreshStagingSpec> {
 }
 
 type ActionStagingSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -481,6 +484,7 @@ class ActionStagedWithoutReturnNode extends NodeBase<ActionStagingSpec> {
 }
 
 type ActionOutputOnlySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -525,6 +529,7 @@ let timeBoundSourceAcquireRuns = 0;
 let timeBoundSourceRefreshRuns = 0;
 
 type TimeBoundSourceSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -564,6 +569,7 @@ class TimeBoundSourceNode extends NodeBase<TimeBoundSourceSpec> {
 }
 
 type TimeBoundDependentSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: {
@@ -596,6 +602,7 @@ class PatchBox {
 }
 
 type ClassPatchSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -649,6 +656,7 @@ class ClassPatchSharedNode extends NodeBase<ClassPatchSpec> {
 }
 
 type TimeoutSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;

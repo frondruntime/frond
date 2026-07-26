@@ -43,12 +43,13 @@ class DiagnosticsResultStore {
 }
 
 type AnalyticsSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Args.None;
   readonly key: Key.Singleton;
   readonly result: AnalyticsResultStore;
 }>;
 
-class AnalyticsNode extends NodeBase<AnalyticsSpec, "effect"> {
+class AnalyticsNode extends NodeBase<AnalyticsSpec> {
   static readonly spec = serviceSpec.effect<AnalyticsSpec>({
     tag: tag("e2e/signal-boundary/analytics"),
     key: () => Key.singleton(),
@@ -69,12 +70,13 @@ class AnalyticsNode extends NodeBase<AnalyticsSpec, "effect"> {
 }
 
 type DiagnosticsSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Args.None;
   readonly key: Key.Singleton;
   readonly result: DiagnosticsResultStore;
 }>;
 
-class DiagnosticsNode extends NodeBase<DiagnosticsSpec, "effect"> {
+class DiagnosticsNode extends NodeBase<DiagnosticsSpec> {
   static readonly spec = serviceSpec.effect<DiagnosticsSpec>({
     tag: tag("e2e/signal-boundary/diagnostics"),
     key: () => Key.singleton(),

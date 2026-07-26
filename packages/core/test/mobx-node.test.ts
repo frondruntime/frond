@@ -24,13 +24,14 @@ type Profile = {
 };
 
 type TransportSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
   readonly result: string;
 }>;
 
-class TransportNode extends NodeBase<TransportSpec, "effect"> {
+class TransportNode extends NodeBase<TransportSpec> {
   static readonly spec = serviceSpec.effect<TransportSpec>({
     tag: "mobx/services/transport",
     key: () => Key.singleton(),
@@ -40,6 +41,7 @@ class TransportNode extends NodeBase<TransportSpec, "effect"> {
 }
 
 type ProfileSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: {
@@ -55,7 +57,7 @@ type ProfileSpec = NodeSpec<{
   };
 }>;
 
-class ProfileNode extends NodeBase<ProfileSpec, "effect"> {
+class ProfileNode extends NodeBase<ProfileSpec> {
   static readonly spec = resourceSpec.effect<ProfileSpec>({
     tag: "mobx/resources/profile",
     key: () => Key.singleton(),
@@ -169,13 +171,14 @@ describe("MobX node projection", () => {
 
   test("does not expose expired results as ordinary projected results", async () => {
     type ExpiredProfileSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: Profile;
     }>;
 
-    class ExpiredProfileNode extends NodeBase<ExpiredProfileSpec, "effect"> {
+    class ExpiredProfileNode extends NodeBase<ExpiredProfileSpec> {
       static readonly spec = resourceSpec.effect<ExpiredProfileSpec>({
         tag: "mobx/resources/expired-profile",
         key: () => Key.singleton(),
@@ -252,6 +255,7 @@ describe("MobX node projection", () => {
     };
 
     type MutableSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -259,7 +263,7 @@ describe("MobX node projection", () => {
       readonly actions: MutableActions;
     }>;
 
-    class MutableNode extends NodeBase<MutableSpec, "effect"> {
+    class MutableNode extends NodeBase<MutableSpec> {
       static readonly spec = resourceSpec.effect<MutableSpec>({
         tag: "mobx/resources/node-mutation",
         key: () => Key.singleton(),
@@ -291,6 +295,7 @@ describe("MobX node projection", () => {
 
   test("facade nodes can compute through dependency node objects", async () => {
     type FacadeSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -299,7 +304,7 @@ describe("MobX node projection", () => {
       readonly result: null;
     }>;
 
-    class FacadeNode extends NodeBase<FacadeSpec, "effect"> {
+    class FacadeNode extends NodeBase<FacadeSpec> {
       static readonly spec = resourceSpec.effect<FacadeSpec>({
         tag: "mobx/facades/profile-label",
         key: () => Key.singleton(),
@@ -464,13 +469,14 @@ describe("MobX node projection", () => {
     const refreshStarted = await Effect.runPromise(Deferred.make<void>());
     const refreshGate = await Effect.runPromise(Deferred.make<void>());
     type SlowMobXSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class SlowMobXNode extends NodeBase<SlowMobXSpec, "effect"> {
+    class SlowMobXNode extends NodeBase<SlowMobXSpec> {
       static readonly spec = resourceSpec.effect<SlowMobXSpec>({
         tag: "mobx/resources/slow-operation",
         key: () => Key.singleton(),
@@ -585,6 +591,7 @@ describe("MobX node projection", () => {
     const failure = new Error("live start failed once");
     let starts = 0;
     type FlakyLiveSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -641,13 +648,14 @@ describe("MobX node projection", () => {
     };
 
     type ScopedRatesSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: RatesResult;
     }>;
 
-    class ScopedRatesNode extends NodeBase<ScopedRatesSpec, "effect"> {
+    class ScopedRatesNode extends NodeBase<ScopedRatesSpec> {
       static readonly spec = resourceSpec.effect<ScopedRatesSpec>({
         tag: "mobx/resources/scoped-rates",
         key: () => Key.singleton(),
@@ -721,13 +729,14 @@ describe("MobX node projection", () => {
 
   test("unsupported MobX live scopes surface typed live failures", async () => {
     type UnsupportedScopeSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: { readonly value: string };
     }>;
 
-    class UnsupportedScopeNode extends NodeBase<UnsupportedScopeSpec, "effect"> {
+    class UnsupportedScopeNode extends NodeBase<UnsupportedScopeSpec> {
       static readonly spec = resourceSpec.effect<UnsupportedScopeSpec>({
         tag: "mobx/resources/unsupported-live-scope",
         key: () => Key.singleton(),
@@ -767,13 +776,14 @@ describe("MobX node projection", () => {
     };
 
     type RapidScopedRatesSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: RatesResult;
     }>;
 
-    class RapidScopedRatesNode extends NodeBase<RapidScopedRatesSpec, "effect"> {
+    class RapidScopedRatesNode extends NodeBase<RapidScopedRatesSpec> {
       static readonly spec = resourceSpec.effect<RapidScopedRatesSpec>({
         tag: "mobx/resources/rapid-scoped-rates",
         key: () => Key.singleton(),
@@ -836,6 +846,7 @@ describe("MobX node projection", () => {
     const liveGate = await Effect.runPromise(Deferred.make<void>());
     let liveStarts = 0;
     type InterruptedObservationSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -925,6 +936,7 @@ describe("MobX node projection", () => {
 
   test("invalidation releases a successfully acquired observation lease by id", async () => {
     type InvalidatedObservationSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1030,13 +1042,14 @@ describe("MobX node projection", () => {
     const started = await Effect.runPromise(Deferred.make<void>());
     const gate = await Effect.runPromise(Deferred.make<Profile>());
     type SlowProfileSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: Profile;
     }>;
 
-    class SlowProfileNode extends NodeBase<SlowProfileSpec, "effect"> {
+    class SlowProfileNode extends NodeBase<SlowProfileSpec> {
       static readonly spec = resourceSpec.effect<SlowProfileSpec>({
         tag: "mobx/resources/slow-profile",
         key: () => Key.singleton(),
