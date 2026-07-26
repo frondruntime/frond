@@ -35,6 +35,7 @@ type Equal<TLeft, TRight> =
 type Expect<TValue extends true> = TValue;
 
 type TransportSpec = import("../../src").NodeSpec<{
+  readonly mode: "async";
   readonly args: Args.None;
   readonly key: Key.Singleton;
   readonly result: TransportResult;
@@ -42,6 +43,7 @@ type TransportSpec = import("../../src").NodeSpec<{
 
 // @ts-expect-error node spec args must be canonical JSON-shaped key inputs
 export type FunctionArgsSpec = import("../../src").NodeSpec<{
+  readonly mode: "async";
   readonly args: { readonly onSelect: () => void };
   readonly key: Key.Singleton;
   readonly result: string;
@@ -49,6 +51,7 @@ export type FunctionArgsSpec = import("../../src").NodeSpec<{
 
 // @ts-expect-error node spec args must reject Date instances
 export type DateArgsSpec = import("../../src").NodeSpec<{
+  readonly mode: "async";
   readonly args: { readonly at: Date };
   readonly key: Key.Singleton;
   readonly result: string;
@@ -60,7 +63,15 @@ declare class NonJsonArgsValue {
 
 // @ts-expect-error node spec args must reject class instances
 export type ClassInstanceArgsSpec = import("../../src").NodeSpec<{
+  readonly mode: "async";
   readonly args: { readonly value: NonJsonArgsValue };
+  readonly key: Key.Singleton;
+  readonly result: string;
+}>;
+
+// @ts-expect-error every node spec shape must declare its driver mode
+export type ModelessSpec = import("../../src").NodeSpec<{
+  readonly args: Args.None;
   readonly key: Key.Singleton;
   readonly result: string;
 }>;
@@ -88,20 +99,20 @@ class TransportNode extends NodeBase<TransportSpec> {
 const DriverValue = Context.Service<{ readonly value: string }>("types/node-authoring/DriverValue");
 
 type ServiceBackedSpec = import("../../src").NodeSpec<{
+  readonly mode: "effect";
   readonly args: Args.None;
   readonly key: Key.Singleton;
   readonly result: string;
 }>;
 
-class RChannelRejectedNode extends NodeBase<ServiceBackedSpec, "effect"> {
-  static readonly spec = serviceSpec.effect<
-    ServiceBackedSpec,
-    // @ts-expect-error the Effect requirements channel is pinned to never; the
-    // runtime provisions no services, so an R-carrying spec must not typecheck.
-    typeof DriverValue
-  >({
+class RChannelRejectedNode extends NodeBase<ServiceBackedSpec> {
+  static readonly spec = serviceSpec.effect<ServiceBackedSpec>({
     tag: tag("types/r-channel-rejected"),
     key: () => Key.singleton(),
+    // The requirements parameter is deleted from the effect factories and the
+    // channel stays pinned to never: the runtime provisions no services, so a
+    // service-requiring hook must not typecheck.
+    // @ts-expect-error acquire Effects must not require services
     acquire: Driver.Acquire(() =>
       Effect.gen(function* () {
         const service = yield* DriverValue;
@@ -114,6 +125,7 @@ class RChannelRejectedNode extends NodeBase<ServiceBackedSpec, "effect"> {
 RChannelRejectedNode.spec satisfies unknown;
 
 type CounterSpec = import("../../src").NodeSpec<{
+  readonly mode: "async";
   readonly args: Args.None;
   readonly key: Key.Singleton;
   readonly result: { readonly count: number };
@@ -168,6 +180,7 @@ type ProfileActions = {
 };
 
 type ProfileSpec = import("../../src").NodeSpec<{
+  readonly mode: "async";
   readonly args: ProfileArgs;
   readonly key: Key.Structure<{ readonly id: string }>;
   readonly deps: ProfileDeps;
@@ -302,6 +315,7 @@ resourceSpec.async<ProfileSpec, typeof phantomProfileActions>({
 });
 
 type EffectSpec = import("../../src").NodeSpec<{
+  readonly mode: "effect";
   readonly args: Args.None;
   readonly key: Key.Singleton;
   readonly result: { readonly ok: true };
@@ -310,14 +324,25 @@ type EffectSpec = import("../../src").NodeSpec<{
   };
 }>;
 
+// The same shape members as ProfileSpec, flavored effect: one spec type can no
+// longer serve both factory flavors because the mode is part of the shape.
+type EffectProfileSpec = import("../../src").NodeSpec<{
+  readonly mode: "effect";
+  readonly args: ProfileArgs;
+  readonly key: Key.Structure<{ readonly id: string }>;
+  readonly deps: ProfileDeps;
+  readonly result: ProfileResult;
+  readonly actions: ProfileActions;
+}>;
+
 type EffectProfileContext = DriverContext<
-  NodeBase<ProfileSpec, "effect">,
+  NodeBase<EffectProfileSpec>,
   ProfileArgs,
-  NodeSpecResolvedDeps<ProfileSpec>,
+  NodeSpecResolvedDeps<EffectProfileSpec>,
   ProfileResult
 >;
 
-resourceSpec.effect<ProfileSpec>({
+resourceSpec.effect<EffectProfileSpec>({
   tag: tag("types/profile-effect-refresh"),
   key: (args) => Key.structure({ id: args.id }),
   dependencies: dependencies(() => ({
@@ -334,7 +359,7 @@ resourceSpec.effect<ProfileSpec>({
   ),
 });
 
-class EffectNode extends NodeBase<EffectSpec, "effect"> {
+class EffectNode extends NodeBase<EffectSpec> {
   static readonly spec = serviceSpec.effect<EffectSpec>({
     tag: tag("types/effect"),
     key: () => Key.singleton(),
@@ -345,7 +370,21 @@ class EffectNode extends NodeBase<EffectSpec, "effect"> {
       ),
     },
   });
+
+  // In-class actions derive the Effect representation from the shape-declared
+  // mode with no second NodeBase type argument.
+  ping(message: string): Effect.Effect<number, unknown> {
+    return this.actions.ping({ message });
+  }
 }
+
+// The shape-declared mode is the authored mode the spec reports.
+type EffectNodeMode = Expect<Equal<import("../../src").NodeSpecMode<typeof EffectNode>, "effect">>;
+const effectNodeMode: EffectNodeMode = true;
+effectNodeMode satisfies true;
+
+// @ts-expect-error NodeBase takes no mode argument; the spec shape declares it
+export class ModeArgumentRejectedNode extends NodeBase<EffectSpec, "effect"> {}
 
 const effectStarted = await harness.startNode(EffectNode, Args.none);
 // Effect node: the action facade is Effect-native; unwrapEffect bridges to a Promise.
@@ -365,10 +404,13 @@ const effectInstanceAsClass: EffectNode = effectInstance;
 effectInstanceAsClass satisfies EffectNode;
 effectInstance.actions.ping({ message: "effect" }) satisfies Effect.Effect<number, unknown>;
 
-// Same identity for an async node with the default mode.
+// Same identity for an async node, whose shape declares mode: "async".
 type ProfileInstanceIdentity = Expect<Equal<NodeSpecInstance<typeof ProfileNode>, ProfileNode>>;
 const profileInstanceIdentity: ProfileInstanceIdentity = true;
 profileInstanceIdentity satisfies true;
+type ProfileNodeMode = Expect<Equal<import("../../src").NodeSpecMode<typeof ProfileNode>, "async">>;
+const profileNodeMode: ProfileNodeMode = true;
+profileNodeMode satisfies true;
 declare const profileInstance: NodeSpecInstance<typeof ProfileNode>;
 const profileInstanceAsClass: ProfileNode = profileInstance;
 profileInstanceAsClass satisfies ProfileNode;
@@ -395,11 +437,96 @@ serviceSpec.async<CounterSpec>({
   acquire: Driver.Acquire(() => Effect.succeed("not async authoring")),
 });
 
-serviceSpec.effect<CounterSpec>({
+type EffectCounterSpec = import("../../src").NodeSpec<{
+  readonly mode: "effect";
+  readonly args: Args.None;
+  readonly key: Key.Singleton;
+  readonly result: { readonly count: number };
+}>;
+
+serviceSpec.effect<EffectCounterSpec>({
   tag: tag("types/counter-effect-guard"),
   key: () => Key.singleton(),
   // @ts-expect-error effect drivers must return Effect values
   acquire: Driver.Acquire(() => "not effect authoring"),
+});
+
+// --- mode-in-spec-shape contracts ------------------------------------------
+
+// The historical footgun: an effect-authored node whose spec shape forgot the
+// mode. `.effect` rejects the spec at the type argument, so a class can never
+// end up with a Promise-typed `this.actions` over an Effect-returning runtime.
+// @ts-expect-error a spec shape without mode: "effect" is rejected by .effect
+serviceSpec.effect<ModelessSpec>({
+  tag: tag("types/modeless-shape-effect-factory"),
+  key: () => Key.singleton(),
+  acquire: Driver.Acquire(() => Effect.succeed("ready")),
+});
+
+// The reverse mismatch: an effect-mode shape handed to the async factory.
+// @ts-expect-error a spec shape with mode: "effect" is rejected by .async
+serviceSpec.async<EffectCounterSpec>({
+  tag: tag("types/counter-effect-shape-async-factory"),
+  key: () => Key.singleton(),
+  acquire: Driver.Acquire(() => ({ count: 1 })),
+});
+
+// Driver.Async / Driver.Effect are public again and carry the same shape-mode
+// constraint as the factories.
+const asyncCounterDriver = Driver.Async<CounterSpec>({
+  acquire: Driver.Acquire(() => ({ count: 1 })),
+});
+const effectCounterDriver = Driver.Effect<EffectCounterSpec>({
+  acquire: Driver.Acquire(() => Effect.succeed({ count: 1 })),
+});
+
+// @ts-expect-error Driver.Effect requires a spec shape declaring mode: "effect"
+Driver.Effect<CounterSpec>({
+  acquire: Driver.Acquire(() => Effect.succeed({ count: 1 })),
+});
+
+// @ts-expect-error Driver.Async requires a spec shape declaring mode: "async"
+Driver.Async<EffectCounterSpec>({
+  acquire: Driver.Acquire(() => ({ count: 1 })),
+});
+
+// fromDriver accepts a pre-built driver whose mode literal agrees with the
+// shape-declared mode...
+nodeSpec.fromDriver<EffectCounterSpec>({
+  tag: tag("types/counter-from-driver"),
+  key: () => Key.singleton(),
+  driver: effectCounterDriver,
+});
+
+// ...and rejects one whose mode disagrees.
+nodeSpec.fromDriver<EffectCounterSpec>({
+  tag: tag("types/counter-from-driver-mismatch"),
+  key: () => Key.singleton(),
+  // @ts-expect-error fromDriver rejects a driver whose mode disagrees with the shape mode
+  driver: asyncCounterDriver,
+});
+
+// The deleted requirements parameter shifted explicit action maps up one
+// position: `.effect<Spec, typeof actions>`, with no middle `never`.
+const effectPingActions = {
+  ping: Driver.Action(
+    (
+      _ctx: DriverContext<
+        NodeBase<EffectSpec>,
+        NodeSpecArgs<EffectSpec>,
+        NodeSpecResolvedDeps<EffectSpec>,
+        { readonly ok: true }
+      >,
+      input: { readonly message: string }
+    ) => Effect.succeed(input.message.length)
+  ),
+};
+
+serviceSpec.effect<EffectSpec, typeof effectPingActions>({
+  tag: tag("types/effect-explicit-actions"),
+  key: () => Key.singleton(),
+  acquire: Driver.Acquire(() => Effect.succeed({ ok: true as const })),
+  actions: effectPingActions,
 });
 
 serviceSpec.async<CounterSpec>({
@@ -420,6 +547,7 @@ serviceSpec.async<CounterSpec>({
 });
 
 type LiveSpec = import("../../src").NodeSpec<{
+  readonly mode: "async";
   readonly args: Args.None;
   readonly key: Key.Singleton;
   readonly result: string;
@@ -483,6 +611,7 @@ function liveStopReasonLabel(reason: LiveResourceStopReason): string {
 liveStopReasonLabel({ _tag: "DemandInactive" }) satisfies string;
 
 type PlainSpec = import("../../src").NodeSpec<{
+  readonly mode: "async";
   readonly args: Args.None;
   readonly key: Key.Singleton;
   readonly result: { readonly count: number };
@@ -504,6 +633,7 @@ class PlainNode extends NodeBase<PlainSpec> {
 }
 
 type FacadeSpec = import("../../src").NodeSpec<{
+  readonly mode: "async";
   readonly args: Args.None;
   readonly key: Key.Singleton;
   readonly deps: {
@@ -537,6 +667,7 @@ type SearchArgs = {
 };
 
 type SearchSpec = import("../../src").NodeSpec<{
+  readonly mode: "async";
   readonly args: SearchArgs;
   readonly key: Key.Structure<{ readonly query: string }>;
   readonly result: ReadonlyArray<string>;

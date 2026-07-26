@@ -30,12 +30,13 @@ type TransportResult = {
 };
 
 type TransportSpec = import("@frondruntime/core").NodeSpec<{
+  readonly mode: "effect";
   readonly args: Args.None;
   readonly key: Key.Singleton;
   readonly result: TransportResult;
 }>;
 
-class TransportNode extends NodeBase<TransportSpec, "effect"> {
+class TransportNode extends NodeBase<TransportSpec> {
   static readonly spec = serviceSpec.effect<TransportSpec>({
     tag: tag("react-types/transport"),
     key: () => Key.singleton(),
@@ -64,6 +65,7 @@ type ProfileDeps = {
 };
 
 type ProfileSpec = import("@frondruntime/core").NodeSpec<{
+  readonly mode: "async";
   readonly args: ProfileArgs;
   readonly key: Key.Structure<{ readonly id: string }>;
   readonly deps: ProfileDeps;

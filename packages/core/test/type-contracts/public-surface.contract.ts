@@ -127,6 +127,14 @@ export type NoRuntimeSignalBus = Expect<
 export type NoNormalizedDriverContext = Expect<
   Equal<"NormalizedDriverContext" extends keyof typeof Frond.Driver ? true : false, false>
 >;
+// The flavored driver builders are public: `Driver.Async` / `Driver.Effect`
+// are the escape hatch pair feeding `fromDriver`, shape-mode constrained.
+export type DriverNamespaceHasAsync = Expect<
+  Equal<"Async" extends keyof typeof Frond.Driver ? true : false, true>
+>;
+export type DriverNamespaceHasEffect = Expect<
+  Equal<"Effect" extends keyof typeof Frond.Driver ? true : false, true>
+>;
 export type NoGraphSystemConstructor = Expect<
   Equal<"makeInMemoryGraphSystem" extends keyof typeof Frond.Graph ? true : false, false>
 >;

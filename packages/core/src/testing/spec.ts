@@ -14,6 +14,7 @@ import {
   type NodeSpecDeclaredDeps,
   type NodeSpecInstance,
   type NodeSpecLike,
+  type NodeSpecMode,
   type NodeSpecResult,
   type ResolvedDeps,
 } from "../node";
@@ -49,6 +50,7 @@ export function mockSpec<
   overrides: MockSpecOverrides<TSpec, TDerivedDeps>
 ): NodeSpecClass<
   NodeSpec<{
+    readonly mode: NodeSpecMode<TSpec>;
     readonly args: NodeSpecArgs<TSpec>;
     readonly deps: TDerivedDeps;
     readonly result: NodeSpecResult<TSpec>;
@@ -64,6 +66,7 @@ export function readySpec<TSpec extends NodeSpecLike>(
   result: NodeSpecResult<TSpec>
 ): NodeSpecClass<
   NodeSpec<{
+    readonly mode: NodeSpecMode<TSpec>;
     readonly args: NodeSpecArgs<TSpec>;
     readonly deps: Record<string, never>;
     readonly result: NodeSpecResult<TSpec>;
@@ -109,6 +112,7 @@ function specWithOverrides<
   overrides: MockSpecOverrides<TOriginal, TDerivedDeps>
 ): NodeSpecClass<
   NodeSpec<{
+    readonly mode: NodeSpecMode<TOriginal>;
     readonly args: NodeSpecArgs<TOriginal>;
     readonly deps: TDerivedDeps;
     readonly result: NodeSpecResult<TOriginal>;
@@ -120,6 +124,7 @@ function specWithOverrides<
 
   const descriptor = original.spec as NodeDescriptor<
     NodeSpec<{
+      readonly mode: NodeSpecMode<TOriginal>;
       readonly args: NodeSpecArgs<TOriginal>;
       readonly deps: NodeSpecDeclaredDeps<TOriginal>;
       readonly result: NodeSpecResult<TOriginal>;
@@ -146,6 +151,7 @@ function specWithOverrides<
 
   return SpecOverride as unknown as NodeSpecClass<
     NodeSpec<{
+      readonly mode: NodeSpecMode<TOriginal>;
       readonly args: NodeSpecArgs<TOriginal>;
       readonly deps: TDerivedDeps;
       readonly result: NodeSpecResult<TOriginal>;

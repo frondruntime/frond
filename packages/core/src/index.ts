@@ -28,7 +28,9 @@ export { unwrapEffect, wrapPromise } from "./interop";
 export * as Key from "./keys";
 export * as MobX from "./mobx";
 export type {
+  AsyncModeSpec,
   Dep,
+  EffectModeSpec,
   FrondNode,
   NodeActions,
   NodeDescriptor,

@@ -17,6 +17,7 @@ import type {
   NodeSpec,
   NodeSpecActions,
   NodeSpecArgs,
+  NodeSpecMode,
   NodeSpecResolvedDeps,
   NodeSpecResult,
 } from "./types";
@@ -27,10 +28,13 @@ import type {
  * `super()` receives graph-owned ready state from a construction context. Direct
  * construction outside Frond throws, and closed ready nodes reject runtime-backed
  * reads/actions after release, eviction, or graph stop.
+ *
+ * The action mode is derived from the spec shape: declare
+ * `NodeSpec<{ mode: "effect"; ... }>` and extend `NodeBase<Spec>` — there is no
+ * second type argument, so the class can never disagree with the shape.
  */
 export class NodeBase<
-  TSpec extends NodeSpec<{ readonly result?: unknown }>,
-  TMode extends DriverMode = "async",
+  TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
 > {
   private _nodeId: NodeId;
 
@@ -56,11 +60,12 @@ export class NodeBase<
 
   private _closed = false;
 
-  // Internal action facade in the base's declared mode (default async). Effect
-  // nodes should extend `NodeBase<Spec, "effect">` so `this.actions` types as
-  // Effect-native. Consumers of a node always get the authoritative mode from the
-  // static spec via `NodeSpecInstance`, independent of this parameter.
-  readonly actions: NodeActions<NodeSpecActions<TSpec>, TMode>;
+  // Internal action facade in the spec shape's declared mode. Effect nodes
+  // declare `NodeSpec<{ mode: "effect"; ... }>` so `this.actions` types as
+  // Effect-native with no second NodeBase type argument. Consumers of a node
+  // always get the authoritative mode from the static spec via
+  // `NodeSpecInstance`.
+  readonly actions: NodeActions<NodeSpecActions<TSpec>, NodeSpecMode<TSpec>>;
 
   constructor() {
     const construction = currentReadyNodeConstruction as
@@ -88,13 +93,13 @@ export class NodeBase<
     // hand back Effects, async nodes hand back Promises. The runtime executes
     // every action as an Effect internally either way.
     const runsAsEffect = driverModeOf(new.target) === "effect";
-    this.actions = makeActionFacade<NodeActions<NodeSpecActions<TSpec>, TMode>>(
+    this.actions = makeActionFacade<NodeActions<NodeSpecActions<TSpec>, NodeSpecMode<TSpec>>>(
       declaredActionPredicate(new.target),
       (name, input) =>
         runsAsEffect ? this._runActionEffect(name, input) : this._runAction(name, input)
     );
 
-    makeObservable<NodeBase<TSpec, TMode>, "_args" | "_deps" | "_result">(this, {
+    makeObservable<NodeBase<TSpec>, "_args" | "_deps" | "_result">(this, {
       _args: observable.ref,
       _deps: observable.ref,
       _result: observable.ref,
@@ -264,25 +269,26 @@ export class NodeBase<
 }
 
 export type FrondNode<
-  TSpecOrArgs = NodeSpec<{ readonly result: unknown }>,
+  TSpecOrArgs = NodeSpec<{ readonly mode: DriverMode; readonly result: unknown }>,
   TDeps extends object = never,
   TResult = never,
   TActions extends ActionContracts = Record<string, never>,
   TMode extends DriverMode = "async",
 > = [TDeps] extends [never]
   ? NodeBase<
-      TSpecOrArgs extends NodeSpec ? TSpecOrArgs : NodeSpec<{ readonly result: unknown }>,
-      TMode
+      TSpecOrArgs extends NodeSpec
+        ? TSpecOrArgs
+        : NodeSpec<{ readonly mode: TMode; readonly result: unknown }>
     >
   : TSpecOrArgs extends KeyInput
     ? NodeBase<
         NodeSpec<{
+          readonly mode: TMode;
           readonly args: TSpecOrArgs;
           readonly deps: TDeps;
           readonly result: TResult;
           readonly actions: TActions;
-        }>,
-        TMode
+        }>
       >
     : never;
 

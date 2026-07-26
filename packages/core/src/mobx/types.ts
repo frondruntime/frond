@@ -1,3 +1,4 @@
+import type { DriverMode } from "../driver/types";
 import type { NodeId } from "../graph/types/ids";
 import type {
   ActionResult,
@@ -51,6 +52,7 @@ export type MobXNodeSpec<
   TNode extends object,
 > = NodeSpecClass<
   NodeSpec<{
+    readonly mode: DriverMode;
     readonly args: TArgs;
     readonly deps: TDeps;
     readonly result: TResult;

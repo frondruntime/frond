@@ -2,6 +2,8 @@ import type { Effect as EffectType } from "effect";
 import type { ResultValidityPolicy } from "../graph/types";
 import type { NodeBase } from "../node/runtime";
 import type {
+  AsyncModeSpec,
+  EffectModeSpec,
   NodeSpec,
   NodeSpecActions,
   NodeSpecArgs,
@@ -50,13 +52,11 @@ type DriverHookDescriptor<TKind extends string, TRun> = {
   readonly run: TRun;
 };
 
-// The node type hooks see, in the driver's authored mode: effect-mode hooks
-// receive a node whose action facade is Effect-native, async-mode hooks a
-// Promise-native one.
-type SpecNode<
-  TSpec extends NodeSpec<{ readonly result?: unknown }>,
-  TMode extends DriverMode = "async",
-> = NodeBase<TSpec, TMode>;
+// The node type hooks see, in the driver's authored mode: the mode lives in
+// the spec shape, so effect-mode hooks receive a node whose action facade is
+// Effect-native and async-mode hooks a Promise-native one.
+type SpecNode<TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>> =
+  NodeBase<TSpec>;
 
 /**
  * Rejects keys in an explicitly supplied action map (`resourceSpec.async<Spec,
@@ -65,13 +65,14 @@ type SpecNode<
  * the driver registry. Resolves to `unknown` when every key is declared,
  * leaving inline authoring and the generic default unaffected.
  */
-type DeclaredActionKeysOnly<TSpec extends NodeSpec<{ readonly result?: unknown }>, TActions> = [
-  Exclude<keyof TActions, keyof NodeSpecActions<TSpec>>,
-] extends [never]
+type DeclaredActionKeysOnly<
+  TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
+  TActions,
+> = [Exclude<keyof TActions, keyof NodeSpecActions<TSpec>>] extends [never]
   ? unknown
   : Record<Exclude<keyof TActions, keyof NodeSpecActions<TSpec>>, never>;
 
-export type AsyncActionImplementations<TSpec extends NodeSpec<{ readonly result?: unknown }>> = {
+export type AsyncActionImplementations<TSpec extends AsyncModeSpec> = {
   readonly [TName in keyof NodeSpecActions<TSpec> & string]: DriverActionDescriptor<
     (
       ctx: AsyncDriverContext<
@@ -85,24 +86,21 @@ export type AsyncActionImplementations<TSpec extends NodeSpec<{ readonly result?
   >;
 };
 
-export type EffectActionImplementations<
-  TSpec extends NodeSpec<{ readonly result?: unknown }>,
-  R extends never,
-> = {
+export type EffectActionImplementations<TSpec extends EffectModeSpec> = {
   readonly [TName in keyof NodeSpecActions<TSpec> & string]: DriverActionDescriptor<
     (
       ctx: DriverContext<
-        SpecNode<TSpec, "effect">,
+        SpecNode<TSpec>,
         NodeSpecArgs<TSpec>,
         NodeSpecResolvedDeps<TSpec>,
         NodeSpecResult<TSpec>
       >,
       input: ActionInput<NodeSpecActions<TSpec>[TName]>
-    ) => EffectType.Effect<ActionOutput<NodeSpecActions<TSpec>[TName]>, unknown, R>
+    ) => EffectType.Effect<ActionOutput<NodeSpecActions<TSpec>[TName]>, unknown>
   >;
 };
 
-type AsyncAcquire<TSpec extends NodeSpec<{ readonly result?: unknown }>> = (
+type AsyncAcquire<TSpec extends AsyncModeSpec> = (
   ctx: AsyncAcquireDriverContext<
     NodeSpecArgs<TSpec>,
     NodeSpecResolvedDeps<TSpec>,
@@ -110,7 +108,7 @@ type AsyncAcquire<TSpec extends NodeSpec<{ readonly result?: unknown }>> = (
   >
 ) => AsyncDriverResult<NodeSpecResult<TSpec>>;
 
-type AsyncRefresh<TSpec extends NodeSpec<{ readonly result?: unknown }>> = (
+type AsyncRefresh<TSpec extends AsyncModeSpec> = (
   ctx: AsyncDriverContext<
     SpecNode<TSpec>,
     NodeSpecArgs<TSpec>,
@@ -119,29 +117,29 @@ type AsyncRefresh<TSpec extends NodeSpec<{ readonly result?: unknown }>> = (
   >
 ) => AsyncDriverVoidResult;
 
-type AsyncRelease<TSpec extends NodeSpec<{ readonly result?: unknown }>> = (
+type AsyncRelease<TSpec extends AsyncModeSpec> = (
   ctx: AsyncDisposeContext<SpecNode<TSpec>>
 ) => AsyncDriverVoidResult;
 
-type EffectAcquire<TSpec extends NodeSpec<{ readonly result?: unknown }>, R extends never> = (
+type EffectAcquire<TSpec extends EffectModeSpec> = (
   ctx: DriverAcquireContext<NodeSpecArgs<TSpec>, NodeSpecResolvedDeps<TSpec>, NodeSpecResult<TSpec>>
-) => EffectType.Effect<NodeSpecResult<TSpec> | ResultCommit<NodeSpecResult<TSpec>>, unknown, R>;
+) => EffectType.Effect<NodeSpecResult<TSpec> | ResultCommit<NodeSpecResult<TSpec>>, unknown>;
 
-type EffectRefresh<TSpec extends NodeSpec<{ readonly result?: unknown }>, R extends never> = (
+type EffectRefresh<TSpec extends EffectModeSpec> = (
   ctx: DriverContext<
-    SpecNode<TSpec, "effect">,
+    SpecNode<TSpec>,
     NodeSpecArgs<TSpec>,
     NodeSpecResolvedDeps<TSpec>,
     NodeSpecResult<TSpec>
   >
-) => EffectType.Effect<void, unknown, R>;
+) => EffectType.Effect<void, unknown>;
 
-type EffectRelease<TSpec extends NodeSpec<{ readonly result?: unknown }>, R extends never> = (
-  ctx: DisposeContext<SpecNode<TSpec, "effect">>
-) => EffectType.Effect<void, unknown, R>;
+type EffectRelease<TSpec extends EffectModeSpec> = (
+  ctx: DisposeContext<SpecNode<TSpec>>
+) => EffectType.Effect<void, unknown>;
 
 export type AsyncInput<
-  TSpec extends NodeSpec<{ readonly result?: unknown }>,
+  TSpec extends AsyncModeSpec,
   TActions extends AsyncActionImplementations<TSpec> = AsyncActionImplementations<TSpec>,
 > = {
   readonly resultValidity?: ResultValidityPolicy | undefined;
@@ -156,20 +154,16 @@ export type AsyncInput<
 };
 
 export type EffectInput<
-  TSpec extends NodeSpec<{ readonly result?: unknown }>,
-  R extends never = never,
-  TActions extends EffectActionImplementations<TSpec, R> = EffectActionImplementations<TSpec, R>,
+  TSpec extends EffectModeSpec,
+  TActions extends EffectActionImplementations<TSpec> = EffectActionImplementations<TSpec>,
 > = {
   readonly resultValidity?: ResultValidityPolicy | undefined;
   readonly resultPatch?: ResultPatchOptions | undefined;
-  readonly acquire: DriverHookDescriptor<"acquire", EffectAcquire<TSpec, R>>;
-  readonly refresh?: DriverHookDescriptor<"refresh", EffectRefresh<TSpec, R>> | undefined;
-  readonly release?: DriverHookDescriptor<"release", EffectRelease<TSpec, R>> | undefined;
+  readonly acquire: DriverHookDescriptor<"acquire", EffectAcquire<TSpec>>;
+  readonly refresh?: DriverHookDescriptor<"refresh", EffectRefresh<TSpec>> | undefined;
+  readonly release?: DriverHookDescriptor<"release", EffectRelease<TSpec>> | undefined;
   readonly live?:
-    | DriverHookDescriptor<
-        "live",
-        EffectLiveResourceDescriptor<SpecNode<TSpec, "effect">, unknown, R>
-      >
+    | DriverHookDescriptor<"live", EffectLiveResourceDescriptor<SpecNode<TSpec>, unknown>>
     | undefined;
   readonly actions?: (TActions & DeclaredActionKeysOnly<TSpec, TActions>) | undefined;
 };
@@ -179,10 +173,10 @@ export type EffectInput<
  *
  * Async drivers may call Promise APIs such as HTTP clients. They must not return
  * Effect values from hooks; use `Driver.Effect` when the hook itself is
- * Effect-native.
+ * Effect-native. The spec shape must declare `mode: "async"`.
  */
 export function Async<
-  TSpec extends NodeSpec<{ readonly result?: unknown }>,
+  TSpec extends AsyncModeSpec,
   TActions extends AsyncActionImplementations<TSpec> = AsyncActionImplementations<TSpec>,
 >(
   input: AsyncInput<TSpec, TActions>
@@ -232,16 +226,15 @@ export function Async<
 /**
  * Builds an Effect-native driver.
  *
- * Effect drivers preserve typed failures, requirements, interruption, and Cause
- * across graph execution. Use this when the driver belongs to the runtime
- * Effect domain instead of a Promise bridge.
+ * Effect drivers preserve typed failures, interruption, and Cause across graph
+ * execution. Use this when the driver belongs to the runtime Effect domain
+ * instead of a Promise bridge. The spec shape must declare `mode: "effect"`.
  */
 export function Effect<
-  TSpec extends NodeSpec<{ readonly result?: unknown }>,
-  R extends never = never,
-  TActions extends EffectActionImplementations<TSpec, R> = EffectActionImplementations<TSpec, R>,
+  TSpec extends EffectModeSpec,
+  TActions extends EffectActionImplementations<TSpec> = EffectActionImplementations<TSpec>,
 >(
-  input: EffectInput<TSpec, R, TActions>
+  input: EffectInput<TSpec, TActions>
 ): Driver<
   SpecNode<TSpec>,
   NodeSpecArgs<TSpec>,
@@ -265,17 +258,16 @@ export function Effect<
     live: input.live?.run,
     actions: input.actions,
   } as EffectDriver<
-    SpecNode<TSpec, "effect">,
+    SpecNode<TSpec>,
     NodeSpecArgs<TSpec>,
     NodeSpecResolvedDeps<TSpec>,
     NodeSpecResult<TSpec>,
     EffectDriverActionMap<
-      SpecNode<TSpec, "effect">,
+      SpecNode<TSpec>,
       NodeSpecArgs<TSpec>,
       NodeSpecResolvedDeps<TSpec>,
       NodeSpecResult<TSpec>
-    >,
-    R
+    >
   >) as unknown as Driver<
     SpecNode<TSpec>,
     NodeSpecArgs<TSpec>,
