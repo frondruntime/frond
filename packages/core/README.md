@@ -17,6 +17,7 @@ bun add @frondruntime/core effect mobx
 - `Driver.Async` and `Driver.Effect` authoring wrappers.
 - Graph/runtime types under `Frond.Graph`, `Frond.Runtime`, `Frond.Events`, `Frond.Signals`, and `Frond.Diagnostics`.
 - MobX-facing node helpers under `Frond.MobX`.
+- Opt-in host utilities: the `withInternal`/`internalOf`/`carryInternal` result envelope for hidden imperative internals, and `createRuntimeCoordinator` for serialized runtime replacement (dev HMR, test isolation).
 - Testing helpers under `@frondruntime/core/testing`.
 
 ## Minimal Node

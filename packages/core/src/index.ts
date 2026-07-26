@@ -20,6 +20,8 @@ export type {
 } from "./driver";
 export * as Driver from "./driver";
 export { resultCommit } from "./driver";
+export type { WithInternal } from "./envelope";
+export { carryInternal, internalOf, withInternal } from "./envelope";
 export * as Events from "./events";
 export * as Graph from "./graph";
 export { unwrapEffect, wrapPromise } from "./interop";
@@ -59,4 +61,6 @@ export {
 } from "./node";
 export * as Runtime from "./runtime";
 export { createRuntime, createRuntimeClient } from "./runtime";
+export type { RuntimeCoordinator, RuntimeLease } from "./runtimeCoordinator";
+export { createRuntimeCoordinator, RuntimeBootSupersededError } from "./runtimeCoordinator";
 export * as Signals from "./signals";
