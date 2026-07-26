@@ -46,6 +46,9 @@ export type {
   NodeSpecResult,
   NodeTag,
   ResolvedDeps,
+  SpecWithDriverClass,
+  SpecWithDriverReplacement,
+  SpecWithDriverSpec,
 } from "./node";
 export {
   Args,
@@ -59,6 +62,7 @@ export {
   nodeSpec,
   resourceSpec,
   serviceSpec,
+  specWithDriver,
   tag,
 } from "./node";
 export * as Runtime from "./runtime";

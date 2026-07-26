@@ -227,7 +227,10 @@ export type NodeDescriptor<
   readonly kind: NodeKind;
   readonly tag: NodeTag;
   readonly key: (args: NodeSpecArgs<TSpec>) => NodeSpecKey<TSpec>;
-  readonly dependencies: (args: NodeSpecArgs<TSpec>) => NodeSpecDeclaredDeps<TSpec>;
+  // The resolver keeps its `dependencies(...)` brand, so a descriptor's
+  // resolver is accepted back by the public factories directly — no
+  // re-wrapping closure required.
+  readonly dependencies: DependencyResolver<NodeSpecArgs<TSpec>, NodeSpecDeclaredDeps<TSpec>>;
   readonly driver: Driver<
     NodeBase<TSpec>,
     NodeSpecArgs<TSpec>,
@@ -258,7 +261,7 @@ export type NodeSpecInput<
 };
 
 export interface DependencyResolver<TArgs, TDeps extends DependenciesRecord> {
-  readonly(args: TArgs): TDeps;
+  (args: TArgs): TDeps;
   readonly [FROND_DEPENDENCIES_BRAND]: true;
 }
 

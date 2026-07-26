@@ -58,3 +58,9 @@ export {
   FROND_NODE_SPEC_BRAND,
   FrondNodeSpecError,
 } from "./types";
+export type {
+  SpecWithDriverClass,
+  SpecWithDriverReplacement,
+  SpecWithDriverSpec,
+} from "./withDriver";
+export { specWithDriver } from "./withDriver";
