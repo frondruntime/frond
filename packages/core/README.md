@@ -13,8 +13,8 @@ bun add @frondruntime/core effect mobx
 ## What It Owns
 
 - `createRuntime` and the runtime client.
-- `NodeBase`, `NodeSpec`, node spec constructors, tags, keys, dependencies, and result commits.
-- `Driver.Async` and `Driver.Effect` authoring wrappers.
+- `NodeBase`, `NodeSpec`, the flavored spec factories (`nodeSpec.async` / `.effect`, same for `serviceSpec`, `resourceSpec`, `facadeSpec`), tags, keys, dependencies, and result commits.
+- `Driver.Async` and `Driver.Effect` builders for pre-built or shared drivers (paired with `.fromDriver` and `specWithDriver`); inline authoring goes through the flavored factories.
 - Graph/runtime types under `Frond.Graph`, `Frond.Runtime`, `Frond.Events`, `Frond.Signals`, and `Frond.Diagnostics`.
 - MobX-facing node helpers under `Frond.MobX`.
 - Opt-in host utilities: the `withInternal`/`internalOf`/`carryInternal` result envelope for hidden imperative internals, and `createRuntimeCoordinator` for serialized runtime replacement (dev HMR, test isolation).
@@ -26,18 +26,17 @@ bun add @frondruntime/core effect mobx
 import * as Frond from "@frondruntime/core";
 
 type SessionSpec = Frond.NodeSpec<{
+  readonly mode: "async";
   readonly args: Frond.Args.None;
   readonly key: Frond.Key.Singleton;
   readonly result: { readonly userId: string | null };
 }>;
 
 export class SessionNode extends Frond.NodeBase<SessionSpec> {
-  static readonly spec = Frond.serviceSpec<SessionSpec>({
+  static readonly spec = Frond.serviceSpec.async<SessionSpec>({
     tag: Frond.tag("app/session"),
     key: () => Frond.Key.singleton(),
-    driver: Frond.Driver.Async<SessionSpec>({
-      acquire: Frond.Driver.Acquire(async () => ({ userId: null })),
-    }),
+    acquire: Frond.Driver.Acquire(async () => ({ userId: null })),
   });
 
   get isSignedIn(): boolean {
@@ -45,6 +44,8 @@ export class SessionNode extends Frond.NodeBase<SessionSpec> {
   }
 }
 ```
+
+The driver mode is declared once, in the spec shape (`readonly mode: "async" | "effect"`). The factory flavor must agree - `.async` requires `mode: "async"`, `.effect` requires `mode: "effect"` - and `NodeBase<Spec>` derives the node's action surface from the shape, so the three can never disagree.
 
 ## Runtime Usage
 
@@ -56,7 +57,7 @@ await session.ensureReady();
 const read = session.read();
 ```
 
-Only ready reads expose the authored node instance. Pending, error, invalid, unavailable, and unwired reads expose lifecycle data, not partial node objects.
+Only ready reads expose the authored node instance. Pending, error, invalid, unavailable, and unwired reads expose lifecycle data, not partial node objects. A `Ready` read is fully typed: `read.result` is exactly the declared result type (never `| undefined`), and `read.node` is the authored class instance - no casts.
 
 For subscriptions outside the React adapter, a handle pairs `subscribe` with `readVersion`: `session.readVersion()` returns the revision of the node's committed state, stable across calls when nothing changed, so it serves as the `getSnapshot` half of a `useSyncExternalStore`-style integration instead of hashing `read()` by hand. The revision stays monotonic across evictions within one runtime: a re-created node continues past its predecessor's revision, so no previously observed version can recur.
 
@@ -79,6 +80,10 @@ import * as FrondTest from "@frondruntime/core/testing";
 ```
 
 The testing subpath includes runtime harnesses, deferred drivers, and spec helpers used to test node behavior without React.
+
+## Migrating
+
+Upgrading from 0.1.0? The complete breaking-change list with before/after snippets is in [MIGRATION-0.2.md](./MIGRATION-0.2.md).
 
 ## Docs
 

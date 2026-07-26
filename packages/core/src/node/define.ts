@@ -185,16 +185,16 @@ function makeNodeSpecFactory(kind: NodeKind): NodeSpecFactory {
  * Defines a general node.
  *
  * Prefer `serviceSpec`, `resourceSpec`, or `facadeSpec` when the node has a more
- * specific role; the kind is diagnostic metadata, not a runtime policy. Choose
- * the driver mode with `.async` or `.effect`.
+ * specific role; the kind is diagnostic metadata, not a runtime policy. Use the
+ * factory flavor (`.async` / `.effect`) that matches the shape-declared mode.
  */
 export const nodeSpec: NodeSpecFactory = makeNodeSpecFactory("node");
 
 /**
  * Defines a singleton or keyed service node.
  *
- * Services usually wrap clients, transports, or durable app capabilities. Choose
- * the driver mode with `.async` or `.effect`.
+ * Services usually wrap clients, transports, or durable app capabilities. Use the
+ * factory flavor (`.async` / `.effect`) that matches the shape-declared mode.
  */
 export const serviceSpec: NodeSpecFactory = makeNodeSpecFactory("service");
 
@@ -202,8 +202,8 @@ export const serviceSpec: NodeSpecFactory = makeNodeSpecFactory("service");
  * Defines a resource node whose ready result owns cleanup.
  *
  * Use resources for subscriptions, caches, handles, or state that must be
- * released through Frond lifecycle operations instead of React unmounts. Choose
- * the driver mode with `.async` or `.effect`.
+ * released through Frond lifecycle operations instead of React unmounts. Use the
+ * factory flavor (`.async` / `.effect`) that matches the shape-declared mode.
  */
 export const resourceSpec: NodeSpecFactory = makeNodeSpecFactory("resource");
 
@@ -211,8 +211,8 @@ export const resourceSpec: NodeSpecFactory = makeNodeSpecFactory("resource");
  * Defines a facade node that presents a domain-facing API over dependencies.
  *
  * Facades keep product code narrow. They do not bypass graph dependency
- * readiness or operation serialization. Choose the driver mode with `.async` or
- * `.effect`.
+ * readiness or operation serialization. Use the factory flavor (`.async` /
+ * `.effect`) that matches the shape-declared mode.
  */
 export const facadeSpec: NodeSpecFactory = makeNodeSpecFactory("facade");
 

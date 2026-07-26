@@ -50,7 +50,7 @@ const ProfileBadge = observer(({ userId }: { userId: string }) => {
 
   switch (read._tag) {
     case "Ready":
-      return <h1>{read.result?.displayName}</h1>;
+      return <h1>{read.result.displayName}</h1>;
     case "Pending":
       return <Spinner />;
     case "Error":
@@ -61,7 +61,7 @@ const ProfileBadge = observer(({ userId }: { userId: string }) => {
 });
 ```
 
-`useNodeRead` never throws to Suspense or an error boundary. It returns the runtime read as a tagged union - `Unwired | Idle | Pending | Ready | Error` - for components that must render every state inline instead of delegating to a boundary. It still drives the same cold-start readiness boot and subscribes to changes, so the node makes progress exactly as it would under `useNode`/`useNodeState`.
+`useNodeRead` never throws to Suspense or an error boundary. It returns the runtime read as a tagged union - `Unwired | Idle | Pending | Ready | Error` - for components that must render every state inline instead of delegating to a boundary. On `Ready`, `read.result` is exactly the declared result type and `read.node` is the authored class instance. It still drives the same cold-start readiness boot and subscribes to changes, so the node makes progress exactly as it would under `useNode`/`useNodeState`.
 
 ## Runtime Lifecycle Hooks
 
@@ -80,6 +80,10 @@ import * as FrondReactTest from "@frondruntime/react/testing";
 ```
 
 The testing subpath exports `TestFrondProvider` for React tests that need an isolated runtime.
+
+## Migrating
+
+Upgrading from 0.1.0? See the core package's [MIGRATION-0.2.md](../core/MIGRATION-0.2.md) - it covers the shared authoring changes and the React-facing type shifts.
 
 ## Docs
 

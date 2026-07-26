@@ -33,22 +33,21 @@ type Profile = {
 };
 
 type ProfileSpec = Frond.NodeSpec<{
+  readonly mode: "async";
   readonly args: { readonly userId: string };
   readonly key: Frond.Key.Structure<{ readonly userId: string }>;
   readonly result: Profile;
 }>;
 
 export class ProfileNode extends Frond.NodeBase<ProfileSpec> {
-  static readonly spec = Frond.resourceSpec<ProfileSpec>({
+  static readonly spec = Frond.resourceSpec.async<ProfileSpec>({
     tag: Frond.tag("app/profile"),
     key: (args) => Frond.Key.structure({ userId: args.userId }),
-    driver: Frond.Driver.Async<ProfileSpec>({
-      acquire: Frond.Driver.Acquire(async (ctx) => {
-        const res = await fetch(`/api/users/${ctx.args.userId}`, {
-          signal: ctx.signal,
-        });
-        return res.json();
-      }),
+    acquire: Frond.Driver.Acquire(async (ctx) => {
+      const res = await fetch(`/api/users/${ctx.args.userId}`, {
+        signal: ctx.signal,
+      });
+      return res.json();
     }),
   });
 
