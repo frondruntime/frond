@@ -70,3 +70,5 @@ export { createRuntime, createRuntimeClient } from "./runtime";
 export type { RuntimeCoordinator, RuntimeLease } from "./runtimeCoordinator";
 export { createRuntimeCoordinator, FrondRuntimeBootSuperseded } from "./runtimeCoordinator";
 export * as Signals from "./signals";
+export type { TransitionOptions, TransitionOutcome, TransitionStep } from "./transition";
+export { createTransition, runTransition } from "./transition";
