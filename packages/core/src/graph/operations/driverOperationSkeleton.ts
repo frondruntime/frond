@@ -8,6 +8,7 @@ import {
   runTimedDriverOperation,
 } from "../driverExecution/driverOperationRunner";
 import type { EffectBoundary } from "../driverExecution/effectBoundary";
+import { invokedDisposersOf } from "../lifecycle/disposers";
 import {
   interruptDriverOperation,
   makeOperationDisposers,
@@ -71,10 +72,14 @@ export function runReadyDriverOperation<TValue, TResult extends BackgroundOperat
     }
 
     const abortController = new AbortController();
+    // Same incarnation as the acquire that committed this ready data: the
+    // operation bag adopts the incarnation's invoked set so its drains dedupe
+    // against disposers already run for this ready generation.
     const operationDisposers = makeOperationDisposers(
       input.cell,
       input.env.state.notifyCleanupFailures,
-      input.env.driverTimeouts.release
+      input.env.driverTimeouts.release,
+      invokedDisposersOf(input.readyData.disposers)
     );
     const clock = yield* Clock.Clock;
     let currentResultState: ResultState = {

@@ -16,7 +16,12 @@ import {
   type LiveResourceStopReason,
   ReleaseFailed,
 } from "../types";
-import { drainLiveDisposers } from "./disposers";
+import {
+  adoptInvokedDisposers,
+  drainLiveDisposers,
+  type InvokedDisposers,
+  invokedDisposersOf,
+} from "./disposers";
 import { nodeCloseCancellation } from "./nodeLifetime";
 
 export interface ReadyTeardownTimeouts {
@@ -45,7 +50,15 @@ export function teardownReadyData(
       timeouts.live,
       liveStopReason
     );
-    const releaseFailures = yield* runRelease(cell, ready.node, timeouts.release);
+    // Same incarnation, same once-only registry: the release hook's own bag
+    // dedupes against the disposers this ready data collected, so a function
+    // reachable from both paths still runs exactly once per incarnation.
+    const releaseFailures = yield* runRelease(
+      cell,
+      ready.node,
+      timeouts.release,
+      invokedDisposersOf(ready.disposers)
+    );
     const disposerFailures = yield* drainLiveDisposers(cell, ready.disposers, timeouts.release);
     closeReadyNode(ready.node);
     return [...liveFailures, ...releaseFailures, ...disposerFailures];
@@ -85,7 +98,8 @@ function releasedGraphNodeState(
 function runRelease(
   cell: GraphNodeCell,
   node: object,
-  timeout: DriverOperationTimeoutMs
+  timeout: DriverOperationTimeoutMs,
+  invoked: InvokedDisposers
 ): Effect.Effect<ReadonlyArray<GraphFailure>> {
   const { release } = cell.descriptor.driver;
 
@@ -95,6 +109,7 @@ function runRelease(
 
   const abortController = new AbortController();
   const releaseDisposers: Array<Disposer> = [];
+  adoptInvokedDisposers(releaseDisposers, invoked);
   const ctx = makeDisposeContext({
     node,
     abortController,

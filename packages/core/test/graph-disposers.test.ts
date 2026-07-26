@@ -295,6 +295,106 @@ describe("bounded async disposers", () => {
     expect(result.failures).toEqual([]);
   });
 
+  test("a stable disposer function runs once per incarnation across evict and re-acquire", async () => {
+    // Regression: the once-only registry must be scoped to one ready
+    // incarnation. A stable function object (module-level unsubscribe, bound
+    // method) registered by incarnation 1 and run at its teardown must run
+    // again when incarnation 2 registers it after evict + re-acquire.
+    let runs = 0;
+    const stableUnsubscribe = (): void => {
+      runs += 1;
+    };
+
+    class StableDisposerNode extends NodeBase<SingletonSpec> {
+      static readonly spec = serviceSpec.effect<SingletonSpec>({
+        tag: "services/stable-disposer-per-incarnation",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.sync(() => {
+            ctx.disposers.add(stableUnsubscribe);
+            return "ready";
+          })
+        ),
+      });
+    }
+    const graph = makeInMemoryGraphSystem({
+      driverTimeouts: { release: 10 },
+    });
+
+    const first = await Effect.runPromise(
+      graph.ensureReadyNode({ spec: StableDisposerNode, args: {} })
+    );
+    const firstEviction = await Effect.runPromise(
+      graph.evictSubgraph({ rootNodeIds: [first.nodeId], mode: "selfAndDependents" })
+    );
+    expect(runs).toBe(1);
+
+    const second = await Effect.runPromise(
+      graph.ensureReadyNode({ spec: StableDisposerNode, args: {} })
+    );
+    const secondEviction = await Effect.runPromise(
+      graph.evictSubgraph({ rootNodeIds: [second.nodeId], mode: "selfAndDependents" })
+    );
+
+    expect(runs).toBe(2);
+    expect(firstEviction.failures).toEqual([]);
+    expect(secondEviction.failures).toEqual([]);
+  });
+
+  test("ctx and release-hook registrations dedupe within an incarnation and re-run per incarnation", async () => {
+    // Regression companion: within ONE incarnation the acquire-ctx bag and the
+    // release hook's own bag share a single once-only set (one run per
+    // teardown), but a later incarnation re-registers the same function
+    // through BOTH paths and gets its own run.
+    let runs = 0;
+    const sharedDisposer = (): void => {
+      runs += 1;
+    };
+
+    class DoubleLifecycleNode extends NodeBase<SingletonSpec> {
+      static readonly spec = serviceSpec.effect<SingletonSpec>({
+        tag: "services/shared-disposer-double-lifecycle",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.sync(() => {
+            ctx.disposers.add(sharedDisposer);
+            ctx.disposers.add(sharedDisposer);
+            return "ready";
+          })
+        ),
+        release: Driver.Release((ctx) =>
+          Effect.sync(() => {
+            ctx.disposers.add(sharedDisposer);
+          })
+        ),
+      });
+    }
+    const graph = makeInMemoryGraphSystem({
+      driverTimeouts: { release: 10 },
+    });
+
+    const first = await Effect.runPromise(
+      graph.ensureReadyNode({ spec: DoubleLifecycleNode, args: {} })
+    );
+    const firstEviction = await Effect.runPromise(
+      graph.evictSubgraph({ rootNodeIds: [first.nodeId], mode: "selfAndDependents" })
+    );
+    expect(runs).toBe(1);
+
+    const second = await Effect.runPromise(
+      graph.ensureReadyNode({ spec: DoubleLifecycleNode, args: {} })
+    );
+    const secondEviction = await Effect.runPromise(
+      graph.evictSubgraph({ rootNodeIds: [second.nodeId], mode: "selfAndDependents" })
+    );
+
+    expect(runs).toBe(2);
+    expect(firstEviction.failures).toEqual([]);
+    expect(secondEviction.failures).toEqual([]);
+  });
+
   test("a disposer added after teardown settled runs immediately instead of leaking", async () => {
     let bag: DisposerBag | undefined;
     let lateRan = false;
