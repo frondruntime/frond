@@ -8,7 +8,14 @@ import type {
   GraphCleanupFailureObserver,
 } from "../types";
 import { reportDetachedCleanupFailure } from "./cleanupFailureBridge";
-import { disposersSettled, runDetachedDisposer, runDisposers } from "./disposers";
+import {
+  adoptInvokedDisposers,
+  disposersSettled,
+  type InvokedDisposers,
+  makeInvokedDisposers,
+  runDetachedDisposer,
+  runDisposers,
+} from "./disposers";
 
 // Owner: every driver operation (acquire/refresh/action) collects disposers
 // through this bag. While the operation runs, adds accumulate. Once the
@@ -48,14 +55,21 @@ export type OperationDisposerSettleReason = Extract<
 export function makeOperationDisposers(
   cell: GraphNodeCell,
   notifyCleanupFailures: GraphCleanupFailureObserver,
-  releaseTimeout: DriverOperationTimeoutMs
+  releaseTimeout: DriverOperationTimeoutMs,
+  sharedInvoked?: InvokedDisposers
 ): OperationDisposers {
   const disposers: Array<Disposer> = [];
+  // Incarnation scope: an acquire bag mints a fresh invoked set; refresh and
+  // action bags pass the set of the ready data they commit into, so every
+  // population of one incarnation dedupes against a single registry. The set
+  // is keyed on the live array so the ready teardown drain recovers it after
+  // the hand-off.
+  const invoked = adoptInvokedDisposers(disposers, sharedInvoked ?? makeInvokedDisposers());
   let settledReason: OperationDisposerSettleReason | undefined;
   let handedOff = false;
 
   const runSettled = (disposer: Disposer, reason: OperationDisposerSettleReason): void => {
-    runDetachedDisposer(cell, disposer, releaseTimeout, (failure) => {
+    runDetachedDisposer(cell, disposer, releaseTimeout, invoked, (failure) => {
       reportDetachedCleanupFailure(notifyCleanupFailures, cell.nodeId, reason, [failure]);
     });
   };
@@ -90,7 +104,7 @@ export function makeOperationDisposers(
         }
 
         settledReason = reason;
-        return runDisposers(cell, disposers.splice(0, disposers.length), releaseTimeout);
+        return runDisposers(cell, disposers.splice(0, disposers.length), releaseTimeout, invoked);
       }),
     take: (reason) => {
       settledReason = reason;

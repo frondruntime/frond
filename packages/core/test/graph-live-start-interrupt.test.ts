@@ -169,6 +169,84 @@ describe("live start interrupt atomicity", () => {
     expect(harness.stops).toEqual([{ resource: "late-resource", reason: "StartInterrupted" }]);
   });
 
+  test("graph stop during an uninterruptible effect live start routes the produced resource into stop", async () => {
+    // Effect-mode mirror of the async orphan routing: a driver that guards its
+    // live acquisition with Effect.uninterruptible completes with a real
+    // resource even though the lease operation was already interrupted. The
+    // runtime must record that resource inside the same uninterruptible
+    // continuation and route it into the driver stop hook instead of letting
+    // the pending interrupt discard it.
+    type GatedEffectLiveSpec = NodeSpec<{
+      readonly mode: "effect";
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: string;
+    }>;
+
+    let releaseGate: (resource: string) => void = () => {};
+    let markStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const stops: Array<{ readonly resource: string; readonly reason: string }> = [];
+
+    class GatedEffectLiveNode extends NodeBase<GatedEffectLiveSpec> {
+      static readonly spec = resourceSpec.effect<GatedEffectLiveSpec>({
+        tag: "graph/resources/live-start-uninterruptible-effect",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        live: Driver.Live({
+          start: () =>
+            Effect.uninterruptible(
+              Effect.sync(() => {
+                markStarted();
+              }).pipe(
+                Effect.flatMap(() =>
+                  Effect.promise(
+                    () =>
+                      new Promise<string>((resolve) => {
+                        releaseGate = resolve;
+                      })
+                  )
+                )
+              )
+            ),
+          stop: (ctx, resource) =>
+            Effect.sync(() => {
+              stops.push({ resource, reason: ctx.reason._tag });
+            }),
+        }),
+      });
+    }
+
+    const graph = makeInMemoryGraphSystem();
+    const handle = await Effect.runPromise(
+      graph.ensureReadyNode({ spec: GatedEffectLiveNode, args: {} })
+    );
+    const leasePromise = Effect.runPromise(
+      graph.acquireNodeLiveLease({
+        nodeId: handle.nodeId,
+        source: "manual",
+        scope: { pair: "BTC/USD" },
+      })
+    ).catch(() => undefined);
+
+    await started;
+    await Effect.runPromise(graph.stop().pipe(Effect.timeout("500 millis")));
+    await leasePromise;
+
+    expect(stops).toEqual([]);
+
+    // The interrupted start completes its uninterruptible region with a real
+    // resource only now. The runtime must still stop it.
+    releaseGate("late-resource");
+    await waitFor(() => stops.length > 0);
+
+    expect(stops).toEqual([{ resource: "late-resource", reason: "StartInterrupted" }]);
+  });
+
   test("a committed live start is stopped exactly once through the normal path", async () => {
     // Regression pin: the orphan routing must not double-stop a resource that
     // was committed normally and later stopped by demand release.
