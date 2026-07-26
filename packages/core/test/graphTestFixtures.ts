@@ -10,6 +10,7 @@ export {
   DependencyFailures,
   DependencyRefreshFailed,
   DisposerFailed,
+  DisposerTimedOut,
   DriverOperationTimedOut,
   DriverPromiseFailed,
   DuplicateNodeTag,

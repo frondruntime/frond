@@ -7,7 +7,7 @@ import {
   runInAction,
   untracked,
 } from "mobx";
-import type { DriverMode } from "../driver/types";
+import type { Disposer, DriverMode } from "../driver/types";
 import type { ActionResult } from "../graph/types";
 import type { KeyInput } from "../keys";
 import type {
@@ -48,7 +48,7 @@ export class NodeBase<
 
   private _reportResultObserved: RuntimeResultObservationReporter;
 
-  private _addDisposer: (disposer: () => void) => void;
+  private _addDisposer: (disposer: Disposer) => void;
 
   private _resultObserved = false;
 
@@ -189,7 +189,7 @@ export class NodeBase<
    * Disposers registered here run when Frond closes this ready node, not when a
    * React component unmounts unless that unmount releases or evicts the node.
    */
-  protected onRuntimeClose(disposer: () => void): void {
+  protected onRuntimeClose(disposer: Disposer): void {
     this._assertOpen("runtime close disposer");
     this._addDisposer(disposer);
   }
@@ -310,7 +310,7 @@ export type RuntimeReadyNodeConstruction<TArgs, TDeps extends object, TResult> =
   readonly action: RuntimeActionExecutor;
   readonly actionEffect: RuntimeActionEffectExecutor;
   readonly reportResultObserved: RuntimeResultObservationReporter;
-  readonly addDisposer: (disposer: () => void) => void;
+  readonly addDisposer: (disposer: Disposer) => void;
 };
 
 export type RuntimeReadyNodeUpdate<TArgs, TDeps extends object, TResult> = {

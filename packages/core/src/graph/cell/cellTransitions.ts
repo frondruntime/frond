@@ -1,3 +1,4 @@
+import type { Disposer } from "../../driver";
 import type { ResultState } from "../resultValidity";
 import type {
   GraphFailure,
@@ -64,7 +65,7 @@ export function completeAcquireState(input: {
     readonly deps: Record<string, object>;
     readonly resultState: ResultState;
     readonly resultValidityPolicy: NormalizedResultValidityPolicy;
-    readonly disposers: ReadonlyArray<() => void>;
+    readonly disposers: ReadonlyArray<Disposer>;
   };
 }):
   | { readonly _tag: "Committed"; readonly state: GraphNodeState }
@@ -147,7 +148,7 @@ export function commitReadyOperationState(input: {
   readonly latest: GraphNodeState;
   readonly deps: Record<string, object>;
   readonly resultState: ResultState;
-  readonly operationDisposers: ReadonlyArray<() => void>;
+  readonly operationDisposers: ReadonlyArray<Disposer>;
 }): GraphNodeState {
   return {
     ...input.latest,
@@ -157,22 +158,37 @@ export function commitReadyOperationState(input: {
       result: input.resultState.result,
       resultValidity: input.resultState.resultValidity,
       resultLoadedAt: input.resultState.resultLoadedAt,
-      disposers: [...readyData.disposers, ...input.operationDisposers],
+      disposers: appendReadyDisposers(readyData.disposers, input.operationDisposers),
     })),
   };
 }
 
 export function appendReadyDisposersState(input: {
   readonly latest: GraphNodeState;
-  readonly operationDisposers: ReadonlyArray<() => void>;
+  readonly operationDisposers: ReadonlyArray<Disposer>;
 }): GraphNodeState {
   return {
     ...input.latest,
     phase: mapPhaseReady(input.latest.phase, (readyData) => ({
       ...readyData,
-      disposers: [...readyData.disposers, ...input.operationDisposers],
+      disposers: appendReadyDisposers(readyData.disposers, input.operationDisposers),
     })),
   };
+}
+
+// Ownership: ready disposers are the live collected array handed off by the
+// acquire operation bag. Append in place and keep the identity so late adds
+// through the bag and the teardown drain loop share one registry — a fresh
+// concatenated array would orphan adds from orphaned async driver work.
+function appendReadyDisposers(
+  current: ReadonlyArray<Disposer>,
+  appended: ReadonlyArray<Disposer>
+): ReadonlyArray<Disposer> {
+  if (appended.length > 0) {
+    (current as Array<Disposer>).push(...appended);
+  }
+
+  return current;
 }
 
 export function completeReleaseState(input: {

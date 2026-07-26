@@ -10,10 +10,13 @@ function makeBag() {
     nodeId: "graph/test:v1:singleton" as NodeId,
     tag: "graph/test",
   } as unknown as GraphNodeCell;
-  const bag = makeOperationDisposers(cell, (_nodeId, _reason, failures) =>
-    Effect.sync(() => {
-      reported.push(...failures);
-    })
+  const bag = makeOperationDisposers(
+    cell,
+    (_nodeId, _reason, failures) =>
+      Effect.sync(() => {
+        reported.push(...failures);
+      }),
+    20
   );
 
   return { bag, reported };

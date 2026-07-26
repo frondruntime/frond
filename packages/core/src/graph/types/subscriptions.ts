@@ -34,7 +34,8 @@ export type GraphCleanupFailureReason =
   | "expired-invalidation"
   | "invalidate"
   | "interrupt"
-  | "refresh";
+  | "refresh"
+  | "teardown";
 
 export type GraphCleanupFailureObserver = (
   nodeId: NodeId,
