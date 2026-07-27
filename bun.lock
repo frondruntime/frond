@@ -25,7 +25,6 @@
       "name": "@frondruntime/core",
       "version": "0.1.0",
       "devDependencies": {
-        "@frondruntime/core": "workspace:*",
         "effect": "4.0.0-beta.90",
         "mobx": "6.15.3",
       },
