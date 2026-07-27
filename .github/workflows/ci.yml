@@ -43,10 +43,5 @@ jobs:
       - name: Build
         run: bun run build
 
-      - name: Pack core dry run
-        working-directory: packages/core
-        run: bun pm pack --dry-run
-
-      - name: Pack react dry run
-        working-directory: packages/react
-        run: bun pm pack --dry-run
+      - name: Pack and smoke tarballs
+        run: bun run verify:pack

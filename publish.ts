@@ -38,10 +38,11 @@ class PublishFailure {
 const repoDir = dirname(fileURLToPath(import.meta.url));
 const args = new Set(Bun.argv.slice(2));
 const dryRun = args.has("--dry-run");
+const smokeOnly = args.has("--smoke-only");
 const help = args.has("--help") || args.has("-h");
 
 if (help) {
-  console.log(`Usage: bun publish.ts [--dry-run]
+  console.log(`Usage: bun publish.ts [--dry-run] [--smoke-only]
 
 Runs the release publish pipeline:
   1. workspace checks
@@ -51,7 +52,15 @@ Runs the release publish pipeline:
   5. clean Bun consumer smoke against packed tarballs
   6. npm publish with interactive 2FA prompt unless --dry-run is set
 
-This script is for local manual release work only. Do not run it in CI.
+Flags:
+  --dry-run    Run steps 1-5 and stop before npm publish.
+  --smoke-only CI-safe subset: package metadata validation, build, npm pack and
+               the packed-tarball consumer smoke (steps 2, 4 and 5). Skips the
+               workspace checks CI already runs as separate steps, the npm
+               publish dry-run and npm publish, so it needs no registry auth.
+
+Every mode except --smoke-only is for local manual release work only. Do not
+run them in CI.
 `);
   process.exit(0);
 }
@@ -751,7 +760,22 @@ function publishToNpm(context: PublishContext): Effect.Effect<void, PublishFailu
   });
 }
 
+function smokeOnlyProgram(): Effect.Effect<void, PublishFailure> {
+  return Effect.gen(function* () {
+    const context = yield* loadPublishContext();
+
+    yield* buildArtifacts();
+    yield* packAndSmoke(context);
+    yield* section("Publish skipped");
+    yield* log("Smoke-only run complete. No packages were published.");
+  });
+}
+
 const program = Effect.gen(function* () {
+  if (smokeOnly) {
+    return yield* smokeOnlyProgram();
+  }
+
   yield* assertLocalPublishScript();
 
   const context = yield* loadPublishContext();

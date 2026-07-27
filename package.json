@@ -11,6 +11,7 @@
     "build": "bun build.ts",
     "publish:npm": "bun publish.ts",
     "publish:npm:dry-run": "bun publish.ts --dry-run",
+    "verify:pack": "bun publish.ts --smoke-only",
     "typecheck": "bunx tsgo -p packages/core/tsconfig.json --noEmit && bunx tsgo -p packages/core/tsconfig.tests.json --noEmit && bunx tsgo -p packages/core/tsconfig.type-contracts.json --noEmit && bunx tsgo -p packages/react/tsconfig.json --noEmit && bunx tsgo -p packages/react/tsconfig.tests.json --noEmit && bunx tsgo -p packages/react/tsconfig.type-contracts.json --noEmit && bunx tsgo -p packages/rootstock/tsconfig.json --noEmit && bunx tsgo -p packages/rootstock/tsconfig.tests.json --noEmit && bunx tsgo -p packages/rootstock/tsconfig.type-contracts.json --noEmit",
     "effect:diagnostics": "bunx effect-language-service diagnostics --project packages/core/tsconfig.json",
     "effect:ls:check": "bunx effect-language-service check",
