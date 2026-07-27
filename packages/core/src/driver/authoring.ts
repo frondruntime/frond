@@ -2,7 +2,9 @@ import type { Effect as EffectType } from "effect";
 import type { ResultValidityPolicy } from "../graph/types";
 import type { NodeBase } from "../node/runtime";
 import type {
-  NodeSpec,
+  AnyModeSpec,
+  AsyncModeSpec,
+  EffectModeSpec,
   NodeSpecActions,
   NodeSpecArgs,
   NodeSpecResolvedDeps,
@@ -22,6 +24,8 @@ import type {
   ActionInput,
   ActionOptions,
   ActionOutput,
+  ActionTimeout,
+  ActionTimeoutInput,
   AsyncAcquireDriverContext,
   AsyncDisposeContext,
   AsyncDriver,
@@ -49,9 +53,25 @@ type DriverHookDescriptor<TKind extends string, TRun> = {
   readonly run: TRun;
 };
 
-type SpecNode<TSpec extends NodeSpec<{ readonly result?: unknown }>> = NodeBase<TSpec>;
+// The node type hooks see, in the driver's authored mode: the mode lives in
+// the spec shape, so effect-mode hooks receive a node whose action facade is
+// Effect-native and async-mode hooks a Promise-native one.
+type SpecNode<TSpec extends AnyModeSpec> = NodeBase<TSpec>;
 
-type AsyncActionImplementations<TSpec extends NodeSpec<{ readonly result?: unknown }>> = {
+/**
+ * Rejects keys in an explicitly supplied action map (`resourceSpec.async<Spec,
+ * typeof actions>`) that have no declared action contract: undeclared keys map
+ * to `never`, so phantom actions fail to typecheck instead of registering in
+ * the driver registry. Resolves to `unknown` when every key is declared,
+ * leaving inline authoring and the generic default unaffected.
+ */
+type DeclaredActionKeysOnly<TSpec extends AnyModeSpec, TActions> = [
+  Exclude<keyof TActions, keyof NodeSpecActions<TSpec>>,
+] extends [never]
+  ? unknown
+  : Record<Exclude<keyof TActions, keyof NodeSpecActions<TSpec>>, never>;
+
+export type AsyncActionImplementations<TSpec extends AsyncModeSpec> = {
   readonly [TName in keyof NodeSpecActions<TSpec> & string]: DriverActionDescriptor<
     (
       ctx: AsyncDriverContext<
@@ -65,10 +85,7 @@ type AsyncActionImplementations<TSpec extends NodeSpec<{ readonly result?: unkno
   >;
 };
 
-type EffectActionImplementations<
-  TSpec extends NodeSpec<{ readonly result?: unknown }>,
-  R extends never,
-> = {
+export type EffectActionImplementations<TSpec extends EffectModeSpec> = {
   readonly [TName in keyof NodeSpecActions<TSpec> & string]: DriverActionDescriptor<
     (
       ctx: DriverContext<
@@ -78,11 +95,11 @@ type EffectActionImplementations<
         NodeSpecResult<TSpec>
       >,
       input: ActionInput<NodeSpecActions<TSpec>[TName]>
-    ) => EffectType.Effect<ActionOutput<NodeSpecActions<TSpec>[TName]>, unknown, R>
+    ) => EffectType.Effect<ActionOutput<NodeSpecActions<TSpec>[TName]>, unknown>
   >;
 };
 
-type AsyncAcquire<TSpec extends NodeSpec<{ readonly result?: unknown }>> = (
+type AsyncAcquire<TSpec extends AsyncModeSpec> = (
   ctx: AsyncAcquireDriverContext<
     NodeSpecArgs<TSpec>,
     NodeSpecResolvedDeps<TSpec>,
@@ -90,7 +107,7 @@ type AsyncAcquire<TSpec extends NodeSpec<{ readonly result?: unknown }>> = (
   >
 ) => AsyncDriverResult<NodeSpecResult<TSpec>>;
 
-type AsyncRefresh<TSpec extends NodeSpec<{ readonly result?: unknown }>> = (
+type AsyncRefresh<TSpec extends AsyncModeSpec> = (
   ctx: AsyncDriverContext<
     SpecNode<TSpec>,
     NodeSpecArgs<TSpec>,
@@ -99,30 +116,30 @@ type AsyncRefresh<TSpec extends NodeSpec<{ readonly result?: unknown }>> = (
   >
 ) => AsyncDriverVoidResult;
 
-type AsyncRelease<TSpec extends NodeSpec<{ readonly result?: unknown }>> = (
+type AsyncRelease<TSpec extends AsyncModeSpec> = (
   ctx: AsyncDisposeContext<SpecNode<TSpec>>
 ) => AsyncDriverVoidResult;
 
-type EffectAcquire<TSpec extends NodeSpec<{ readonly result?: unknown }>, R extends never> = (
+type EffectAcquire<TSpec extends EffectModeSpec> = (
   ctx: DriverAcquireContext<NodeSpecArgs<TSpec>, NodeSpecResolvedDeps<TSpec>, NodeSpecResult<TSpec>>
-) => EffectType.Effect<NodeSpecResult<TSpec> | ResultCommit<NodeSpecResult<TSpec>>, unknown, R>;
+) => EffectType.Effect<NodeSpecResult<TSpec> | ResultCommit<NodeSpecResult<TSpec>>, unknown>;
 
-type EffectRefresh<TSpec extends NodeSpec<{ readonly result?: unknown }>, R extends never> = (
+type EffectRefresh<TSpec extends EffectModeSpec> = (
   ctx: DriverContext<
     SpecNode<TSpec>,
     NodeSpecArgs<TSpec>,
     NodeSpecResolvedDeps<TSpec>,
     NodeSpecResult<TSpec>
   >
-) => EffectType.Effect<void, unknown, R>;
+) => EffectType.Effect<void, unknown>;
 
-type EffectRelease<TSpec extends NodeSpec<{ readonly result?: unknown }>, R extends never> = (
+type EffectRelease<TSpec extends EffectModeSpec> = (
   ctx: DisposeContext<SpecNode<TSpec>>
-) => EffectType.Effect<void, unknown, R>;
+) => EffectType.Effect<void, unknown>;
 
 export type AsyncInput<
-  TSpec extends NodeSpec<{ readonly result?: unknown }>,
-  TActions = AsyncActionImplementations<TSpec>,
+  TSpec extends AsyncModeSpec,
+  TActions extends AsyncActionImplementations<TSpec> = AsyncActionImplementations<TSpec>,
 > = {
   readonly resultValidity?: ResultValidityPolicy | undefined;
   readonly resultPatch?: ResultPatchOptions | undefined;
@@ -132,23 +149,22 @@ export type AsyncInput<
   readonly live?:
     | DriverHookDescriptor<"live", AsyncLiveResourceDescriptor<SpecNode<TSpec>, unknown>>
     | undefined;
-  readonly actions?: TActions | undefined;
+  readonly actions?: (TActions & DeclaredActionKeysOnly<TSpec, TActions>) | undefined;
 };
 
 export type EffectInput<
-  TSpec extends NodeSpec<{ readonly result?: unknown }>,
-  R extends never = never,
-  TActions = EffectActionImplementations<TSpec, R>,
+  TSpec extends EffectModeSpec,
+  TActions extends EffectActionImplementations<TSpec> = EffectActionImplementations<TSpec>,
 > = {
   readonly resultValidity?: ResultValidityPolicy | undefined;
   readonly resultPatch?: ResultPatchOptions | undefined;
-  readonly acquire: DriverHookDescriptor<"acquire", EffectAcquire<TSpec, R>>;
-  readonly refresh?: DriverHookDescriptor<"refresh", EffectRefresh<TSpec, R>> | undefined;
-  readonly release?: DriverHookDescriptor<"release", EffectRelease<TSpec, R>> | undefined;
+  readonly acquire: DriverHookDescriptor<"acquire", EffectAcquire<TSpec>>;
+  readonly refresh?: DriverHookDescriptor<"refresh", EffectRefresh<TSpec>> | undefined;
+  readonly release?: DriverHookDescriptor<"release", EffectRelease<TSpec>> | undefined;
   readonly live?:
-    | DriverHookDescriptor<"live", EffectLiveResourceDescriptor<SpecNode<TSpec>, unknown, R>>
+    | DriverHookDescriptor<"live", EffectLiveResourceDescriptor<SpecNode<TSpec>, unknown>>
     | undefined;
-  readonly actions?: TActions | undefined;
+  readonly actions?: (TActions & DeclaredActionKeysOnly<TSpec, TActions>) | undefined;
 };
 
 /**
@@ -156,11 +172,11 @@ export type EffectInput<
  *
  * Async drivers may call Promise APIs such as HTTP clients. They must not return
  * Effect values from hooks; use `Driver.Effect` when the hook itself is
- * Effect-native.
+ * Effect-native. The spec shape must declare `mode: "async"`.
  */
 export function Async<
-  TSpec extends NodeSpec<{ readonly result?: unknown }>,
-  TActions = AsyncActionImplementations<TSpec>,
+  TSpec extends AsyncModeSpec,
+  TActions extends AsyncActionImplementations<TSpec> = AsyncActionImplementations<TSpec>,
 >(
   input: AsyncInput<TSpec, TActions>
 ): Driver<
@@ -168,7 +184,8 @@ export function Async<
   NodeSpecArgs<TSpec>,
   NodeSpecResolvedDeps<TSpec>,
   NodeSpecResult<TSpec>,
-  NodeSpecActions<TSpec>
+  NodeSpecActions<TSpec>,
+  "async"
 > {
   assertHookDescriptor(input.acquire, "acquire", "acquire");
   assertOptionalHookDescriptor(input.refresh, "refresh", "refresh");
@@ -200,29 +217,30 @@ export function Async<
     NodeSpecArgs<TSpec>,
     NodeSpecResolvedDeps<TSpec>,
     NodeSpecResult<TSpec>,
-    NodeSpecActions<TSpec>
+    NodeSpecActions<TSpec>,
+    "async"
   >;
 }
 
 /**
  * Builds an Effect-native driver.
  *
- * Effect drivers preserve typed failures, requirements, interruption, and Cause
- * across graph execution. Use this when the driver belongs to the runtime
- * Effect domain instead of a Promise bridge.
+ * Effect drivers preserve typed failures, interruption, and Cause across graph
+ * execution. Use this when the driver belongs to the runtime Effect domain
+ * instead of a Promise bridge. The spec shape must declare `mode: "effect"`.
  */
 export function Effect<
-  TSpec extends NodeSpec<{ readonly result?: unknown }>,
-  R extends never = never,
-  TActions = EffectActionImplementations<TSpec, R>,
+  TSpec extends EffectModeSpec,
+  TActions extends EffectActionImplementations<TSpec> = EffectActionImplementations<TSpec>,
 >(
-  input: EffectInput<TSpec, R, TActions>
+  input: EffectInput<TSpec, TActions>
 ): Driver<
   SpecNode<TSpec>,
   NodeSpecArgs<TSpec>,
   NodeSpecResolvedDeps<TSpec>,
   NodeSpecResult<TSpec>,
-  NodeSpecActions<TSpec>
+  NodeSpecActions<TSpec>,
+  "effect"
 > {
   assertHookDescriptor(input.acquire, "acquire", "acquire");
   assertOptionalHookDescriptor(input.refresh, "refresh", "refresh");
@@ -248,14 +266,14 @@ export function Effect<
       NodeSpecArgs<TSpec>,
       NodeSpecResolvedDeps<TSpec>,
       NodeSpecResult<TSpec>
-    >,
-    R
+    >
   >) as unknown as Driver<
     SpecNode<TSpec>,
     NodeSpecArgs<TSpec>,
     NodeSpecResolvedDeps<TSpec>,
     NodeSpecResult<TSpec>,
-    NodeSpecActions<TSpec>
+    NodeSpecActions<TSpec>,
+    "effect"
   >;
 }
 
@@ -311,31 +329,64 @@ export function Live(resource: object): DriverHookDescriptor<"live", object> {
  * Defines a serialized domain action.
  *
  * The default admission policy queues per node. Use join admission only when
- * equal inputs should share one in-flight operation.
+ * equal inputs should share one in-flight operation. Void-input actions omit
+ * `admissionKey` and join on a constant per-node/action key: every concurrent
+ * invocation shares the one in-flight run.
+ *
+ * Actions inherit the runtime `driverTimeouts.action` deadline. `timeout`
+ * overrides it per action: a positive finite number of milliseconds replaces
+ * the deadline, and the literal `"unbounded"` skips only the deadline —
+ * runtime stop, eviction, and caller interruption still interrupt the action.
  */
-export function Action<TContext, TInput, TOutput>(
-  run: { bivarianceHack(ctx: TContext, input: TInput): TOutput }["bivarianceHack"],
-  options?: ActionOptions<TInput>
+export function Action<TContext, TInput, TOutput, TTimeout extends ActionTimeout = ActionTimeout>(
+  run: {
+    bivarianceHack(ctx: TContext, input: TInput): TOutput;
+  }["bivarianceHack"],
+  options?: ActionOptions<TInput> & {
+    readonly timeout?: ActionTimeoutInput<TTimeout> | undefined;
+  }
 ): DriverActionDescriptor<typeof run> {
+  const timeout: ActionTimeout | undefined = options?.timeout;
+
+  if (
+    timeout !== undefined &&
+    timeout !== "unbounded" &&
+    !(typeof timeout === "number" && Number.isFinite(timeout) && timeout > 0)
+  ) {
+    throw new TypeError(
+      'Frond.Driver.Action timeout must be a positive finite number of milliseconds or "unbounded".'
+    );
+  }
+
+  const joinAdmissionKey =
+    options?.admission === "join"
+      ? (options as { readonly admissionKey?: unknown }).admissionKey
+      : undefined;
+
   if (
     options?.admission === "join" &&
-    typeof (options as { readonly admissionKey?: unknown }).admissionKey !== "function"
+    joinAdmissionKey !== undefined &&
+    typeof joinAdmissionKey !== "function"
   ) {
-    throw new TypeError("Frond.Driver.Action join admission requires admissionKey(input).");
+    throw new TypeError("Frond.Driver.Action join admissionKey must be a function when provided.");
   }
 
   const admission =
     options?.admission === "join"
-      ? {
-          policy: "join" as const,
-          admissionKey: options.admissionKey as (input: unknown) => unknown,
-        }
+      ? joinAdmissionKey === undefined
+        ? // Void-input join: constant per-node/action admission key.
+          { policy: "join" as const }
+        : {
+            policy: "join" as const,
+            admissionKey: joinAdmissionKey as (input: unknown) => unknown,
+          }
       : ({ policy: options?.admission ?? "queue" } as const);
 
   return {
     [ACTION_BRAND]: true,
     run,
     admission,
+    timeout,
   } satisfies DriverActionDescriptor<typeof run>;
 }
 

@@ -44,18 +44,48 @@ export type ActionAdmission =
     }
   | {
       readonly policy: "join";
-      readonly admissionKey: (input: unknown) => unknown;
+      /**
+       * Absent for void-input actions: they join on a constant per-node/action
+       * key, so every concurrent invocation shares the one in-flight run.
+       */
+      readonly admissionKey?: ((input: unknown) => unknown) | undefined;
     };
+
+/**
+ * Per-action deadline policy. A positive finite number of milliseconds replaces
+ * the runtime `driverTimeouts.action` deadline for that action; the literal
+ * `"unbounded"` skips the deadline entirely while leaving runtime stop,
+ * eviction, and caller interruption in force. Omitted means inherit
+ * `driverTimeouts.action`.
+ */
+export type ActionTimeout = number | "unbounded";
+
+/**
+ * Compile-time refinement for `Driver.Action` timeout literals: the literal `0`
+ * is rejected at the type level, while `number`-typed variables stay accepted
+ * and fall through to runtime validation.
+ */
+export type ActionTimeoutInput<TTimeout extends ActionTimeout> = TTimeout &
+  (TTimeout extends 0 ? never : unknown);
 
 export type ActionOptions<TInput> =
   | {
       readonly admission?: "queue" | "reject" | undefined;
+      readonly timeout?: ActionTimeout | undefined;
     }
   | (TInput extends void
-      ? never
+      ? {
+          // Void-input actions have no input to derive a key from: join
+          // admission uses a constant per-node/action key and rejects an
+          // explicit admissionKey.
+          readonly admission: "join";
+          readonly admissionKey?: never;
+          readonly timeout?: ActionTimeout | undefined;
+        }
       : {
           readonly admission: "join";
           readonly admissionKey: (input: TInput) => unknown;
+          readonly timeout?: ActionTimeout | undefined;
         });
 
 export const FROND_DRIVER_ACTION_BRAND: unique symbol = Symbol.for("frond.driver.action") as never;
@@ -64,6 +94,8 @@ export interface DriverActionDescriptor<TRun> {
   readonly [FROND_DRIVER_ACTION_BRAND]: true;
   readonly run: TRun;
   readonly admission: ActionAdmission;
+  /** Absent means inherit the runtime `driverTimeouts.action` deadline. */
+  readonly timeout?: ActionTimeout | undefined;
 }
 
 export type ResultPatchNonPlainClone = "share" | ((value: unknown) => unknown);
@@ -185,7 +217,24 @@ export interface AsyncRuntimeSignalSubscriber {
 export type AsyncAcquireDriverContext<TArgs, TDeps extends object, TResult> = {
   readonly args: TArgs;
   readonly deps: TDeps;
+  /**
+   * Operation-scoped abort signal: aborts when THIS driver operation
+   * (acquire/refresh/action) is interrupted or times out. It is not the node's
+   * lifetime — do not retain it in long-lived callbacks; use `nodeSignal` for
+   * anything that outlives the operation.
+   */
   readonly signal: AbortSignal;
+  /**
+   * Node-lifetime abort signal: one per ready-node incarnation, created before
+   * acquire runs so subscriptions can bind it immediately. Aborts exactly once
+   * when the incarnation closes — release, eviction, ready invalidation, or
+   * runtime stop — or when the acquire settles without committing a ready
+   * node. Every hook of the same incarnation sees the same signal; a recreated
+   * node gets a fresh one. Use it for long-lived callbacks registered during
+   * acquire (subscriptions, external listeners); use `signal` to cancel the
+   * operation's own in-flight work.
+   */
+  readonly nodeSignal: AbortSignal;
   readonly disposers: DisposerBag;
   readonly signals: AsyncRuntimeSignalAccess;
   /**
@@ -276,6 +325,25 @@ export type EffectDriver<
 
 export type DriverMode = "async" | "effect";
 
+/**
+ * Recovers the authored driver mode from a spec-shaped carrier: a node class
+ * (`{ spec: { driver } }`) first, then a bare descriptor (`{ driver }`) — so a
+ * bare effect-mode descriptor dispatches Effect-native actions instead of
+ * silently degrading to the Promise projection. Anything unrecognizable
+ * degrades to "async" (the Promise representation) rather than throwing.
+ */
+export function recoverDriverMode(carrier: unknown): DriverMode {
+  const shaped = carrier as
+    | {
+        readonly spec?: { readonly driver?: { readonly mode?: DriverMode } };
+        readonly driver?: { readonly mode?: DriverMode };
+      }
+    | undefined;
+  const mode = shaped?.spec?.driver?.mode ?? shaped?.driver?.mode;
+
+  return mode === "effect" ? "effect" : "async";
+}
+
 export type DriverHook<TRun> =
   | {
       readonly _tag: "Available";
@@ -295,6 +363,8 @@ export type DriverActionLookup<TNode extends object, TArgs, TDeps extends object
       readonly _tag: "Found";
       readonly run: DriverActionRun<TNode, TArgs, TDeps, TResult>;
       readonly admission: ActionAdmission;
+      /** Absent means inherit the runtime `driverTimeouts.action` deadline. */
+      readonly timeout: ActionTimeout | undefined;
     }
   | {
       readonly _tag: "Missing";
@@ -311,9 +381,13 @@ export type Driver<
   TDeps extends object = object,
   TResult = unknown,
   TActions extends ActionContracts = ActionContracts,
+  TMode extends DriverMode = DriverMode,
 > = {
   readonly _tag: "NormalizedDriver";
-  readonly mode: DriverMode;
+  // Authored mode literal. `Driver.Async` fixes this to "async" and
+  // `Driver.Effect` to "effect", so the public action surface can present each
+  // action in the representation it was authored in.
+  readonly mode: TMode;
   readonly _actions?: TActions | undefined;
   readonly resultValidity?: ResultValidityPolicy | undefined;
   readonly resultPatch?: ResultPatchOptions | undefined;
@@ -355,10 +429,22 @@ export type NormalizedLiveStopContext<TNode extends object> = {
   readonly async: AsyncLiveStopContext<TNode>;
 };
 
+export interface NormalizedLiveStartOptions {
+  /**
+   * Out-of-band escape hatch for interrupt atomicity: called when the start
+   * operation was interrupted (or timed out) but the driver's underlying work
+   * still settled with a resource. Promise-based drivers cannot cancel
+   * in-flight work, so the normalized layer keeps the promise reference and
+   * reports a late resource here instead of dropping it.
+   */
+  readonly onAbandonedResource?: ((resource: unknown) => void) | undefined;
+}
+
 export interface NormalizedLiveResource<TNode extends object> {
   readonly start: (
     ctx: NormalizedLiveContext<TNode>,
-    demand: ActiveNodeLiveDemandSnapshot
+    demand: ActiveNodeLiveDemandSnapshot,
+    options?: NormalizedLiveStartOptions
   ) => Effect.Effect<unknown, unknown>;
   readonly update?: (
     ctx: NormalizedLiveContext<TNode>,
@@ -381,7 +467,24 @@ export type DriverContext<TNode extends object, TArgs, TDeps extends object, TRe
 export type DriverAcquireContext<TArgs, TDeps extends object, TResult> = {
   readonly args: TArgs;
   readonly deps: TDeps;
+  /**
+   * Operation-scoped abort signal: aborts when THIS driver operation
+   * (acquire/refresh/action) is interrupted or times out. It is not the node's
+   * lifetime — do not retain it in long-lived callbacks; use `nodeSignal` for
+   * anything that outlives the operation.
+   */
   readonly signal: AbortSignal;
+  /**
+   * Node-lifetime abort signal: one per ready-node incarnation, created before
+   * acquire runs so subscriptions can bind it immediately. Aborts exactly once
+   * when the incarnation closes — release, eviction, ready invalidation, or
+   * runtime stop — or when the acquire settles without committing a ready
+   * node. Every hook of the same incarnation sees the same signal; a recreated
+   * node gets a fresh one. Use it for long-lived callbacks registered during
+   * acquire (subscriptions, external listeners); use `signal` to cancel the
+   * operation's own in-flight work.
+   */
+  readonly nodeSignal: AbortSignal;
   readonly disposers: DisposerBag;
   readonly signals: RuntimeSignalAccess;
   /**
@@ -409,6 +512,16 @@ export type DisposeContext<TNode extends object> = {
   readonly disposers: DisposerBag;
 };
 
+/**
+ * A disposer may be synchronous or return a promise. Async disposers are
+ * awaited by the graph bounded by the node's `driverTimeouts.release` per
+ * disposer; a disposer that outlives the bound keeps running detached and is
+ * reported as a `DisposerFailed` with a `DisposerTimedOut` cause. The registry
+ * guarantees each disposer function runs at most once across every cleanup
+ * path, so authors do not need to memoize their own cleanup.
+ */
+export type Disposer = () => void | Promise<void>;
+
 export type DisposerBag = {
-  readonly add: (disposer: () => void) => void;
+  readonly add: (disposer: Disposer) => void;
 };

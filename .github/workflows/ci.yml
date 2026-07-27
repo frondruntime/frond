@@ -43,6 +43,11 @@ jobs:
       - name: Build
         run: bun run build
 
+      # The packed-tarball consumer smoke deliberately does NOT run here. It is
+      # a publish gate, and publishing is local-and-manual by design: step 5 of
+      # `bun run publish:npm` builds a clean consumer against the tarballs and
+      # refuses to publish if it fails, so no release reaches npm unsmoked.
+      # Run it on demand with `bun run verify:pack`.
       - name: Pack core dry run
         working-directory: packages/core
         run: bun pm pack --dry-run

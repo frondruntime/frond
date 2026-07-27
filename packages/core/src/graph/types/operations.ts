@@ -30,6 +30,16 @@ export interface NodeOperationFailure {
   readonly at: number;
 }
 
+/**
+ * One node's in-flight operation as reported by the narrow pending-operation
+ * scan (`readPendingOperationsSync`).
+ */
+export interface PendingNodeOperation {
+  readonly nodeId: NodeId;
+  readonly tag: string;
+  readonly operation: Extract<NodeOperation, { readonly _tag: "Running" }>;
+}
+
 export interface NodeRequest {
   readonly spec: unknown;
   readonly args: unknown;
@@ -115,11 +125,11 @@ export type UnsafeUpdateNodeResult =
       readonly error: UnsafeUpdateNodeFailed;
     };
 
-export type ActionResult =
+export type ActionResult<TValue = unknown> =
   | {
       readonly _tag: "Success";
       readonly nodeId: NodeId;
-      readonly value: unknown;
+      readonly value: TValue;
     }
   | {
       readonly _tag: "Failure";

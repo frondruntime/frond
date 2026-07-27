@@ -7,7 +7,7 @@ import { projectReactNodeRead } from "./nodeReadProjection";
 import { makeRevivableStoreSubscriptions } from "./storeSubscriptions";
 import type { ReactNodeRuntime, ReactNodeSpec, ReactNodeState } from "./types";
 
-interface ReactNodeStore<
+export interface ReactNodeStore<
   TArgs extends Frond.Key.KeyInput,
   TDeps extends object,
   TResult,
@@ -16,6 +16,7 @@ interface ReactNodeStore<
   readonly subscribe: (listener: () => void) => () => void;
   readonly getVersion: () => number;
   readonly read: () => ReactNodeState<TArgs, TDeps, TResult, TNode>;
+  readonly peek: () => Frond.Runtime.RuntimeNodeRead<TResult, TNode>;
   readonly updateArgs: (args: TArgs, fingerprint?: string | undefined) => Promise<void>;
   readonly dispose: () => void;
 }
@@ -44,7 +45,14 @@ export function makeReactNodeStore<
   let unsubscribe: (() => void) | undefined;
   let generation = 0;
   let argsFingerprint = getReactArgsFingerprint(request.args);
-  const handle = runtime.client.node<TArgs, TResult>(request.spec, request.args);
+  // The store drives read/boot/subscribe/updateArgs, not the typed action
+  // surface, so it uses the client through its loose entry.
+  const handle = (
+    runtime.client.node as unknown as (
+      spec: unknown,
+      args: unknown
+    ) => Frond.Runtime.RuntimeNodeHandle<TArgs, TResult, Record<string, never>, "async", TNode>
+  )(request.spec, request.args);
 
   const subscriptions = makeRevivableStoreSubscriptions({
     attach: () => {
@@ -241,7 +249,7 @@ export function makeReactNodeStore<
   };
 
   const readyGateSuspenseAttempt = (
-    handleRead: Frond.Runtime.RuntimeNodeRead<TResult>
+    handleRead: Frond.Runtime.RuntimeNodeRead<TResult, TNode>
   ): Promise<void> | undefined => {
     if (handleRead._tag !== "Ready") {
       return undefined;
@@ -281,10 +289,24 @@ export function makeReactNodeStore<
     );
   };
 
+  // Non-throwing counterpart to `read`. Unlike the Suspense/error-throwing
+  // `read`, this drives the same cold-start boot but hands the raw runtime read
+  // back so a caller can render Pending/Error states inline via `useNodeRead`.
+  const peek = (): Frond.Runtime.RuntimeNodeRead<TResult, TNode> => {
+    const handleRead = handle.read();
+
+    if (handleRead._tag === "Unwired" || handleRead._tag === "Idle") {
+      scheduleBoot();
+    }
+
+    return handleRead;
+  };
+
   return {
     subscribe: subscriptions.subscribe,
     getVersion: subscriptions.getVersion,
     read,
+    peek,
     updateArgs: async (nextArgs, precomputedFingerprint) => {
       if (isDisposed()) {
         return;

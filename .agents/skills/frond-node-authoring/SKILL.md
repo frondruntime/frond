@@ -13,6 +13,7 @@ Author the type carrier first, then the class, then the static descriptor:
 
 ```ts
 type OrdersSpec = Frond.NodeSpec<{
+  readonly mode: "async";
   readonly args: Frond.Args.None;
   readonly key: Frond.Key.Singleton;
   readonly deps: {
@@ -25,41 +26,39 @@ type OrdersSpec = Frond.NodeSpec<{
 }>;
 
 export class OrdersNode extends Frond.NodeBase<OrdersSpec> {
-  static readonly spec = Frond.resourceSpec<OrdersSpec>({
+  static readonly spec = Frond.resourceSpec.async<OrdersSpec>({
     tag: Frond.tag("docs/orders"),
     key: () => Frond.Key.singleton(),
     dependencies: Frond.dependencies(() => ({
       transport: Frond.dep(TradingBackendTransportNode, Frond.Args.none),
     })),
-    driver: Frond.Driver.Async<OrdersSpec>({
-      acquire: Frond.Driver.Acquire(async (ctx) => {
-        const orders = await ctx.deps.transport.client.orders.list();
-        return new OrdersResult(orders);
-      }),
-      actions: {
-        placeOrder: Frond.Driver.Action(async (ctx, input) => {
-          const order = await ctx.deps.transport.client.orders.place(input);
-          ctx.node.result.upsert(order);
-          return order;
-        }),
-      },
+    acquire: Frond.Driver.Acquire(async (ctx) => {
+      const orders = await ctx.deps.transport.client.orders.list();
+      return new OrdersResult(orders);
     }),
+    actions: {
+      placeOrder: Frond.Driver.Action(async (ctx, input) => {
+        const order = await ctx.deps.transport.client.orders.place(input);
+        ctx.node.result.upsert(order);
+        return order;
+      }),
+    },
   });
 }
 ```
 
 ## Authoring Rules
 
-- Use `type XSpec = Frond.NodeSpec<{ ... }>` as the single upfront carrier.
+- Use `type XSpec = Frond.NodeSpec<{ ... }>` as the single upfront carrier, and declare `readonly mode: "async"` or `readonly mode: "effect"` as its first member.
 - Extend `Frond.NodeBase<XSpec>` directly.
-- Put the descriptor on `static readonly spec = Frond.resourceSpec<XSpec>(...)`, `serviceSpec`, `nodeSpec`, or `facadeSpec`.
-- Keep `Frond.Driver.Async<XSpec>` or `Frond.Driver.Effect<XSpec>`. This repetition is intentional for v0 because it anchors contextual typing for `ctx` and `input`.
+- Put the descriptor on `static readonly spec = Frond.resourceSpec.async<XSpec>(...)` (or `.effect`), same for `serviceSpec`, `nodeSpec`, and `facadeSpec`. The factory flavor must match the shape-declared mode: `.async` requires `mode: "async"`, `.effect` requires `mode: "effect"`.
+- Reach for `Frond.Driver.Async<XSpec>` / `Frond.Driver.Effect<XSpec>` plus `.fromDriver` only for pre-built or shared drivers; they carry the same shape-mode constraint.
 - Use `Frond.Key.singleton()` and `Frond.Key.structure(...)`; do not return raw keys.
 - Use `Frond.Dep<typeof Node>` for dependency carrier fields, and `Frond.dep(Node, args)` inside `Frond.dependencies(...)`.
 - Use `Frond.Driver.Acquire`, `Refresh`, `Release`, `Live`, and `Action` wrappers for driver channels.
 - Prefer inline `deps` and `actions` fields inside the carrier unless a type is reused outside the node.
 - Prefer inline `actions` inside `driver.actions`; extract an action object only when reuse or readability clearly wins.
-- Prefer inferred action `input` and driver `ctx` inside `Driver.Async<XSpec>` / `Driver.Effect<XSpec>`. Add annotations only when TypeScript cannot infer.
+- Prefer inferred action `input` and driver `ctx` inside the `.async` / `.effect` factory input. Add annotations only when TypeScript cannot infer.
 - Treat an action return value as caller-facing `ActionContract` output only. It is never committed as `node.result`; result changes go exclusively through `ctx.setResult`, `ctx.patchResult`, or `ctx.setResultValidity`.
 - Keep node args canonical JSON-shaped `KeyInput`. Type carriers enforce this at compile time, and runtime rejects functions, `Date`s, class instances, and other non-canonical values. Args are not size-capped; only canonical graph keys carry the 2048-character identity cap.
 - `ctx.patchResult` accepts plain cloneable results by default. For non-plain result objects, opt into `resultPatch.nonPlainClone`; otherwise patching fails with a typed error.
@@ -79,10 +78,10 @@ export class OrdersNode extends Frond.NodeBase<OrdersSpec> {
 
 ## Migration Workflow
 
-1. Convert the carrier to `type XSpec = Frond.NodeSpec<{ args; key; deps; result; actions }>;`.
+1. Convert the carrier to `type XSpec = Frond.NodeSpec<{ mode; args; key; deps; result; actions }>;` with `mode` declared first.
 2. Convert the class to `class XNode extends Frond.NodeBase<XSpec>`.
 3. Move the old descriptor into `static readonly spec`.
-4. Use `Frond.Driver.Async<XSpec>` or `Frond.Driver.Effect<XSpec>`.
+4. Use the `.async` or `.effect` factory flavor that matches the shape-declared mode.
 5. Wrap hooks and actions with `Frond.Driver.*`.
 6. Replace dependency callbacks with `Frond.dependencies`.
 7. Remove pass-through domain action methods and update consumers to `node.actions.*`.

@@ -21,6 +21,7 @@ import {
   type NodeSpec,
   resourceSpec,
   serviceSpec,
+  unwrapEffect,
 } from "./graphTestFixtures";
 
 describe("graph actions", () => {
@@ -86,7 +87,7 @@ describe("graph actions", () => {
     // Declared action contracts still dispatch through the driver.
     expect("updateTimezone" in node.actions).toBe(true);
     expect("then" in facade).toBe(false);
-    await expect(node.actions.updateTimezone({ timezone: "CET" })).resolves.toEqual({
+    await expect(unwrapEffect(node.actions.updateTimezone({ timezone: "CET" }))).resolves.toEqual({
       timezone: "CET",
     });
     const snapshot = await Effect.runPromise(graph.snapshot());
@@ -126,6 +127,7 @@ describe("graph actions", () => {
 
   test("patching an empty result fails with structured graph context", async () => {
     type EmptyPatchSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -136,16 +138,14 @@ describe("graph actions", () => {
     }>;
 
     class EmptyPatchNode extends NodeBase<EmptyPatchSpec> {
-      static readonly spec = resourceSpec<EmptyPatchSpec>({
+      static readonly spec = resourceSpec.effect<EmptyPatchSpec>({
         tag: "resources/empty-patch",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<EmptyPatchSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed(undefined)),
-          actions: {
-            patch: Driver.Action((ctx) => ctx.patchResult(() => undefined)),
-          },
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed(undefined)),
+        actions: {
+          patch: Driver.Action((ctx) => ctx.patchResult(() => undefined)),
+        },
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -186,6 +186,7 @@ describe("graph actions", () => {
   test("action defects preserve Effect cause in action failure", async () => {
     const cause = new TypeError("action died");
     type DefectActionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -196,16 +197,14 @@ describe("graph actions", () => {
     }>;
 
     class DefectActionNode extends NodeBase<DefectActionSpec> {
-      static readonly spec = resourceSpec<DefectActionSpec>({
+      static readonly spec = resourceSpec.effect<DefectActionSpec>({
         tag: "resources/action-defect",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<DefectActionSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
-          actions: {
-            crash: Driver.Action(() => Effect.die(cause)),
-          },
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
+        actions: {
+          crash: Driver.Action(() => Effect.die(cause)),
+        },
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -234,6 +233,7 @@ describe("graph actions", () => {
     const cause = new TypeError("action disposer defect");
     let disposed = 0;
     type DisposingActionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -244,23 +244,21 @@ describe("graph actions", () => {
     }>;
 
     class DisposingActionNode extends NodeBase<DisposingActionSpec> {
-      static readonly spec = resourceSpec<DisposingActionSpec>({
+      static readonly spec = resourceSpec.effect<DisposingActionSpec>({
         tag: "resources/action-defect-disposer",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<DisposingActionSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
-          actions: {
-            crash: Driver.Action((ctx) =>
-              Effect.gen(function* () {
-                ctx.disposers.add(() => {
-                  disposed += 1;
-                });
-                return yield* Effect.die(cause);
-              })
-            ),
-          },
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
+        actions: {
+          crash: Driver.Action((ctx) =>
+            Effect.gen(function* () {
+              ctx.disposers.add(() => {
+                disposed += 1;
+              });
+              return yield* Effect.die(cause);
+            })
+          ),
+        },
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -333,6 +331,7 @@ describe("graph actions", () => {
     const started = await Effect.runPromise(Deferred.make<void>());
     const gate = await Effect.runPromise(Deferred.make<MutableProfile>());
     type SlowActionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -346,28 +345,26 @@ describe("graph actions", () => {
     }>;
 
     class SlowActionNode extends NodeBase<SlowActionSpec> {
-      static readonly spec = resourceSpec<SlowActionSpec>({
+      static readonly spec = resourceSpec.effect<SlowActionSpec>({
         tag: "resources/slow-action-profile",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SlowActionSpec>({
-          acquire: Driver.Acquire(() =>
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined);
+            return yield* Deferred.await(gate);
+          })
+        ),
+        actions: {
+          updateTimezone: Driver.Action((ctx, parsedInput) =>
             Effect.gen(function* () {
-              yield* Deferred.succeed(started, undefined);
-              return yield* Deferred.await(gate);
+              yield* ctx.patchResult((current) => {
+                current.timezone = parsedInput.timezone;
+              });
+              return parsedInput;
             })
           ),
-          actions: {
-            updateTimezone: Driver.Action((ctx, parsedInput) =>
-              Effect.gen(function* () {
-                yield* ctx.patchResult((current) => {
-                  current.timezone = parsedInput.timezone;
-                });
-                return parsedInput;
-              })
-            ),
-          },
-        }),
+        },
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -391,7 +388,10 @@ describe("graph actions", () => {
     const snapshot = await Effect.runPromise(graph.snapshot());
     const profile = snapshot.nodes.find((node) => node.tag === "resources/slow-action-profile");
 
-    expect(result).toMatchObject({ _tag: "Success", value: { timezone: "CET" } });
+    expect(result).toMatchObject({
+      _tag: "Success",
+      value: { timezone: "CET" },
+    });
     expect(profile?.result).toEqual({ name: "Ada", timezone: "CET" });
   });
 
@@ -402,6 +402,7 @@ describe("graph actions", () => {
     let overlapped = false;
     const order: Array<string> = [];
     type OrderedSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -412,33 +413,31 @@ describe("graph actions", () => {
     }>;
 
     class OrderedNode extends NodeBase<OrderedSpec> {
-      static readonly spec = resourceSpec<OrderedSpec>({
+      static readonly spec = resourceSpec.effect<OrderedSpec>({
         tag: "resources/ordered-actions",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<OrderedSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "initial" })),
-          actions: {
-            setValue: Driver.Action((ctx, input) =>
-              Effect.gen(function* () {
-                activeActions += 1;
-                overlapped = overlapped || activeActions > 1;
-                order.push(input.value);
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "initial" })),
+        actions: {
+          setValue: Driver.Action((ctx, input) =>
+            Effect.gen(function* () {
+              activeActions += 1;
+              overlapped = overlapped || activeActions > 1;
+              order.push(input.value);
 
-                if (input.value === "first") {
-                  yield* Deferred.succeed(firstStarted, undefined);
-                  yield* Deferred.await(firstGate);
-                }
+              if (input.value === "first") {
+                yield* Deferred.succeed(firstStarted, undefined);
+                yield* Deferred.await(firstGate);
+              }
 
-                yield* ctx.patchResult((current) => {
-                  current.value = input.value;
-                });
-                activeActions -= 1;
-                return { value: input.value };
-              })
-            ),
-          },
-        }),
+              yield* ctx.patchResult((current) => {
+                current.value = input.value;
+              });
+              activeActions -= 1;
+              return { value: input.value };
+            })
+          ),
+        },
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -468,6 +467,7 @@ describe("graph actions", () => {
     const actionStarted = await Effect.runPromise(Deferred.make<void>());
     const actionGate = await Effect.runPromise(Deferred.make<void>());
     type SlowActionOperationSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -478,22 +478,20 @@ describe("graph actions", () => {
     }>;
 
     class SlowActionNode extends NodeBase<SlowActionOperationSpec> {
-      static readonly spec = resourceSpec<SlowActionOperationSpec>({
+      static readonly spec = resourceSpec.effect<SlowActionOperationSpec>({
         tag: "resources/slow-action-operation",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SlowActionOperationSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-          actions: {
-            setValue: Driver.Action((ctx, input) =>
-              Effect.gen(function* () {
-                yield* Deferred.succeed(actionStarted, undefined);
-                yield* Deferred.await(actionGate);
-                yield* ctx.setResult(input);
-              })
-            ),
-          },
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        actions: {
+          setValue: Driver.Action((ctx, input) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(actionStarted, undefined);
+              yield* Deferred.await(actionGate);
+              yield* ctx.setResult(input);
+            })
+          ),
+        },
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -538,6 +536,7 @@ describe("graph actions", () => {
     const actionStarted = await Effect.runPromise(Deferred.make<void>());
     const actionGate = await Effect.runPromise(Deferred.make<void>());
     type StopActionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -548,22 +547,20 @@ describe("graph actions", () => {
     }>;
 
     class StopActionNode extends NodeBase<StopActionSpec> {
-      static readonly spec = resourceSpec<StopActionSpec>({
+      static readonly spec = resourceSpec.effect<StopActionSpec>({
         tag: "resources/stop-action-once",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<StopActionSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
-          actions: {
-            hang: Driver.Action(() =>
-              Effect.gen(function* () {
-                yield* Deferred.succeed(actionStarted, undefined);
-                yield* Deferred.await(actionGate);
-                return "done";
-              })
-            ),
-          },
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
+        actions: {
+          hang: Driver.Action(() =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(actionStarted, undefined);
+              yield* Deferred.await(actionGate);
+              return "done";
+            })
+          ),
+        },
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -600,6 +597,7 @@ describe("graph actions", () => {
     const actionGate = await Effect.runPromise(Deferred.make<void>());
     let actionRuns = 0;
     type JoinActionAdmissionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -610,30 +608,28 @@ describe("graph actions", () => {
     }>;
 
     class JoinActionAdmissionNode extends NodeBase<JoinActionAdmissionSpec> {
-      static readonly spec = resourceSpec<JoinActionAdmissionSpec>({
+      static readonly spec = resourceSpec.effect<JoinActionAdmissionSpec>({
         tag: "resources/interrupted-action-admission",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<JoinActionAdmissionSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
-          actions: {
-            join: Driver.Action(
-              (_ctx, input) =>
-                Effect.gen(function* () {
-                  actionRuns += 1;
-                  if (actionRuns === 1) {
-                    yield* Deferred.succeed(actionStarted, undefined);
-                    yield* Deferred.await(actionGate);
-                  }
-                  return `${input.id}:${actionRuns}`;
-                }),
-              {
-                admission: "join",
-                admissionKey: (input) => input.id,
-              }
-            ),
-          },
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
+        actions: {
+          join: Driver.Action(
+            (_ctx, input) =>
+              Effect.gen(function* () {
+                actionRuns += 1;
+                if (actionRuns === 1) {
+                  yield* Deferred.succeed(actionStarted, undefined);
+                  yield* Deferred.await(actionGate);
+                }
+                return `${input.id}:${actionRuns}`;
+              }),
+            {
+              admission: "join",
+              admissionKey: (input) => input.id,
+            }
+          ),
+        },
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -648,7 +644,10 @@ describe("graph actions", () => {
 
     await Effect.runPromise(
       Effect.gen(function* () {
-        yield* graph.ensureReadyNode({ spec: JoinActionAdmissionNode, args: {} });
+        yield* graph.ensureReadyNode({
+          spec: JoinActionAdmissionNode,
+          args: {},
+        });
         const first = yield* graph.runAction(request).pipe(Effect.forkDetach);
 
         yield* Deferred.await(actionStarted);
@@ -667,6 +666,7 @@ describe("graph actions", () => {
     const secondStarted = await Effect.runPromise(Deferred.make<void>());
     const gate = await Effect.runPromise(Deferred.make<void>());
     type ParallelSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly id: string };
       readonly key: Key.Structure<{ readonly id: string }>;
       readonly deps: Record<string, never>;
@@ -677,25 +677,23 @@ describe("graph actions", () => {
     }>;
 
     class ParallelNode extends NodeBase<ParallelSpec> {
-      static readonly spec = resourceSpec<ParallelSpec>({
+      static readonly spec = resourceSpec.effect<ParallelSpec>({
         tag: "resources/parallel-actions",
         key: (args) => Key.structure({ id: args.id }),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ParallelSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ id: "ready" })),
-          actions: {
-            wait: Driver.Action((_ctx, input) =>
-              Effect.gen(function* () {
-                yield* Deferred.succeed(
-                  input.id === "first" ? firstStarted : secondStarted,
-                  undefined
-                );
-                yield* Deferred.await(gate);
-                return input.id;
-              })
-            ),
-          },
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ id: "ready" })),
+        actions: {
+          wait: Driver.Action((_ctx, input) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(
+                input.id === "first" ? firstStarted : secondStarted,
+                undefined
+              );
+              yield* Deferred.await(gate);
+              return input.id;
+            })
+          ),
+        },
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -733,6 +731,7 @@ describe("graph actions", () => {
   test("action after release re-acquires before running", async () => {
     let acquireCount = 0;
     type ReacquireSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -743,27 +742,25 @@ describe("graph actions", () => {
     }>;
 
     class ReacquireNode extends NodeBase<ReacquireSpec> {
-      static readonly spec = resourceSpec<ReacquireSpec>({
+      static readonly spec = resourceSpec.effect<ReacquireSpec>({
         tag: "resources/reacquire-action",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ReacquireSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.sync(() => {
-              acquireCount += 1;
-              return { count: 0 };
+        acquire: Driver.Acquire(() =>
+          Effect.sync(() => {
+            acquireCount += 1;
+            return { count: 0 };
+          })
+        ),
+        actions: {
+          increment: Driver.Action((ctx) =>
+            Effect.gen(function* () {
+              yield* ctx.patchResult((current) => {
+                current.count += 1;
+              });
             })
           ),
-          actions: {
-            increment: Driver.Action((ctx) =>
-              Effect.gen(function* () {
-                yield* ctx.patchResult((current) => {
-                  current.count += 1;
-                });
-              })
-            ),
-          },
-        }),
+        },
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -789,6 +786,7 @@ describe("graph actions", () => {
 
   test("action dependency value collection aggregates multiple dependency failures", async () => {
     type LeftSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -796,17 +794,16 @@ describe("graph actions", () => {
     }>;
 
     class LeftNode extends NodeBase<LeftSpec> {
-      static readonly spec = serviceSpec<LeftSpec>({
+      static readonly spec = serviceSpec.effect<LeftSpec>({
         tag: "services/action-aggregate-left",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<LeftSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("left")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("left")),
       });
     }
 
     type RightSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -814,17 +811,16 @@ describe("graph actions", () => {
     }>;
 
     class RightNode extends NodeBase<RightSpec> {
-      static readonly spec = serviceSpec<RightSpec>({
+      static readonly spec = serviceSpec.effect<RightSpec>({
         tag: "services/action-aggregate-right",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<RightSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("right")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("right")),
       });
     }
 
     type ParentSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -838,19 +834,17 @@ describe("graph actions", () => {
     }>;
 
     class ParentNode extends NodeBase<ParentSpec> {
-      static readonly spec = resourceSpec<ParentSpec>({
+      static readonly spec = resourceSpec.effect<ParentSpec>({
         tag: "resources/action-aggregate-parent",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({
           left: dep(LeftNode, {}),
           right: dep(RightNode, {}),
         })),
-        driver: Driver.Effect<ParentSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
-          actions: {
-            noop: Driver.Action(() => Effect.succeed("noop")),
-          },
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
+        actions: {
+          noop: Driver.Action(() => Effect.succeed("noop")),
+        },
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -891,6 +885,7 @@ describe("graph actions", () => {
 
   test("action timeout returns failure without changing readiness", async () => {
     type TimeoutActionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -901,16 +896,14 @@ describe("graph actions", () => {
     }>;
 
     class TimeoutActionNode extends NodeBase<TimeoutActionSpec> {
-      static readonly spec = resourceSpec<TimeoutActionSpec>({
+      static readonly spec = resourceSpec.effect<TimeoutActionSpec>({
         tag: "resources/action-timeout",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<TimeoutActionSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-          actions: {
-            hang: Driver.Action(() => Effect.never),
-          },
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        actions: {
+          hang: Driver.Action(() => Effect.never),
+        },
       });
     }
     const graph = makeInMemoryGraphSystem({
@@ -946,5 +939,171 @@ describe("graph actions", () => {
       kind: "action",
       error: { _tag: "ActionFailed", action: "hang" },
     });
+  });
+
+  test("per-action timeout shorter than the runtime default wins", async () => {
+    type OverrideSpec = NodeSpec<{
+      readonly mode: "effect";
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: { readonly value: string };
+      readonly actions: {
+        readonly hang: ActionContract<void, never>;
+      };
+    }>;
+
+    class OverrideNode extends NodeBase<OverrideSpec> {
+      static readonly spec = resourceSpec.effect<OverrideSpec>({
+        tag: "resources/action-timeout-override-short",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        actions: {
+          hang: Driver.Action(() => Effect.never, { timeout: 20 }),
+        },
+      });
+    }
+
+    // The normalized registry must carry the per-action policy through
+    // driver normalization to the executor lookup.
+    expect(OverrideNode.spec.driver.actions.read("hang")).toMatchObject({
+      _tag: "Found",
+      timeout: 20,
+    });
+
+    // Runtime default stays at 15_000ms; the 20ms per-action deadline must win.
+    const graph = makeInMemoryGraphSystem();
+
+    await Effect.runPromise(graph.ensureReadyNode({ spec: OverrideNode, args: {} }));
+    const result = await Effect.runPromise(
+      graph
+        .runAction({
+          target: {
+            _tag: "NodeRequest",
+            request: { spec: OverrideNode, args: {} },
+          },
+          action: "hang",
+          input: undefined,
+        })
+        .pipe(Effect.timeout("500 millis"))
+    );
+    const error = result._tag === "Failure" ? result.error : undefined;
+
+    expect(result._tag).toBe("Failure");
+    expect(error).toBeInstanceOf(ActionFailed);
+    expect(error?.cause).toBeInstanceOf(DriverOperationTimedOut);
+    expect(error?.cause).toMatchObject({
+      cancellation: { _tag: "TimedOut", detail: "20ms" },
+    });
+  });
+
+  test("per-action timeout longer than the runtime default lets a slow action finish", async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let markStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+
+    type SlowSpec = NodeSpec<{
+      readonly mode: "effect";
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: { readonly value: string };
+      readonly actions: {
+        readonly slow: ActionContract<void, string>;
+      };
+    }>;
+
+    class SlowNode extends NodeBase<SlowSpec> {
+      static readonly spec = resourceSpec.effect<SlowSpec>({
+        tag: "resources/action-timeout-override-long",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        actions: {
+          slow: Driver.Action(
+            () =>
+              Effect.gen(function* () {
+                yield* Effect.sync(() => markStarted());
+                yield* Effect.promise(() => gate);
+                return "done";
+              }),
+            { timeout: 5_000 }
+          ),
+        },
+      });
+    }
+
+    const graph = makeInMemoryGraphSystem({
+      driverTimeouts: { action: 20 },
+    });
+
+    await Effect.runPromise(graph.ensureReadyNode({ spec: SlowNode, args: {} }));
+    const fiber = Effect.runFork(
+      graph.runAction({
+        target: {
+          _tag: "NodeRequest",
+          request: { spec: SlowNode, args: {} },
+        },
+        action: "slow",
+        input: undefined,
+      })
+    );
+
+    await started;
+    // Let several multiples of the 20ms runtime deadline elapse before opening
+    // the gate: if the per-action override did not apply, the action would
+    // already have timed out and the joined result would be a timeout failure.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    release();
+    const result = await Effect.runPromise(Fiber.join(fiber));
+
+    expect(result).toMatchObject({ _tag: "Success", value: "done" });
+  });
+
+  test("Driver.Action rejects invalid timeout values at construction", () => {
+    const invalidTimeouts: ReadonlyArray<unknown> = [
+      0,
+      -1,
+      -0.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      null,
+      "inherit",
+      "5000",
+      "",
+      true,
+      {},
+      [],
+      () => 0,
+    ];
+
+    for (const timeout of invalidTimeouts) {
+      expect(() =>
+        Driver.Action(() => Effect.succeed("noop"), {
+          timeout: timeout as never,
+        })
+      ).toThrow(TypeError);
+      expect(() =>
+        Driver.Action(() => Effect.succeed("noop"), {
+          timeout: timeout as never,
+        })
+      ).toThrow(
+        'Frond.Driver.Action timeout must be a positive finite number of milliseconds or "unbounded".'
+      );
+    }
+
+    // Valid policies construct and land on the descriptor.
+    expect(Driver.Action(() => Effect.succeed("noop"), { timeout: 5_000 }).timeout).toBe(5_000);
+    expect(Driver.Action(() => Effect.succeed("noop"), { timeout: "unbounded" }).timeout).toBe(
+      "unbounded"
+    );
+    expect(Driver.Action(() => Effect.succeed("noop")).timeout).toBeUndefined();
   });
 });

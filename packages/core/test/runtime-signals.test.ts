@@ -260,6 +260,7 @@ describe("runtime signals", () => {
   test("driver can read retained signals explicitly", async () => {
     const delivered: Array<string> = [];
     type SignalReaderSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -267,19 +268,17 @@ describe("runtime signals", () => {
     }>;
 
     class SignalNode extends NodeBase<SignalReaderSpec> {
-      static readonly spec = serviceSpec<SignalReaderSpec>({
+      static readonly spec = serviceSpec.effect<SignalReaderSpec>({
         tag: "services/runtime-signal-reader-node",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SignalReaderSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.gen(function* () {
-              const retained = yield* ctx.signals.readRetained({ channel: analyticsChannel });
-              delivered.push(...retained.map((record) => record.signal.name));
-              return "ready";
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.gen(function* () {
+            const retained = yield* ctx.signals.readRetained({ channel: analyticsChannel });
+            delivered.push(...retained.map((record) => record.signal.name));
+            return "ready";
+          })
+        ),
       });
     }
     const runtime = createRuntime();
@@ -294,6 +293,7 @@ describe("runtime signals", () => {
   test("Effect runtime construction wires graph driver signal access", async () => {
     const delivered: Array<string> = [];
     type EffectRuntimeSignalSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -301,19 +301,17 @@ describe("runtime signals", () => {
     }>;
 
     class SignalNode extends NodeBase<EffectRuntimeSignalSpec> {
-      static readonly spec = serviceSpec<EffectRuntimeSignalSpec>({
+      static readonly spec = serviceSpec.effect<EffectRuntimeSignalSpec>({
         tag: "services/effect-runtime-signal-reader",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<EffectRuntimeSignalSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.gen(function* () {
-              const retained = yield* ctx.signals.readRetained({ channel: analyticsChannel });
-              delivered.push(...retained.map((record) => record.signal.name));
-              return "ready";
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.gen(function* () {
+            const retained = yield* ctx.signals.readRetained({ channel: analyticsChannel });
+            delivered.push(...retained.map((record) => record.signal.name));
+            return "ready";
+          })
+        ),
       });
     }
     const runtime = await Effect.runPromise(FrondRuntimeEffect());
@@ -390,6 +388,7 @@ describe("runtime signals", () => {
   test("driver can publish and subscribe through scoped signal access", async () => {
     const delivered: Array<string> = [];
     type ScopedSignalSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -397,29 +396,27 @@ describe("runtime signals", () => {
     }>;
 
     class SignalNode extends NodeBase<ScopedSignalSpec> {
-      static readonly spec = serviceSpec<ScopedSignalSpec>({
+      static readonly spec = serviceSpec.effect<ScopedSignalSpec>({
         tag: "services/runtime-signal-node",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ScopedSignalSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.gen(function* () {
-              const subscription = yield* ctx.signals.subscribe({
-                name: "signal-node",
-                channels: [analyticsChannel],
-                handle: (record) =>
-                  Effect.sync(() => {
-                    delivered.push(record.signal.name);
-                  }),
-              });
-              ctx.disposers.add(subscription.unsubscribe);
-              yield* ctx.signals.publish(
-                Signals.signal({ channel: analyticsChannel, name: "acquired" })
-              );
-              return "ready";
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.gen(function* () {
+            const subscription = yield* ctx.signals.subscribe({
+              name: "signal-node",
+              channels: [analyticsChannel],
+              handle: (record) =>
+                Effect.sync(() => {
+                  delivered.push(record.signal.name);
+                }),
+            });
+            ctx.disposers.add(subscription.unsubscribe);
+            yield* ctx.signals.publish(
+              Signals.signal({ channel: analyticsChannel, name: "acquired" })
+            );
+            return "ready";
+          })
+        ),
       });
     }
     const runtime = createRuntime();
@@ -436,6 +433,7 @@ describe("runtime signals", () => {
   test("async driver signal subscription uses Promise-facing handlers", async () => {
     const delivered: Array<string> = [];
     type AsyncSignalSpec = NodeSpec<{
+      readonly mode: "async";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -443,22 +441,20 @@ describe("runtime signals", () => {
     }>;
 
     class SignalNode extends NodeBase<AsyncSignalSpec> {
-      static readonly spec = serviceSpec<AsyncSignalSpec>({
+      static readonly spec = serviceSpec.async<AsyncSignalSpec>({
         tag: "services/async-runtime-signal-node",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Async<AsyncSignalSpec>({
-          acquire: Driver.Acquire(async (ctx) => {
-            const subscription = await ctx.signals.subscribe({
-              name: "async-signal-node",
-              channels: [analyticsChannel],
-              handle: async (record) => {
-                delivered.push(record.signal.name);
-              },
-            });
-            ctx.disposers.add(subscription.unsubscribe);
-            return "ready";
-          }),
+        acquire: Driver.Acquire(async (ctx) => {
+          const subscription = await ctx.signals.subscribe({
+            name: "async-signal-node",
+            channels: [analyticsChannel],
+            handle: async (record) => {
+              delivered.push(record.signal.name);
+            },
+          });
+          ctx.disposers.add(subscription.unsubscribe);
+          return "ready";
         }),
       });
     }

@@ -39,7 +39,7 @@ export function runReadyDriverOperation<TValue, TResult extends BackgroundOperat
   readonly readyData: ReadyData;
   readonly operation: string;
   readonly boundary: EffectBoundary;
-  readonly timeout: DriverOperationTimeoutMs;
+  readonly timeout: DriverOperationTimeoutMs | "unbounded";
   readonly disposerReason: OperationDisposerSettleReason;
   readonly spanName: string;
   readonly spanAttributes: Record<string, unknown>;
@@ -71,9 +71,14 @@ export function runReadyDriverOperation<TValue, TResult extends BackgroundOperat
     }
 
     const abortController = new AbortController();
+    // Same incarnation as the acquire that committed this ready data: the
+    // operation bag shares the incarnation's registry so its drains dedupe
+    // against disposers already run for this ready generation.
     const operationDisposers = makeOperationDisposers(
       input.cell,
-      input.env.state.notifyCleanupFailures
+      input.env.state.notifyCleanupFailures,
+      input.env.driverTimeouts.release,
+      input.readyData.disposers
     );
     const clock = yield* Clock.Clock;
     let currentResultState: ResultState = {
@@ -89,6 +94,9 @@ export function runReadyDriverOperation<TValue, TResult extends BackgroundOperat
       args: phaseArgs(input.phase),
       deps: depsResult.deps,
       abortController,
+      // Same incarnation, same node-lifetime signal as the acquire that
+      // committed this ready data; only the operation signal is fresh.
+      nodeSignal: input.readyData.nodeLifetime.signal,
       disposers: operationDisposers,
       signals: input.env.signals,
       refreshDep: (dependencyName) => refreshDependencyValue(input.env, input.cell, dependencyName),

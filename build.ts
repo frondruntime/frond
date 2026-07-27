@@ -10,7 +10,7 @@ import {
 } from "@microsoft/api-extractor";
 import { Effect } from "effect";
 
-type PackageKey = "core" | "react";
+type PackageKey = "core" | "react" | "rootstock";
 
 interface ApiEntry {
   readonly label: string;
@@ -69,9 +69,20 @@ const packages = {
     keepNames: true,
     apiEntries: standardApiEntries,
   },
+  rootstock: {
+    key: "rootstock",
+    packageName: "@frondruntime/rootstock",
+    packageDir: resolve(repoDir, "packages/rootstock"),
+    entrypoints: ["./src/index.ts", "./src/testing/index.ts"],
+    apiEntries: standardApiEntries,
+  },
 } satisfies Record<PackageKey, PackageBuildInput>;
 
-const packageOrder: readonly PackageBuildInput[] = [packages.core, packages.react];
+const packageOrder: readonly PackageBuildInput[] = [
+  packages.core,
+  packages.react,
+  packages.rootstock,
+];
 
 function log(input: PackageBuildInput, message: string): Effect.Effect<void> {
   return Effect.sync(() => {
@@ -294,7 +305,7 @@ function parsePackageArgs(args: readonly string[]): readonly PackageBuildInput[]
   const invalid = args.filter((arg) => !(arg in packages));
   if (invalid.length > 0) {
     console.error(`Unknown package input: ${invalid.join(", ")}`);
-    console.error("Usage: bun build.ts [core] [react]");
+    console.error("Usage: bun build.ts [core] [react] [rootstock]");
     process.exit(1);
   }
 

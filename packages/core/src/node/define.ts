@@ -1,10 +1,28 @@
+import {
+  Async,
+  type AsyncActionImplementations,
+  type AsyncInput,
+  Effect,
+  type EffectActionImplementations,
+  type EffectInput,
+} from "../driver/authoring";
+import type { Driver, DriverMode } from "../driver/types";
+import type { NodeBase } from "./runtime";
 import type {
+  AnyModeSpec,
+  AsyncModeSpec,
   DependenciesRecord,
   DependencyResolver,
+  EffectModeSpec,
   NodeDescriptor,
   NodeKind,
-  NodeSpec,
-  NodeSpecInput,
+  NodeSpecActions,
+  NodeSpecArgs,
+  NodeSpecDeclaredDeps,
+  NodeSpecKey,
+  NodeSpecMode,
+  NodeSpecResolvedDeps,
+  NodeSpecResult,
   NodeTag,
 } from "./types";
 import { FROND_DEPENDENCIES_BRAND, FROND_NODE_SPEC_BRAND, FrondNodeSpecError } from "./types";
@@ -25,10 +43,17 @@ export function tag(value: string): NodeTag {
  * Use this for node-to-node dependencies. Do not call runtime clients, start
  * work, or read mutable app state here; planning may evaluate this before
  * readiness begins.
+ *
+ * Idempotent: an already-branded resolver — including one read back from
+ * `descriptor.dependencies` — passes through unchanged.
  */
 export function dependencies<TArgs, TDeps extends DependenciesRecord>(
   resolver: (args: TArgs) => TDeps
 ): DependencyResolver<TArgs, TDeps> {
+  if (isBrandedDependencyResolver(resolver)) {
+    return resolver;
+  }
+
   return Object.defineProperty(resolver, FROND_DEPENDENCIES_BRAND, {
     configurable: false,
     enumerable: false,
@@ -37,64 +62,187 @@ export function dependencies<TArgs, TDeps extends DependenciesRecord>(
   }) as unknown as DependencyResolver<TArgs, TDeps>;
 }
 
-/**
- * Defines a general node spec.
- *
- * Prefer `serviceSpec`, `resourceSpec`, or `facadeSpec` when the node has a
- * more specific role; the kind is diagnostic metadata, not a runtime policy.
- */
-export function nodeSpec<TSpec extends NodeSpec<{ readonly result?: unknown }>>(
-  spec: NodeSpecInput<TSpec>
-): NodeDescriptor<TSpec> {
-  return nodeSpecWithKind("node", spec);
+function isBrandedDependencyResolver<TArgs, TDeps extends DependenciesRecord>(
+  resolver: (args: TArgs) => TDeps
+): resolver is DependencyResolver<TArgs, TDeps> {
+  return (
+    (resolver as { readonly [FROND_DEPENDENCIES_BRAND]?: unknown })[FROND_DEPENDENCIES_BRAND] ===
+    true
+  );
 }
+
+/**
+ * Node metadata shared by both driver modes.
+ *
+ * The driver hooks (`acquire`, `actions`, …) live alongside this metadata in the
+ * flattened spec input; the mode is chosen by the `.async` / `.effect` factory.
+ */
+type NodeSpecMeta<TSpec extends AnyModeSpec> = {
+  readonly tag: NodeTag;
+  readonly key: (args: NodeSpecArgs<TSpec>) => NodeSpecKey<TSpec>;
+  readonly dependencies?:
+    | DependencyResolver<NodeSpecArgs<TSpec>, NodeSpecDeclaredDeps<TSpec>>
+    | undefined;
+};
+
+/**
+ * Flattened input for an async-mode node: metadata plus Promise-facing driver
+ * hooks. Passed to `nodeSpec.async` / `serviceSpec.async` / etc.
+ */
+export type AsyncNodeSpecInput<
+  TSpec extends AsyncModeSpec,
+  TActions extends AsyncActionImplementations<TSpec> = AsyncActionImplementations<TSpec>,
+> = NodeSpecMeta<TSpec> & AsyncInput<TSpec, TActions>;
+
+/**
+ * Flattened input for an effect-mode node: metadata plus Effect-native driver
+ * hooks. Passed to `nodeSpec.effect` / `serviceSpec.effect` / etc.
+ */
+export type EffectNodeSpecInput<
+  TSpec extends EffectModeSpec,
+  TActions extends EffectActionImplementations<TSpec> = EffectActionImplementations<TSpec>,
+> = NodeSpecMeta<TSpec> & EffectInput<TSpec, TActions>;
+
+/**
+ * Rejects a spec shape whose recovered mode is still the full `DriverMode`
+ * union. `fromDriver` is an escape hatch for pre-built drivers, not an escape
+ * from the one-declaration mode contract: a shape must narrow its `mode` to
+ * `"async"` or `"effect"` before it can be wired to a driver.
+ */
+type RequireDeclaredMode<TSpec> = [DriverMode] extends [NodeSpecMode<TSpec>]
+  ? {
+      readonly 'fromDriver requires a spec shape declaring a single mode: "async" or "effect"': never;
+    }
+  : unknown;
+
+/**
+ * Input accepted by `fromDriver`: node metadata, the declared-mode guard, and
+ * the pre-built driver whose mode literal must agree with the shape.
+ */
+type FromDriverInput<TSpec extends AnyModeSpec, TMode extends DriverMode> = NodeSpecMeta<TSpec> &
+  RequireDeclaredMode<TSpec> & {
+    readonly driver: Driver<
+      NodeBase<TSpec>,
+      NodeSpecArgs<TSpec>,
+      NodeSpecResolvedDeps<TSpec>,
+      NodeSpecResult<TSpec>,
+      NodeSpecActions<TSpec>,
+      TMode
+    >;
+  };
+
+/**
+ * A mode-flavored node spec factory.
+ *
+ * `.async` builds a Promise-facing node whose actions are Promise-native; `.effect`
+ * builds an Effect-native node whose actions are Effect-native. The mode is
+ * declared once, in the spec shape (`NodeSpec<{ mode: "effect"; ... }>`); each
+ * flavor rejects a shape whose mode disagrees, and the descriptor type fixes
+ * the mode so the public action surface follows it.
+ */
+export interface NodeSpecFactory {
+  readonly async: <
+    TSpec extends AsyncModeSpec,
+    TActions extends AsyncActionImplementations<TSpec> = AsyncActionImplementations<TSpec>,
+  >(
+    input: AsyncNodeSpecInput<TSpec, TActions>
+  ) => NodeDescriptor<TSpec, "async">;
+  readonly effect: <
+    TSpec extends EffectModeSpec,
+    TActions extends EffectActionImplementations<TSpec> = EffectActionImplementations<TSpec>,
+  >(
+    input: EffectNodeSpecInput<TSpec, TActions>
+  ) => NodeDescriptor<TSpec, "effect">;
+  // Escape hatch for a pre-built driver (deferred/mock test drivers, or a driver
+  // shared across nodes). Prefer `.async` / `.effect` for authored nodes. The
+  // driver's mode literal must agree with the shape-declared mode, and the
+  // shape must declare a single mode — union-mode shapes are rejected.
+  readonly fromDriver: <
+    TSpec extends AnyModeSpec,
+    TMode extends NodeSpecMode<TSpec> = NodeSpecMode<TSpec>,
+  >(
+    input: FromDriverInput<TSpec, TMode>
+  ) => NodeDescriptor<TSpec, TMode>;
+}
+
+function makeNodeSpecFactory(kind: NodeKind): NodeSpecFactory {
+  return {
+    async: <
+      TSpec extends AsyncModeSpec,
+      TActions extends AsyncActionImplementations<TSpec> = AsyncActionImplementations<TSpec>,
+    >(
+      input: AsyncNodeSpecInput<TSpec, TActions>
+    ): NodeDescriptor<TSpec, "async"> =>
+      buildDescriptor<TSpec, "async">(kind, input, Async<TSpec, TActions>(input)),
+    effect: <
+      TSpec extends EffectModeSpec,
+      TActions extends EffectActionImplementations<TSpec> = EffectActionImplementations<TSpec>,
+    >(
+      input: EffectNodeSpecInput<TSpec, TActions>
+    ): NodeDescriptor<TSpec, "effect"> =>
+      buildDescriptor<TSpec, "effect">(kind, input, Effect<TSpec, TActions>(input)),
+    fromDriver: <
+      TSpec extends AnyModeSpec,
+      TMode extends NodeSpecMode<TSpec> = NodeSpecMode<TSpec>,
+    >(
+      input: FromDriverInput<TSpec, TMode>
+    ): NodeDescriptor<TSpec, TMode> => buildDescriptor<TSpec, TMode>(kind, input, input.driver),
+  };
+}
+
+/**
+ * Defines a general node.
+ *
+ * Prefer `serviceSpec`, `resourceSpec`, or `facadeSpec` when the node has a more
+ * specific role; the kind is diagnostic metadata, not a runtime policy. Use the
+ * factory flavor (`.async` / `.effect`) that matches the shape-declared mode.
+ */
+export const nodeSpec: NodeSpecFactory = makeNodeSpecFactory("node");
 
 /**
  * Defines a singleton or keyed service node.
  *
- * Services usually wrap clients, transports, or durable app capabilities. They
- * still participate in graph identity, readiness, release, and eviction.
+ * Services usually wrap clients, transports, or durable app capabilities. Use the
+ * factory flavor (`.async` / `.effect`) that matches the shape-declared mode.
  */
-export function serviceSpec<TSpec extends NodeSpec<{ readonly result?: unknown }>>(
-  spec: NodeSpecInput<TSpec>
-): NodeDescriptor<TSpec> {
-  return nodeSpecWithKind("service", spec);
-}
+export const serviceSpec: NodeSpecFactory = makeNodeSpecFactory("service");
 
 /**
  * Defines a resource node whose ready result owns cleanup.
  *
  * Use resources for subscriptions, caches, handles, or state that must be
- * released through Frond lifecycle operations instead of React unmounts.
+ * released through Frond lifecycle operations instead of React unmounts. Use the
+ * factory flavor (`.async` / `.effect`) that matches the shape-declared mode.
  */
-export function resourceSpec<TSpec extends NodeSpec<{ readonly result?: unknown }>>(
-  spec: NodeSpecInput<TSpec>
-): NodeDescriptor<TSpec> {
-  return nodeSpecWithKind("resource", spec);
-}
+export const resourceSpec: NodeSpecFactory = makeNodeSpecFactory("resource");
 
 /**
  * Defines a facade node that presents a domain-facing API over dependencies.
  *
  * Facades keep product code narrow. They do not bypass graph dependency
- * readiness or operation serialization.
+ * readiness or operation serialization. Use the factory flavor (`.async` /
+ * `.effect`) that matches the shape-declared mode.
  */
-export function facadeSpec<TSpec extends NodeSpec<{ readonly result?: unknown }>>(
-  spec: NodeSpecInput<TSpec>
-): NodeDescriptor<TSpec> {
-  return nodeSpecWithKind("facade", spec);
-}
+export const facadeSpec: NodeSpecFactory = makeNodeSpecFactory("facade");
 
-function nodeSpecWithKind<TSpec extends NodeSpec<{ readonly result?: unknown }>>(
+function buildDescriptor<TSpec extends AnyModeSpec, TMode extends DriverMode>(
   kind: NodeKind,
-  spec: NodeSpecInput<TSpec>
-): NodeDescriptor<TSpec> {
-  const descriptor: NodeDescriptor<TSpec> = {
+  meta: NodeSpecMeta<TSpec>,
+  driver: Driver<
+    NodeBase<TSpec>,
+    NodeSpecArgs<TSpec>,
+    NodeSpecResolvedDeps<TSpec>,
+    NodeSpecResult<TSpec>,
+    NodeSpecActions<TSpec>,
+    TMode
+  >
+): NodeDescriptor<TSpec, TMode> {
+  const descriptor: NodeDescriptor<TSpec, TMode> = {
     kind,
-    tag: validateNodeTag(spec.tag),
-    key: spec.key,
-    dependencies: dependencyResolver(spec.dependencies),
-    driver: spec.driver,
+    tag: validateNodeTag(meta.tag),
+    key: meta.key,
+    dependencies: dependencyResolver<TSpec>(meta.dependencies),
+    driver,
   };
 
   Object.defineProperties(descriptor, {
@@ -121,11 +269,15 @@ export function validateNodeTag(value: unknown): NodeTag {
   return value as NodeTag;
 }
 
-function dependencyResolver<TSpec extends NodeSpec<{ readonly result?: unknown }>>(
-  resolver: NodeSpecInput<TSpec>["dependencies"] | undefined
+const emptyDependencies: DependencyResolver<unknown, Record<string, never>> = dependencies(
+  () => ({})
+);
+
+function dependencyResolver<TSpec extends AnyModeSpec>(
+  resolver: NodeSpecMeta<TSpec>["dependencies"] | undefined
 ): NodeDescriptor<TSpec>["dependencies"] {
   if (resolver === undefined) {
-    return () => ({}) as ReturnType<NodeDescriptor<TSpec>["dependencies"]>;
+    return emptyDependencies as unknown as NodeDescriptor<TSpec>["dependencies"];
   }
 
   if (resolver[FROND_DEPENDENCIES_BRAND] !== true) {

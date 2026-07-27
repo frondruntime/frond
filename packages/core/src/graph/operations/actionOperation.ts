@@ -98,7 +98,10 @@ function runActionDriver(
       readyData,
       operation: `action:${request.action}`,
       boundary: "driver-action",
-      timeout: env.driverTimeouts.action,
+      // Per-action policy wins over the runtime default: a positive override
+      // replaces the deadline, "unbounded" skips only the deadline (stop,
+      // eviction, and caller interruption still interrupt the fiber).
+      timeout: action.timeout ?? env.driverTimeouts.action,
       disposerReason: "action",
       spanName: "frond.graph.action.driver",
       spanAttributes: {

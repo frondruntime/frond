@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,10 +38,11 @@ class PublishFailure {
 const repoDir = dirname(fileURLToPath(import.meta.url));
 const args = new Set(Bun.argv.slice(2));
 const dryRun = args.has("--dry-run");
+const smokeOnly = args.has("--smoke-only");
 const help = args.has("--help") || args.has("-h");
 
 if (help) {
-  console.log(`Usage: bun publish.ts [--dry-run]
+  console.log(`Usage: bun publish.ts [--dry-run] [--smoke-only]
 
 Runs the release publish pipeline:
   1. workspace checks
@@ -51,7 +52,17 @@ Runs the release publish pipeline:
   5. clean Bun consumer smoke against packed tarballs
   6. npm publish with interactive 2FA prompt unless --dry-run is set
 
-This script is for local manual release work only. Do not run it in CI.
+Flags:
+  --dry-run    Run steps 1-5 and stop before npm publish.
+  --smoke-only Just the packed-tarball consumer smoke: package metadata
+               validation, build, npm pack and the smoke (steps 2, 4 and 5).
+               Skips the workspace checks CI runs as separate steps, the npm
+               publish dry-run and npm publish, so it needs no registry auth.
+               For iterating on the smoke itself; the release flow above always
+               runs it anyway.
+
+Every mode except --smoke-only is for local manual release work only. Do not
+run them in CI.
 `);
   process.exit(0);
 }
@@ -228,6 +239,41 @@ function assertPackedFiles(
   );
 }
 
+// The smoke is only evidence about the tarballs if the tarballs are the only
+// copies installed. `overrides` in the smoke package.json pins every request,
+// but a resolver that ignores or mis-applies them would quietly reintroduce a
+// registry copy nested under a dependent — and then the typecheck reports
+// cross-package type-identity errors that look like artifact defects. Fail
+// loudly on the layout instead of letting the diagnosis start from tsc output.
+function assertSingleCopies(
+  smokeDir: string,
+  packages: readonly PublishPackage[]
+): Effect.Effect<void, PublishFailure> {
+  return Effect.forEach(
+    packages,
+    (input) =>
+      Effect.gen(function* () {
+        const nested = join(smokeDir, "node_modules", input.packageJson.name, "node_modules");
+        const entries = yield* Effect.tryPromise({
+          try: () => readdir(nested).catch(() => [] as string[]),
+          catch: (cause) => fail("check installed copies", `Could not inspect ${nested}.`, cause),
+        });
+
+        if (entries.includes("@frondruntime")) {
+          return yield* Effect.fail(
+            fail(
+              "check installed copies",
+              `${input.packageJson.name} has a nested @frondruntime copy at ${nested}. ` +
+                "The smoke must resolve a single copy of each workspace package, from the packed " +
+                "tarball. Check the smoke package.json overrides."
+            )
+          );
+        }
+      }),
+    { discard: true }
+  );
+}
+
 function command(
   label: string,
   cmd: readonly string[],
@@ -362,41 +408,59 @@ function smokePackageJson(
   context: PublishContext
 ): Effect.Effect<unknown, PublishFailure> {
   return Effect.try({
-    try: () => ({
-      name: "frond-publish-smoke",
-      private: true,
-      type: "module",
-      scripts: {
-        typecheck: "tsc -p tsconfig.json --noEmit",
-        smoke: "node ./src/runtime-smoke.mjs",
-      },
-      dependencies: {
-        "@frondruntime/core": fileDependency(smokeDir, requireTarball(tarballs, context.core)),
-        "@frondruntime/react": fileDependency(smokeDir, requireTarball(tarballs, context.react)),
-        effect: requireDependency(context.rootPackageJson, "devDependencies", "effect"),
-        mobx: requireDependency(context.core.packageJson, "devDependencies", "mobx"),
-        "mobx-react-lite": requireDependency(
-          context.rootPackageJson,
-          "devDependencies",
-          "mobx-react-lite"
-        ),
-        react: requireDependency(context.rootPackageJson, "devDependencies", "react"),
-        "react-dom": requireDependency(context.rootPackageJson, "devDependencies", "react-dom"),
-      },
-      devDependencies: {
-        "@types/react": requireDependency(
-          context.rootPackageJson,
-          "devDependencies",
-          "@types/react"
-        ),
-        "@types/react-dom": requireDependency(
-          context.rootPackageJson,
-          "devDependencies",
-          "@types/react-dom"
-        ),
-        typescript: requireDependency(context.rootPackageJson, "devDependencies", "typescript"),
-      },
-    }),
+    try: () => {
+      const corePath = fileDependency(smokeDir, requireTarball(tarballs, context.core));
+      const reactPath = fileDependency(smokeDir, requireTarball(tarballs, context.react));
+
+      return {
+        name: "frond-publish-smoke",
+        private: true,
+        type: "module",
+        // The smoke must resolve BOTH workspace packages to the tarballs under
+        // test and nothing else. Without this, react's exact `@frondruntime/core`
+        // peer range is satisfiable from the registry, so the installer is free
+        // to nest a published copy under react — react's declarations then get
+        // checked against a *released* core while the consumer sources use the
+        // packed one. That yields "two different types with this name exist"
+        // errors that indict the artifacts for a resolution accident, and worse,
+        // it can silently pass by testing a version we did not just build.
+        // Overrides pin every transitive request to the tarball.
+        overrides: {
+          "@frondruntime/core": corePath,
+          "@frondruntime/react": reactPath,
+        },
+        scripts: {
+          typecheck: "tsc -p tsconfig.json --noEmit",
+          smoke: "node ./src/runtime-smoke.mjs",
+        },
+        dependencies: {
+          "@frondruntime/core": corePath,
+          "@frondruntime/react": reactPath,
+          effect: requireDependency(context.rootPackageJson, "devDependencies", "effect"),
+          mobx: requireDependency(context.core.packageJson, "devDependencies", "mobx"),
+          "mobx-react-lite": requireDependency(
+            context.rootPackageJson,
+            "devDependencies",
+            "mobx-react-lite"
+          ),
+          react: requireDependency(context.rootPackageJson, "devDependencies", "react"),
+          "react-dom": requireDependency(context.rootPackageJson, "devDependencies", "react-dom"),
+        },
+        devDependencies: {
+          "@types/react": requireDependency(
+            context.rootPackageJson,
+            "devDependencies",
+            "@types/react"
+          ),
+          "@types/react-dom": requireDependency(
+            context.rootPackageJson,
+            "devDependencies",
+            "@types/react-dom"
+          ),
+          typescript: requireDependency(context.rootPackageJson, "devDependencies", "typescript"),
+        },
+      };
+    },
     catch: (cause) => fail("prepare smoke package", "Could not prepare smoke package.json.", cause),
   });
 }
@@ -428,9 +492,15 @@ function writeSmokeProject(
           join(smokeDir, "src/index.tsx"),
           `import * as Frond from "@frondruntime/core";
 import {
+  createDeferred,
   createFrondTestHarness,
+  effectBridgeRunner,
+  effectHostFromRuntime,
   type FrondTestHarness,
+  mockSpec,
+  readySpec,
 } from "@frondruntime/core/testing";
+import { FrondProvider } from "@frondruntime/react";
 import { TestFrondProvider } from "@frondruntime/react/testing";
 
 interface Profile {
@@ -438,33 +508,143 @@ interface Profile {
   readonly name: string;
 }
 
+type TransportSpec = Frond.NodeSpec<{
+  readonly mode: "async";
+  readonly args: Frond.Args.None;
+  readonly key: Frond.Key.Singleton;
+  readonly result: { readonly token: string };
+}>;
+
+class TransportNode extends Frond.NodeBase<TransportSpec> {
+  static readonly spec = Frond.serviceSpec.async<TransportSpec>({
+    tag: Frond.tag("publish-smoke/transport"),
+    key: () => Frond.Key.singleton(),
+    acquire: Frond.Driver.Acquire(() => ({ token: "token" })),
+  });
+
+  get token(): string {
+    return this.result.token;
+  }
+}
+
 type ProfileSpec = Frond.NodeSpec<{
+  readonly mode: "async";
   readonly args: { readonly id: string };
   readonly key: Frond.Key.Structure<{ readonly id: string }>;
+  readonly deps: { readonly transport: Frond.Dep<typeof TransportNode> };
   readonly result: Profile;
 }>;
 
 class ProfileNode extends Frond.NodeBase<ProfileSpec> {
-  static readonly spec = Frond.resourceSpec<ProfileSpec>({
+  static readonly spec = Frond.resourceSpec.async<ProfileSpec>({
     tag: Frond.tag("publish-smoke/profile"),
     key: (args) => Frond.Key.structure({ id: args.id }),
-    driver: Frond.Driver.Async<ProfileSpec>({
-      acquire: Frond.Driver.Acquire(async (ctx) => ({
-        id: ctx.args.id,
-        name: "Ada",
-      })),
-    }),
+    dependencies: Frond.dependencies(() => ({
+      transport: Frond.dep(TransportNode, Frond.Args.none),
+    })),
+    acquire: Frond.Driver.Acquire(async (ctx) => ({
+      id: ctx.args.id,
+      name: ctx.deps.transport.token,
+    })),
   });
 }
 
+// Mode-generic helpers accept the packed spec shape through AnyModeSpec.
+type AssertAnyModeSpec<TSpec extends Frond.AnyModeSpec> = TSpec;
+export type ProfileSpecIsAnyModeSpec = AssertAnyModeSpec<ProfileSpec>;
+
 const runtime = Frond.createRuntime();
 const handle = runtime.client.node(ProfileNode, { id: "1" });
+
+// 0.2 handle surface: sync ready-or-throw projection plus the awaited variant.
+const readReadyFromHandle: () => ProfileNode = handle.readReady;
+const ensureReadyNodeFromHandle: (
+  metadata?: Frond.Runtime.RuntimeWorkMetadata | undefined
+) => Promise<ProfileNode> = handle.ensureReadyNode;
+void readReadyFromHandle;
+void ensureReadyNodeFromHandle;
+
+// FrondNodeNotReady is the typed error non-ready projections throw.
+declare const notReady: InstanceType<typeof Frond.Runtime.FrondNodeNotReady>;
+notReady satisfies Error;
+
+// specWithDriver swaps only the driver; the override stays assignable where
+// the original class is expected.
+const replacementDriver = Frond.Driver.Async<TransportSpec>({
+  acquire: Frond.Driver.Acquire(() => ({ token: "injected" })),
+});
+const OverriddenTransport = Frond.specWithDriver(TransportNode, replacementDriver);
+const overriddenSlot: typeof TransportNode = OverriddenTransport;
+void overriddenSlot;
+
+// Result envelope: withInternal / internalOf / carryInternal.
+const envelopedProfile = Frond.withInternal(
+  { id: "1", name: "Ada" },
+  { socket: "publish-smoke" }
+);
+Frond.internalOf(envelopedProfile).socket satisfies string;
+const carriedProfile = Frond.carryInternal(envelopedProfile, { id: "1", name: "Beatrice" });
+Frond.internalOf(carriedProfile).socket satisfies string;
+
+// Ordered transitions.
+const transitionRunner: () => Promise<Frond.TransitionOutcome> = Frond.createTransition(
+  [{ label: "noop", run: () => Promise.resolve() }],
+  { onStepFailure: "continue" }
+);
+void transitionRunner;
+const transitionOutcome: Promise<Frond.TransitionOutcome> = Frond.runTransition(
+  [],
+  { onStepFailure: "abort" }
+);
+void transitionOutcome;
+
+// Serialized runtime replacement.
+const coordinator = Frond.createRuntimeCoordinator<Frond.Runtime.Runtime>();
+const coordinatorStart: (
+  createLease: () => Promise<Frond.RuntimeLease<Frond.Runtime.Runtime>>
+) => Promise<Frond.Runtime.Runtime> = coordinator.start;
+void coordinatorStart;
+
+// Harness runtime must unify with the package Runtime type (the 0.1 packaging
+// regression: core's testing rollup duplicated core's types instead of
+// importing them, so this assignment failed against the packed tarballs).
 const harness: FrondTestHarness = createFrondTestHarness();
 const harnessRuntime: Frond.Runtime.Runtime = harness.runtime;
+void harnessRuntime;
+
+// Rebuild a runtime client over the harness facade: testing's host/runner
+// types must be the same declarations core's createRuntimeClient consumes.
+const rebuiltClient: Frond.Runtime.RuntimeClient = Frond.createRuntimeClient(
+  effectHostFromRuntime(harness.runtime),
+  effectBridgeRunner
+);
+void rebuiltClient;
+
+// Deferred test values.
+const deferredProfile = createDeferred<Profile>();
+const deferredPromise: Promise<Profile> = deferredProfile.promise;
+void deferredPromise;
+
+// Item 7 - readySpec: a test-provided result envelope flows through without
+// casts, and the override of a spec WITH declared deps still typechecks.
+const ReadyProfile = readySpec(ProfileNode, envelopedProfile);
+const readyHandle = harness.node(ReadyProfile, { id: "1" });
+void readyHandle;
+
+// Item 7 - mockSpec: overrides against a spec with declared deps; the derived
+// dependency shape (rewired or severed) is usable without casts.
+const RewiredProfile = mockSpec(ProfileNode, {
+  dependencies: () => ({ transport: Frond.dep(OverriddenTransport, Frond.Args.none) }),
+});
+harness.node(RewiredProfile, { id: "2" });
+
+const SeveredProfile = mockSpec(ProfileNode, { dependencies: () => ({}) });
+harness.node(SeveredProfile, { id: "3" });
 
 void handle;
-void harnessRuntime;
+void FrondProvider({ runtime, children: null });
 void TestFrondProvider({ runtime, children: null });
+void TestFrondProvider({ harness, children: null });
 `
         ),
         writeText(
@@ -474,12 +654,35 @@ const coreTesting = await import("@frondruntime/core/testing");
 const react = await import("@frondruntime/react");
 const reactTesting = await import("@frondruntime/react/testing");
 
-if (typeof core.createRuntime !== "function") {
-  throw new Error("Missing @frondruntime/core createRuntime export");
+for (const name of [
+  "createRuntime",
+  "specWithDriver",
+  "withInternal",
+  "internalOf",
+  "carryInternal",
+  "runTransition",
+  "createTransition",
+  "createRuntimeCoordinator",
+]) {
+  if (typeof core[name] !== "function") {
+    throw new Error(\`Missing @frondruntime/core \${name} export\`);
+  }
 }
 
-if (typeof coreTesting.createFrondTestHarness !== "function") {
-  throw new Error("Missing @frondruntime/core/testing createFrondTestHarness export");
+for (const name of [
+  "createFrondTestHarness",
+  "effectHostFromRuntime",
+  "readySpec",
+  "mockSpec",
+  "createDeferred",
+]) {
+  if (typeof coreTesting[name] !== "function") {
+    throw new Error(\`Missing @frondruntime/core/testing \${name} export\`);
+  }
+}
+
+if (typeof coreTesting.effectBridgeRunner?.run !== "function") {
+  throw new Error("Missing @frondruntime/core/testing effectBridgeRunner export");
 }
 
 if (typeof react.FrondProvider !== "function") {
@@ -582,6 +785,7 @@ function packAndSmoke(context: PublishContext): Effect.Effect<void, PublishFailu
       yield* writeSmokeProject(smokeDir, tarballs, context);
       yield* command("smoke install", ["bun", "install"], { cwd: smokeDir });
       yield* assertPackedFiles(smokeDir, context.publishPackages);
+      yield* assertSingleCopies(smokeDir, context.publishPackages);
       yield* command("smoke typecheck", ["bun", "run", "typecheck"], { cwd: smokeDir });
       yield* command("smoke runtime import", ["bun", "run", "smoke"], { cwd: smokeDir });
       yield* log("\nSmoke project passed.");
@@ -612,7 +816,22 @@ function publishToNpm(context: PublishContext): Effect.Effect<void, PublishFailu
   });
 }
 
+function smokeOnlyProgram(): Effect.Effect<void, PublishFailure> {
+  return Effect.gen(function* () {
+    const context = yield* loadPublishContext();
+
+    yield* buildArtifacts();
+    yield* packAndSmoke(context);
+    yield* section("Publish skipped");
+    yield* log("Smoke-only run complete. No packages were published.");
+  });
+}
+
 const program = Effect.gen(function* () {
+  if (smokeOnly) {
+    return yield* smokeOnlyProgram();
+  }
+
   yield* assertLocalPublishScript();
 
   const context = yield* loadPublishContext();

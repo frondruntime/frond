@@ -17,6 +17,7 @@ import {
 } from "../src";
 
 type StaticCounterSpec = import("../src").NodeSpec<{
+  readonly mode: "async";
   readonly args: Args.None;
   readonly key: Key.Singleton;
   readonly result: { readonly count: number };
@@ -26,25 +27,23 @@ type StaticCounterSpec = import("../src").NodeSpec<{
 }>;
 
 class StaticCounterNode extends NodeBase<StaticCounterSpec> {
-  static readonly spec = resourceSpec<StaticCounterSpec>({
+  static readonly spec = resourceSpec.async<StaticCounterSpec>({
     tag: tag("tests/static-counter"),
     key: () => Key.singleton(),
-    driver: Driver.Async<StaticCounterSpec>({
-      acquire: Driver.Acquire(() => ({ count: 1 })),
-      actions: {
-        add: Driver.Action(
-          (
-            ctx: AsyncDriverContext<
-              NodeBase<StaticCounterSpec>,
-              NodeSpecArgs<StaticCounterSpec>,
-              NodeSpecResolvedDeps<StaticCounterSpec>,
-              { readonly count: number }
-            >,
-            input: { readonly by: number }
-          ) => ctx.node.result.count + input.by
-        ),
-      },
-    }),
+    acquire: Driver.Acquire(() => ({ count: 1 })),
+    actions: {
+      add: Driver.Action(
+        (
+          ctx: AsyncDriverContext<
+            NodeBase<StaticCounterSpec>,
+            NodeSpecArgs<StaticCounterSpec>,
+            NodeSpecResolvedDeps<StaticCounterSpec>,
+            { readonly count: number }
+          >,
+          input: { readonly by: number }
+        ) => ctx.node.result.count + input.by
+      ),
+    },
   });
 
   get count(): number {
@@ -53,6 +52,7 @@ class StaticCounterNode extends NodeBase<StaticCounterSpec> {
 }
 
 type AdmissionSpec = import("../src").NodeSpec<{
+  readonly mode: "async";
   readonly args: Args.None;
   readonly key: Key.Singleton;
   readonly result: string;
@@ -96,26 +96,24 @@ describe("static-spec authoring", () => {
     const gate = makeGate();
 
     class AdmissionNode extends NodeBase<AdmissionSpec> {
-      static readonly spec = resourceSpec<AdmissionSpec>({
+      static readonly spec = resourceSpec.async<AdmissionSpec>({
         tag: tag("tests/action-admission-reject"),
         key: () => Key.singleton(),
-        driver: Driver.Async<AdmissionSpec>({
-          acquire: Driver.Acquire(() => "ready"),
-          actions: {
-            rejectSlow: Driver.Action(
-              async (_ctx, input: { readonly id: string }) => {
-                gate.markStarted();
-                await gate.promise;
-                return input.id;
-              },
-              { admission: "reject" }
-            ),
-            joinSlow: Driver.Action((_ctx, input: { readonly id: string }) => input.id, {
-              admission: "join",
-              admissionKey: (input) => input.id,
-            }),
-          },
-        }),
+        acquire: Driver.Acquire(() => "ready"),
+        actions: {
+          rejectSlow: Driver.Action(
+            async (_ctx, input: { readonly id: string }) => {
+              gate.markStarted();
+              await gate.promise;
+              return input.id;
+            },
+            { admission: "reject" }
+          ),
+          joinSlow: Driver.Action((_ctx, input: { readonly id: string }) => input.id, {
+            admission: "join",
+            admissionKey: (input) => input.id,
+          }),
+        },
       });
     }
 
@@ -136,27 +134,25 @@ describe("static-spec authoring", () => {
     let runs = 0;
 
     class AdmissionNode extends NodeBase<AdmissionSpec> {
-      static readonly spec = resourceSpec<AdmissionSpec>({
+      static readonly spec = resourceSpec.async<AdmissionSpec>({
         tag: tag("tests/action-admission-join"),
         key: () => Key.singleton(),
-        driver: Driver.Async<AdmissionSpec>({
-          acquire: Driver.Acquire(() => "ready"),
-          actions: {
-            rejectSlow: Driver.Action((_ctx, input: { readonly id: string }) => input.id),
-            joinSlow: Driver.Action(
-              async (_ctx, input: { readonly id: string }) => {
-                runs += 1;
-                gate.markStarted();
-                await gate.promise;
-                return input.id;
-              },
-              {
-                admission: "join",
-                admissionKey: (input) => input.id,
-              }
-            ),
-          },
-        }),
+        acquire: Driver.Acquire(() => "ready"),
+        actions: {
+          rejectSlow: Driver.Action((_ctx, input: { readonly id: string }) => input.id),
+          joinSlow: Driver.Action(
+            async (_ctx, input: { readonly id: string }) => {
+              runs += 1;
+              gate.markStarted();
+              await gate.promise;
+              return input.id;
+            },
+            {
+              admission: "join",
+              admissionKey: (input) => input.id,
+            }
+          ),
+        },
       });
     }
 
@@ -177,8 +173,17 @@ describe("static-spec authoring", () => {
     expect(() =>
       Driver.Action((_ctx: unknown, _input: { readonly id: string }) => undefined, {
         admission: "join",
+        admissionKey: "not-a-function",
       } as never)
     ).toThrow("admissionKey");
+  });
+
+  test("Driver.Action accepts join admission without admissionKey for void input", () => {
+    const descriptor = Driver.Action<unknown, void, undefined>((_ctx) => undefined, {
+      admission: "join",
+    });
+
+    expect(descriptor.admission).toEqual({ policy: "join" });
   });
 });
 

@@ -1,3 +1,5 @@
+import type { Disposer } from "../../driver";
+import type { DisposerRegistry } from "../lifecycle/disposers";
 import type { ResultState } from "../resultValidity";
 import type {
   GraphFailure,
@@ -64,7 +66,8 @@ export function completeAcquireState(input: {
     readonly deps: Record<string, object>;
     readonly resultState: ResultState;
     readonly resultValidityPolicy: NormalizedResultValidityPolicy;
-    readonly disposers: ReadonlyArray<() => void>;
+    readonly disposers: DisposerRegistry;
+    readonly nodeLifetime: AbortController;
   };
 }):
   | { readonly _tag: "Committed"; readonly state: GraphNodeState }
@@ -93,6 +96,7 @@ export function completeAcquireState(input: {
         // Contract: a freshly ready node preserves accumulated live leases, but no
         // live resource exists until demand is delivered after the ready commit.
         liveResource: { _tag: "Inactive" },
+        nodeLifetime: input.ready.nodeLifetime,
       }),
     },
   };
@@ -147,7 +151,7 @@ export function commitReadyOperationState(input: {
   readonly latest: GraphNodeState;
   readonly deps: Record<string, object>;
   readonly resultState: ResultState;
-  readonly operationDisposers: ReadonlyArray<() => void>;
+  readonly operationDisposers: ReadonlyArray<Disposer>;
 }): GraphNodeState {
   return {
     ...input.latest,
@@ -157,22 +161,33 @@ export function commitReadyOperationState(input: {
       result: input.resultState.result,
       resultValidity: input.resultState.resultValidity,
       resultLoadedAt: input.resultState.resultLoadedAt,
-      disposers: [...readyData.disposers, ...input.operationDisposers],
+      disposers: appendReadyDisposers(readyData.disposers, input.operationDisposers),
     })),
   };
 }
 
 export function appendReadyDisposersState(input: {
   readonly latest: GraphNodeState;
-  readonly operationDisposers: ReadonlyArray<() => void>;
+  readonly operationDisposers: ReadonlyArray<Disposer>;
 }): GraphNodeState {
   return {
     ...input.latest,
     phase: mapPhaseReady(input.latest.phase, (readyData) => ({
       ...readyData,
-      disposers: [...readyData.disposers, ...input.operationDisposers],
+      disposers: appendReadyDisposers(readyData.disposers, input.operationDisposers),
     })),
   };
+}
+
+// Ownership: ready disposers live in the incarnation registry handed off by
+// the acquire operation bag. Append into it and keep the identity so late adds
+// through the bag and the teardown drain loop share one registry.
+function appendReadyDisposers(
+  current: DisposerRegistry,
+  appended: ReadonlyArray<Disposer>
+): DisposerRegistry {
+  current.append(appended);
+  return current;
 }
 
 export function completeReleaseState(input: {

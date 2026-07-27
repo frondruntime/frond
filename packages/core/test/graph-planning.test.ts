@@ -40,6 +40,7 @@ describe("graph planning", () => {
   test("concurrent planning creates one graph identity and readiness constructs one node", async () => {
     let constructed = 0;
     type ConstructedOnceSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -47,13 +48,11 @@ describe("graph planning", () => {
     }>;
 
     class ConstructedOnceNode extends NodeBase<ConstructedOnceSpec> {
-      static readonly spec = serviceSpec<ConstructedOnceSpec>({
+      static readonly spec = serviceSpec.effect<ConstructedOnceSpec>({
         tag: "services/constructed-once",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ConstructedOnceSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
       });
 
       constructor() {
@@ -122,6 +121,7 @@ describe("graph planning", () => {
     // record diverges. Planning must surface the divergence as a structured
     // invariant violation instead of silently mixing old args with new edges.
     type ReplanLeafSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly which: string };
       readonly key: Key.Structure<{ readonly which: string }>;
       readonly deps: Record<string, never>;
@@ -129,17 +129,16 @@ describe("graph planning", () => {
     }>;
 
     class ReplanLeafNode extends NodeBase<ReplanLeafSpec> {
-      static readonly spec = serviceSpec<ReplanLeafSpec>({
+      static readonly spec = serviceSpec.effect<ReplanLeafSpec>({
         tag: "services/replan-leaf",
         key: (args) => Key.structure({ which: args.which }),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ReplanLeafSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("leaf")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("leaf")),
       });
     }
 
     type ReplanParentSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly which: string };
       readonly key: Key.Singleton;
       readonly deps: {
@@ -149,15 +148,13 @@ describe("graph planning", () => {
     }>;
 
     class ReplanParentNode extends NodeBase<ReplanParentSpec> {
-      static readonly spec = resourceSpec<ReplanParentSpec>({
+      static readonly spec = resourceSpec.effect<ReplanParentSpec>({
         tag: "resources/replan-parent",
         key: () => Key.singleton(),
         dependencies: dependencies((args) => ({
           leaf: dep(ReplanLeafNode, { which: args.which }),
         })),
-        driver: Driver.Effect<ReplanParentSpec>({
-          acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.deps.leaf.result)),
-        }),
+        acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.deps.leaf.result)),
       });
     }
 
@@ -193,6 +190,7 @@ describe("graph planning", () => {
     const acquireGate = await Effect.runPromise(Deferred.make<string>());
 
     type MidAcquireLeafSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly which: string };
       readonly key: Key.Structure<{ readonly which: string }>;
       readonly deps: Record<string, never>;
@@ -200,17 +198,16 @@ describe("graph planning", () => {
     }>;
 
     class MidAcquireLeafNode extends NodeBase<MidAcquireLeafSpec> {
-      static readonly spec = serviceSpec<MidAcquireLeafSpec>({
+      static readonly spec = serviceSpec.effect<MidAcquireLeafSpec>({
         tag: "services/mid-acquire-replan-leaf",
         key: (args) => Key.structure({ which: args.which }),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<MidAcquireLeafSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("leaf")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("leaf")),
       });
     }
 
     type MidAcquireParentSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly which: string };
       readonly key: Key.Singleton;
       readonly deps: {
@@ -220,21 +217,19 @@ describe("graph planning", () => {
     }>;
 
     class MidAcquireParentNode extends NodeBase<MidAcquireParentSpec> {
-      static readonly spec = resourceSpec<MidAcquireParentSpec>({
+      static readonly spec = resourceSpec.effect<MidAcquireParentSpec>({
         tag: "resources/mid-acquire-replan-parent",
         key: () => Key.singleton(),
         dependencies: dependencies((args) => ({
           leaf: dep(MidAcquireLeafNode, { which: args.which }),
         })),
-        driver: Driver.Effect<MidAcquireParentSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(acquireStarted, undefined);
-              const suffix = yield* Deferred.await(acquireGate);
-              return `${ctx.deps.leaf.result}:${suffix}`;
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(acquireStarted, undefined);
+            const suffix = yield* Deferred.await(acquireGate);
+            return `${ctx.deps.leaf.result}:${suffix}`;
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -263,6 +258,7 @@ describe("graph planning", () => {
     let acquireCount = 0;
 
     type FirstSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -272,24 +268,23 @@ describe("graph planning", () => {
     }>;
 
     class FirstNode extends NodeBase<FirstSpec> {
-      static readonly spec = resourceSpec<FirstSpec>({
+      static readonly spec = resourceSpec.effect<FirstSpec>({
         tag: "resources/cycle-first",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({
           second: dep(SecondNode, {}),
         })),
-        driver: Driver.Effect<FirstSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.sync(() => {
-              acquireCount += 1;
-              return null;
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.sync(() => {
+            acquireCount += 1;
+            return null;
+          })
+        ),
       });
     }
 
     type SecondSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -299,20 +294,18 @@ describe("graph planning", () => {
     }>;
 
     class SecondNode extends NodeBase<SecondSpec> {
-      static readonly spec = resourceSpec<SecondSpec>({
+      static readonly spec = resourceSpec.effect<SecondSpec>({
         tag: "resources/cycle-second",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({
           first: dep(FirstNode, {}),
         })),
-        driver: Driver.Effect<SecondSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.sync(() => {
-              acquireCount += 1;
-              return null;
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.sync(() => {
+            acquireCount += 1;
+            return null;
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -330,6 +323,7 @@ describe("graph planning", () => {
 
   test("invalid key values become invalid graph state instead of escaping planning", async () => {
     type InvalidKeySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly value: number };
       readonly key: Key.Structure<{ readonly value: number }>;
       readonly deps: Record<string, never>;
@@ -337,13 +331,11 @@ describe("graph planning", () => {
     }>;
 
     class InvalidKeyNode extends NodeBase<InvalidKeySpec> {
-      static readonly spec = serviceSpec<InvalidKeySpec>({
+      static readonly spec = serviceSpec.effect<InvalidKeySpec>({
         tag: "services/invalid-key",
         key: (args) => Key.structure({ value: args.value }),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<InvalidKeySpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -361,6 +353,7 @@ describe("graph planning", () => {
 
   test("unsupported object keys become invalid graph state", async () => {
     type InvalidObjectKeySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Structure<{ readonly date: string }>;
       readonly deps: Record<string, never>;
@@ -368,13 +361,11 @@ describe("graph planning", () => {
     }>;
 
     class InvalidObjectKeyNode extends NodeBase<InvalidObjectKeySpec> {
-      static readonly spec = serviceSpec<InvalidObjectKeySpec>({
+      static readonly spec = serviceSpec.effect<InvalidObjectKeySpec>({
         tag: "services/invalid-object-key",
         key: () => Key.structure({ date: new Date("2026-01-01T00:00:00.000Z") } as never),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<InvalidObjectKeySpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -394,6 +385,7 @@ describe("graph planning", () => {
     let secondMessageCounter = 0;
 
     type ThrowingKeySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Structure<{ readonly id: string }>;
       readonly deps: Record<string, never>;
@@ -401,7 +393,7 @@ describe("graph planning", () => {
     }>;
 
     class FirstThrowingKeyNode extends NodeBase<ThrowingKeySpec> {
-      static readonly spec = serviceSpec<ThrowingKeySpec>({
+      static readonly spec = serviceSpec.effect<ThrowingKeySpec>({
         tag: "services/throwing-key-first",
         key: () => {
           firstMessageCounter += 1;
@@ -413,14 +405,12 @@ describe("graph planning", () => {
           });
         },
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ThrowingKeySpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
       });
     }
 
     class SecondThrowingKeyNode extends NodeBase<ThrowingKeySpec> {
-      static readonly spec = serviceSpec<ThrowingKeySpec>({
+      static readonly spec = serviceSpec.effect<ThrowingKeySpec>({
         tag: "services/throwing-key-second",
         key: () => {
           secondMessageCounter += 1;
@@ -431,9 +421,7 @@ describe("graph planning", () => {
           });
         },
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ThrowingKeySpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -461,6 +449,7 @@ describe("graph planning", () => {
   test("invalid key identities sanitize and cap hostile error paths", async () => {
     const hostileProperty = `line\n${"x".repeat(100_000)}`;
     type HostileKeySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Structure<Record<string, string>>;
       readonly deps: Record<string, never>;
@@ -468,13 +457,11 @@ describe("graph planning", () => {
     }>;
 
     class HostileKeyNode extends NodeBase<HostileKeySpec> {
-      static readonly spec = serviceSpec<HostileKeySpec>({
+      static readonly spec = serviceSpec.effect<HostileKeySpec>({
         tag: "services/hostile-invalid-key",
         key: () => Key.structure({ [hostileProperty]: (() => "invalid") as unknown as string }),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<HostileKeySpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -491,6 +478,7 @@ describe("graph planning", () => {
   test("malformed dependency declarations become invalid graph state", async () => {
     const malformedDependencies = () => "not-a-dependency-record";
     type MalformedDependencySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -498,13 +486,11 @@ describe("graph planning", () => {
     }>;
 
     class MalformedDependencyNode extends NodeBase<MalformedDependencySpec> {
-      static readonly spec = resourceSpec<MalformedDependencySpec>({
+      static readonly spec = resourceSpec.effect<MalformedDependencySpec>({
         tag: "resources/malformed-dependencies",
         key: () => Key.singleton(),
         dependencies: dependencies(malformedDependencies as unknown as () => Record<string, never>),
-        driver: Driver.Effect<MalformedDependencySpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -528,6 +514,7 @@ describe("graph planning", () => {
 
   test("malformed dependency entries become structured dependency definition failures", async () => {
     type MalformedDependencyEntrySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -535,15 +522,13 @@ describe("graph planning", () => {
     }>;
 
     class MalformedDependencyEntryNode extends NodeBase<MalformedDependencyEntrySpec> {
-      static readonly spec = resourceSpec<MalformedDependencyEntrySpec>({
+      static readonly spec = resourceSpec.effect<MalformedDependencyEntrySpec>({
         tag: "resources/malformed-dependency-entry",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({
           malformed: { type: "not-a-dependency", spec: ProfileNode, args: {} } as never,
         })),
-        driver: Driver.Effect<MalformedDependencyEntrySpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -569,6 +554,7 @@ describe("graph planning", () => {
 
   test("non-canonical dependency args become structured dependency definition failures", async () => {
     type DependencyArgSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly id: string };
       readonly key: Key.Structure<{ readonly id: string }>;
       readonly deps: Record<string, never>;
@@ -576,17 +562,16 @@ describe("graph planning", () => {
     }>;
 
     class DependencyArgNode extends NodeBase<DependencyArgSpec> {
-      static readonly spec = serviceSpec<DependencyArgSpec>({
+      static readonly spec = serviceSpec.effect<DependencyArgSpec>({
         tag: "services/non-canonical-dependency-args-child",
         key: (args) => Key.structure({ id: args.id }),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<DependencyArgSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("child")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("child")),
       });
     }
 
     type DependencyArgParentSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -596,7 +581,7 @@ describe("graph planning", () => {
     }>;
 
     class DependencyArgParentNode extends NodeBase<DependencyArgParentSpec> {
-      static readonly spec = resourceSpec<DependencyArgParentSpec>({
+      static readonly spec = resourceSpec.effect<DependencyArgParentSpec>({
         tag: "resources/non-canonical-dependency-args-parent",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({
@@ -605,9 +590,7 @@ describe("graph planning", () => {
             ignoredByKey: () => "not canonical",
           } as { readonly id: string }),
         })),
-        driver: Driver.Effect<DependencyArgParentSpec>({
-          acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.deps.child.result)),
-        }),
+        acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.deps.child.result)),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -632,6 +615,7 @@ describe("graph planning", () => {
   test("multiple malformed dependency entries aggregate before invalidating parent", async () => {
     class PlainDependency {}
     type MalformedDependencyEntriesSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -639,16 +623,14 @@ describe("graph planning", () => {
     }>;
 
     class MalformedDependencyEntriesNode extends NodeBase<MalformedDependencyEntriesSpec> {
-      static readonly spec = resourceSpec<MalformedDependencyEntriesSpec>({
+      static readonly spec = resourceSpec.effect<MalformedDependencyEntriesSpec>({
         tag: "resources/malformed-dependency-entries",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({
           first: { type: "not-a-dependency", spec: ProfileNode, args: {} } as never,
           second: { type: "dependency", spec: PlainDependency, args: {} } as never,
         })),
-        driver: Driver.Effect<MalformedDependencyEntriesSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -679,6 +661,7 @@ describe("graph planning", () => {
   test("unbranded dependency specs become invalid graph state", async () => {
     class PlainDependency {}
     type UnbrandedDependencySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -686,15 +669,13 @@ describe("graph planning", () => {
     }>;
 
     class UnbrandedDependencyNode extends NodeBase<UnbrandedDependencySpec> {
-      static readonly spec = resourceSpec<UnbrandedDependencySpec>({
+      static readonly spec = resourceSpec.effect<UnbrandedDependencySpec>({
         tag: "resources/unbranded-dependency",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({
           plain: { type: "dependency", spec: PlainDependency, args: {} },
         })),
-        driver: Driver.Effect<UnbrandedDependencySpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -711,6 +692,7 @@ describe("graph planning", () => {
 
   test("constructor failures become readiness failures", async () => {
     type ThrowingConstructorSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -718,13 +700,11 @@ describe("graph planning", () => {
     }>;
 
     class ThrowingConstructorNode extends NodeBase<ThrowingConstructorSpec> {
-      static readonly spec = serviceSpec<ThrowingConstructorSpec>({
+      static readonly spec = serviceSpec.effect<ThrowingConstructorSpec>({
         tag: "services/throwing-constructor",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ThrowingConstructorSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
       });
 
       constructor() {
@@ -749,6 +729,7 @@ describe("graph planning", () => {
 
   test("different specs with the same tag are rejected deterministically", async () => {
     type FirstTaggedSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -756,17 +737,16 @@ describe("graph planning", () => {
     }>;
 
     class FirstTaggedNode extends NodeBase<FirstTaggedSpec> {
-      static readonly spec = serviceSpec<FirstTaggedSpec>({
+      static readonly spec = serviceSpec.effect<FirstTaggedSpec>({
         tag: "services/duplicate-tag",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<FirstTaggedSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("first")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("first")),
       });
     }
 
     type SecondTaggedSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -774,13 +754,11 @@ describe("graph planning", () => {
     }>;
 
     class SecondTaggedNode extends NodeBase<SecondTaggedSpec> {
-      static readonly spec = serviceSpec<SecondTaggedSpec>({
+      static readonly spec = serviceSpec.effect<SecondTaggedSpec>({
         tag: "services/duplicate-tag",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SecondTaggedSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("second")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("second")),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -798,6 +776,7 @@ describe("graph planning", () => {
     let releaseRuns = 0;
     let disposerRuns = 0;
     type ReadyInvalidatedSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -805,36 +784,32 @@ describe("graph planning", () => {
     }>;
 
     class ReadyInvalidatedNode extends NodeBase<ReadyInvalidatedSpec> {
-      static readonly spec = serviceSpec<ReadyInvalidatedSpec>({
+      static readonly spec = serviceSpec.effect<ReadyInvalidatedSpec>({
         tag: "services/ready-invalidated-teardown",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ReadyInvalidatedSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.sync(() => {
-              ctx.disposers.add(() => {
-                disposerRuns += 1;
-              });
-              return "ready";
-            })
-          ),
-          release: Driver.Release(() =>
-            Effect.sync(() => {
-              releaseRuns += 1;
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.sync(() => {
+            ctx.disposers.add(() => {
+              disposerRuns += 1;
+            });
+            return "ready";
+          })
+        ),
+        release: Driver.Release(() =>
+          Effect.sync(() => {
+            releaseRuns += 1;
+          })
+        ),
       });
     }
 
     class ConflictingTagNode extends NodeBase<ReadyInvalidatedSpec> {
-      static readonly spec = serviceSpec<ReadyInvalidatedSpec>({
+      static readonly spec = serviceSpec.effect<ReadyInvalidatedSpec>({
         tag: "services/ready-invalidated-teardown",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ReadyInvalidatedSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("conflicting")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("conflicting")),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -859,6 +834,7 @@ describe("graph planning", () => {
     const releaseGate = await Effect.runPromise(Deferred.make<void>());
     let releaseRuns = 0;
     type SlowInvalidatedSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -866,35 +842,32 @@ describe("graph planning", () => {
     }>;
 
     class SlowInvalidatedNode extends NodeBase<SlowInvalidatedSpec> {
-      static readonly spec = serviceSpec<SlowInvalidatedSpec>({
+      static readonly spec = serviceSpec.effect<SlowInvalidatedSpec>({
         tag: "services/slow-invalidated-release",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SlowInvalidatedSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          release: Driver.Release(() =>
-            Effect.gen(function* () {
-              releaseRuns += 1;
-              yield* Deferred.succeed(releaseStarted, undefined);
-              yield* Deferred.await(releaseGate);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        release: Driver.Release(() =>
+          Effect.gen(function* () {
+            releaseRuns += 1;
+            yield* Deferred.succeed(releaseStarted, undefined);
+            yield* Deferred.await(releaseGate);
+          })
+        ),
       });
     }
 
     class ConflictingSlowInvalidatedNode extends NodeBase<SlowInvalidatedSpec> {
-      static readonly spec = serviceSpec<SlowInvalidatedSpec>({
+      static readonly spec = serviceSpec.effect<SlowInvalidatedSpec>({
         tag: "services/slow-invalidated-release",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SlowInvalidatedSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("conflicting")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("conflicting")),
       });
     }
 
     type UnrelatedSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -902,13 +875,11 @@ describe("graph planning", () => {
     }>;
 
     class UnrelatedNode extends NodeBase<UnrelatedSpec> {
-      static readonly spec = serviceSpec<UnrelatedSpec>({
+      static readonly spec = serviceSpec.effect<UnrelatedSpec>({
         tag: "services/unrelated-during-invalid-release",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<UnrelatedSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("unrelated")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("unrelated")),
       });
     }
 
@@ -935,6 +906,7 @@ describe("graph planning", () => {
 
   test("spec overrides substitute dependency node specs during planning and readiness", async () => {
     type OriginalServiceSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -942,28 +914,25 @@ describe("graph planning", () => {
     }>;
 
     class OriginalServiceNode extends NodeBase<OriginalServiceSpec> {
-      static readonly spec = serviceSpec<OriginalServiceSpec>({
+      static readonly spec = serviceSpec.effect<OriginalServiceSpec>({
         tag: "services/original",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<OriginalServiceSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("original")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("original")),
       });
     }
 
     class OverrideServiceNode extends OriginalServiceNode {
-      static override readonly spec = serviceSpec<OriginalServiceSpec>({
+      static override readonly spec = serviceSpec.effect<OriginalServiceSpec>({
         tag: "services/original",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<OriginalServiceSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("override")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("override")),
       });
     }
 
     type UsesServiceSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -973,15 +942,13 @@ describe("graph planning", () => {
     }>;
 
     class UsesServiceNode extends NodeBase<UsesServiceSpec> {
-      static readonly spec = resourceSpec<UsesServiceSpec>({
+      static readonly spec = resourceSpec.effect<UsesServiceSpec>({
         tag: "resources/uses-service-override",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({
           service: dep(OriginalServiceNode, {}),
         })),
-        driver: Driver.Effect<UsesServiceSpec>({
-          acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.deps.service.result)),
-        }),
+        acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.deps.service.result)),
       });
     }
 
@@ -1008,6 +975,7 @@ describe("graph planning", () => {
 
   test("runtime spec overrides affect direct client handles", async () => {
     type OriginalSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1015,24 +983,20 @@ describe("graph planning", () => {
     }>;
 
     class OriginalNode extends NodeBase<OriginalSpec> {
-      static readonly spec = serviceSpec<OriginalSpec>({
+      static readonly spec = serviceSpec.effect<OriginalSpec>({
         tag: "services/runtime-original",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<OriginalSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("original")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("original")),
       });
     }
 
     class OverrideNode extends OriginalNode {
-      static override readonly spec = serviceSpec<OriginalSpec>({
+      static override readonly spec = serviceSpec.effect<OriginalSpec>({
         tag: "services/runtime-original",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<OriginalSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("override")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("override")),
       });
     }
 
@@ -1055,6 +1019,7 @@ describe("graph planning", () => {
 
   test("Effect runtime construction preserves spec overrides", async () => {
     type OriginalSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1062,24 +1027,20 @@ describe("graph planning", () => {
     }>;
 
     class OriginalNode extends NodeBase<OriginalSpec> {
-      static readonly spec = serviceSpec<OriginalSpec>({
+      static readonly spec = serviceSpec.effect<OriginalSpec>({
         tag: "services/effect-runtime-original",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<OriginalSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("original")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("original")),
       });
     }
 
     class OverrideNode extends OriginalNode {
-      static override readonly spec = serviceSpec<OriginalSpec>({
+      static override readonly spec = serviceSpec.effect<OriginalSpec>({
         tag: "services/effect-runtime-original",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<OriginalSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("override")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("override")),
       });
     }
 
@@ -1105,6 +1066,7 @@ describe("graph planning", () => {
 
   test("explicit override class preserves identity while replacing driver behavior", async () => {
     type OriginalSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1112,13 +1074,11 @@ describe("graph planning", () => {
     }>;
 
     class OriginalNode extends NodeBase<OriginalSpec> {
-      static readonly spec = serviceSpec<OriginalSpec>({
+      static readonly spec = serviceSpec.effect<OriginalSpec>({
         tag: "services/derive-original",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<OriginalSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("original")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("original")),
       });
 
       get label(): string {
@@ -1127,13 +1087,11 @@ describe("graph planning", () => {
     }
 
     class DerivedNode extends OriginalNode {
-      static override readonly spec = serviceSpec<OriginalSpec>({
+      static override readonly spec = serviceSpec.effect<OriginalSpec>({
         tag: "services/derive-original",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<OriginalSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("derived")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("derived")),
       });
     }
 
@@ -1151,6 +1109,7 @@ describe("graph planning", () => {
 
   test("spec validation rejects duplicate originals and tag mismatches", () => {
     type OriginalSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1158,35 +1117,29 @@ describe("graph planning", () => {
     }>;
 
     class OriginalNode extends NodeBase<OriginalSpec> {
-      static readonly spec = serviceSpec<OriginalSpec>({
+      static readonly spec = serviceSpec.effect<OriginalSpec>({
         tag: "services/override-validation-original",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<OriginalSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("original")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("original")),
       });
     }
 
     class SameTagNode extends OriginalNode {
-      static override readonly spec = serviceSpec<OriginalSpec>({
+      static override readonly spec = serviceSpec.effect<OriginalSpec>({
         tag: "services/override-validation-original",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<OriginalSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("same")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("same")),
       });
     }
 
     class DifferentTagNode extends OriginalNode {
-      static override readonly spec = serviceSpec<OriginalSpec>({
+      static override readonly spec = serviceSpec.effect<OriginalSpec>({
         tag: "services/override-validation-different",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<OriginalSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("different")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("different")),
       });
     }
 
@@ -1207,6 +1160,7 @@ describe("graph planning", () => {
 
   test("spec validation rejects cycles at construction", () => {
     type FirstSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1214,24 +1168,20 @@ describe("graph planning", () => {
     }>;
 
     class FirstNode extends NodeBase<FirstSpec> {
-      static readonly spec = serviceSpec<FirstSpec>({
+      static readonly spec = serviceSpec.effect<FirstSpec>({
         tag: "services/override-cycle",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<FirstSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("first")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("first")),
       });
     }
 
     class SecondNode extends FirstNode {
-      static override readonly spec = serviceSpec<FirstSpec>({
+      static override readonly spec = serviceSpec.effect<FirstSpec>({
         tag: "services/override-cycle",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<FirstSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("second")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("second")),
       });
     }
 

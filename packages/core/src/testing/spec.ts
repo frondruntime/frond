@@ -1,31 +1,34 @@
+// Public core types are imported from the package name so the emitted testing
+// declaration rollup references `@frondruntime/core` instead of duplicating
+// the main entry's types. Values keep their relative imports; type-only
+// imports are erased at runtime.
+import type * as Frond from "@frondruntime/core";
+import type {
+  DependenciesRecord,
+  FrondNode,
+  NodeDescriptor,
+  NodeSpec,
+  NodeSpecActions,
+  NodeSpecArgs,
+  NodeSpecClass,
+  NodeSpecDeclaredDeps,
+  NodeSpecInstance,
+  NodeSpecLike,
+  NodeSpecMode,
+  NodeSpecResult,
+  ResolvedDeps,
+} from "@frondruntime/core";
 import { Effect } from "effect";
-import type { Driver } from "../driver";
 import { createEffectDriver } from "../driver/effectDefinition";
-import {
-  type DependenciesRecord,
-  FROND_NODE_SPEC_BRAND,
-  type FrondNode,
-  FrondNodeSpecError,
-  type NodeDescriptor,
-  type NodeSpec,
-  type NodeSpecActions,
-  type NodeSpecArgs,
-  type NodeSpecClass,
-  type NodeSpecDeclaredDeps,
-  type NodeSpecInstance,
-  type NodeSpecLike,
-  type NodeSpecResult,
-  type ResolvedDeps,
-} from "../node";
-
-type AbstractConstructor = abstract new (...args: ReadonlyArray<never>) => object;
+import { dependencies, FrondNodeSpecError } from "../node";
+import { makeSpecOverrideClass } from "../node/specOverride";
 
 export interface MockSpecOverrides<
   TSpec extends NodeSpecLike,
   TDerivedDeps extends DependenciesRecord = NodeSpecDeclaredDeps<TSpec>,
 > {
   readonly driver?:
-    | Driver<
+    | Frond.Driver.Driver<
         FrondNode<
           NodeSpecArgs<TSpec>,
           ResolvedDeps<TDerivedDeps>,
@@ -41,6 +44,15 @@ export interface MockSpecOverrides<
   readonly dependencies?: ((args: NodeSpecArgs<TSpec>) => TDerivedDeps) | undefined;
 }
 
+/**
+ * Test-isolation spec override: swap the driver and/or SEVER the node's
+ * dependencies (`dependencies: () => ({})` or a reduced record) so a node
+ * under test boots without its real graph neighborhood.
+ *
+ * For production driver swaps that must keep the original dependency
+ * topology, use the public `specWithDriver` from `@frondruntime/core`
+ * instead — withDriver keeps deps; mockSpec severs them.
+ */
 export function mockSpec<
   TSpec extends NodeSpecLike,
   TDerivedDeps extends DependenciesRecord = NodeSpecDeclaredDeps<TSpec>,
@@ -49,6 +61,7 @@ export function mockSpec<
   overrides: MockSpecOverrides<TSpec, TDerivedDeps>
 ): NodeSpecClass<
   NodeSpec<{
+    readonly mode: NodeSpecMode<TSpec>;
     readonly args: NodeSpecArgs<TSpec>;
     readonly deps: TDerivedDeps;
     readonly result: NodeSpecResult<TSpec>;
@@ -64,6 +77,7 @@ export function readySpec<TSpec extends NodeSpecLike>(
   result: NodeSpecResult<TSpec>
 ): NodeSpecClass<
   NodeSpec<{
+    readonly mode: NodeSpecMode<TSpec>;
     readonly args: NodeSpecArgs<TSpec>;
     readonly deps: Record<string, never>;
     readonly result: NodeSpecResult<TSpec>;
@@ -86,7 +100,7 @@ export function readySpec<TSpec extends NodeSpecLike>(
       Record<string, never>
     >({
       acquire: () => Effect.succeed(result),
-    }) as unknown as Driver<
+    }) as unknown as Frond.Driver.Driver<
       FrondNode<
         NodeSpecArgs<TSpec>,
         ResolvedDeps<Record<string, never>>,
@@ -109,6 +123,7 @@ function specWithOverrides<
   overrides: MockSpecOverrides<TOriginal, TDerivedDeps>
 ): NodeSpecClass<
   NodeSpec<{
+    readonly mode: NodeSpecMode<TOriginal>;
     readonly args: NodeSpecArgs<TOriginal>;
     readonly deps: TDerivedDeps;
     readonly result: NodeSpecResult<TOriginal>;
@@ -120,6 +135,7 @@ function specWithOverrides<
 
   const descriptor = original.spec as NodeDescriptor<
     NodeSpec<{
+      readonly mode: NodeSpecMode<TOriginal>;
       readonly args: NodeSpecArgs<TOriginal>;
       readonly deps: NodeSpecDeclaredDeps<TOriginal>;
       readonly result: NodeSpecResult<TOriginal>;
@@ -130,22 +146,16 @@ function specWithOverrides<
     kind: descriptor.kind,
     tag: descriptor.tag,
     key: descriptor.key,
-    dependencies: overrides.dependencies ?? descriptor.dependencies,
+    dependencies:
+      overrides.dependencies === undefined
+        ? descriptor.dependencies
+        : dependencies(overrides.dependencies),
     driver: overrides.driver ?? descriptor.driver,
   };
-  Object.defineProperty(overrideDescriptor, FROND_NODE_SPEC_BRAND, {
-    configurable: false,
-    enumerable: false,
-    value: true,
-    writable: false,
-  });
 
-  abstract class SpecOverride extends (original as unknown as AbstractConstructor) {
-    static readonly spec = overrideDescriptor;
-  }
-
-  return SpecOverride as unknown as NodeSpecClass<
+  return makeSpecOverrideClass(original, overrideDescriptor) as unknown as NodeSpecClass<
     NodeSpec<{
+      readonly mode: NodeSpecMode<TOriginal>;
       readonly args: NodeSpecArgs<TOriginal>;
       readonly deps: TDerivedDeps;
       readonly result: NodeSpecResult<TOriginal>;

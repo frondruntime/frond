@@ -1,0 +1,6 @@
+engine biome(1.0)
+language js
+
+`Object.hasOwn($args)` as $m where {
+  register_diagnostic(span=$m, message="Hermes/React Native compat: Object.hasOwn is unavailable on consumer JS targets. Use Object.prototype.hasOwnProperty.call(obj, key).", severity="error")
+}

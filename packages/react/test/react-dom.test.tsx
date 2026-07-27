@@ -50,6 +50,7 @@ type Profile = {
 type EmptyArgs = Record<string, never>;
 
 type StringSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: EmptyArgs;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -57,6 +58,7 @@ type StringSpec = NodeSpec<{
 }>;
 
 type ProfileSpec<TArgs = EmptyArgs, TKey = Key.Singleton> = NodeSpec<{
+  readonly mode: "effect";
   readonly args: TArgs;
   readonly key: TKey;
   readonly deps: Record<string, never>;
@@ -66,13 +68,11 @@ type ProfileSpec<TArgs = EmptyArgs, TKey = Key.Singleton> = NodeSpec<{
 describe("React DOM adapter", () => {
   test("TestFrondProvider supplies a harness runtime and respects spec overrides", async () => {
     class TestingProviderNode extends NodeBase<StringSpec> {
-      static readonly spec = resourceSpec<StringSpec>({
+      static readonly spec = resourceSpec.effect<StringSpec>({
         tag: "react-dom/resources/testing-provider",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<StringSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("base")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("base")),
       });
     }
 
@@ -117,13 +117,11 @@ describe("React DOM adapter", () => {
     } satisfies Runtime.RuntimeSink;
 
     class StrictProviderNode extends NodeBase<StringSpec> {
-      static readonly spec = resourceSpec<StringSpec>({
+      static readonly spec = resourceSpec.effect<StringSpec>({
         tag: "react-dom/resources/strict-provider",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<StringSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
       });
     }
 
@@ -208,18 +206,16 @@ describe("React DOM adapter", () => {
     } satisfies Runtime.RuntimeSink;
 
     class ActivityProviderNode extends NodeBase<StringSpec> {
-      static readonly spec = resourceSpec<StringSpec>({
+      static readonly spec = resourceSpec.effect<StringSpec>({
         tag: "react-dom/resources/activity-provider",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<StringSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.sync(() => {
-              acquireCount += 1;
-              return `ready-${acquireCount}`;
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.sync(() => {
+            acquireCount += 1;
+            return `ready-${acquireCount}`;
+          })
+        ),
       });
     }
 
@@ -270,18 +266,16 @@ describe("React DOM adapter", () => {
     let acquireCount = 0;
 
     class StableOptionsProviderNode extends NodeBase<StringSpec> {
-      static readonly spec = resourceSpec<StringSpec>({
+      static readonly spec = resourceSpec.effect<StringSpec>({
         tag: "react-dom/resources/stable-options-provider",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<StringSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.sync(() => {
-              acquireCount += 1;
-              return `ready-${acquireCount}`;
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.sync(() => {
+            acquireCount += 1;
+            return `ready-${acquireCount}`;
+          })
+        ),
       });
     }
 
@@ -327,13 +321,11 @@ describe("React DOM adapter", () => {
     const gate = await Effect.runPromise(Deferred.make<Profile>());
 
     class DomProfileNode extends NodeBase<ProfileSpec> {
-      static readonly spec = resourceSpec<ProfileSpec>({
+      static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/profile",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ProfileSpec>({
-          acquire: Driver.Acquire(() => Deferred.await(gate)),
-        }),
+        acquire: Driver.Acquire(() => Deferred.await(gate)),
       });
 
       get timezone(): string {
@@ -380,6 +372,7 @@ describe("React DOM adapter", () => {
 
   test("renders a ready node with canonical args larger than the key size cap", async () => {
     type LargeArgsSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly payload: string };
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -387,13 +380,11 @@ describe("React DOM adapter", () => {
     }>;
 
     class LargeArgsNode extends NodeBase<LargeArgsSpec> {
-      static readonly spec = resourceSpec<LargeArgsSpec>({
+      static readonly spec = resourceSpec.effect<LargeArgsSpec>({
         tag: "react-dom/resources/large-args",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<LargeArgsSpec>({
-          acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.args.payload.length.toString())),
-        }),
+        acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.args.payload.length.toString())),
       });
     }
     const View = () => {
@@ -427,13 +418,11 @@ describe("React DOM adapter", () => {
       >;
 
       class InlineCallbackNode extends NodeBase<InlineCallbackSpec> {
-        static readonly spec = resourceSpec<InlineCallbackSpec>({
+        static readonly spec = resourceSpec.effect<InlineCallbackSpec>({
           tag: "react-dom/resources/inline-callback-args",
           key: (args) => Key.structure({ id: args.id }),
           dependencies: dependencies(() => ({})),
-          driver: Driver.Effect<InlineCallbackSpec>({
-            acquire: Driver.Acquire(() => Effect.succeed({ timezone: "UTC" })),
-          }),
+          acquire: Driver.Acquire(() => Effect.succeed({ timezone: "UTC" })),
         });
       }
       let renderCount = 0;
@@ -507,19 +496,17 @@ describe("React DOM adapter", () => {
     let acquireCount = 0;
 
     class StrictColdBootNode extends NodeBase<ProfileSpec> {
-      static readonly spec = resourceSpec<ProfileSpec>({
+      static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/strict-cold-boot",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ProfileSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              acquireCount += 1;
-              yield* Deferred.succeed(started, undefined);
-              return yield* Deferred.await(gate);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            acquireCount += 1;
+            yield* Deferred.succeed(started, undefined);
+            return yield* Deferred.await(gate);
+          })
+        ),
       });
 
       get timezone(): string {
@@ -569,23 +556,21 @@ describe("React DOM adapter", () => {
 
     try {
       class ExpiredProfileNode extends NodeBase<ProfileSpec> {
-        static readonly spec = resourceSpec<ProfileSpec>({
+        static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/expired-profile",
           key: () => Key.singleton(),
           dependencies: dependencies(() => ({})),
-          driver: Driver.Effect<ProfileSpec>({
-            resultValidity: { _tag: "Manual" },
-            acquire: Driver.Acquire(() =>
-              Effect.succeed(
-                resultCommit(
-                  { timezone: "expired" },
-                  {
-                    validity: { _tag: "Expired", expiredAt: 10 },
-                  }
-                )
+          resultValidity: { _tag: "Manual" },
+          acquire: Driver.Acquire(() =>
+            Effect.succeed(
+              resultCommit(
+                { timezone: "expired" },
+                {
+                  validity: { _tag: "Expired", expiredAt: 10 },
+                }
               )
-            ),
-          }),
+            )
+          ),
         });
 
         get timezone(): string {
@@ -650,25 +635,23 @@ describe("React DOM adapter", () => {
     type FilteredProfileSpec = ProfileSpec<{ readonly filter: string }>;
 
     class FilteredProfileNode extends NodeBase<FilteredProfileSpec> {
-      static readonly spec = resourceSpec<FilteredProfileSpec>({
+      static readonly spec = resourceSpec.effect<FilteredProfileSpec>({
         tag: "react-dom/resources/filtered-profile",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<FilteredProfileSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.sync(() => ({
+        acquire: Driver.Acquire((ctx) =>
+          Effect.sync(() => ({
+            timezone: ctx.args.filter,
+          }))
+        ),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            yield* Deferred.await(refreshGate);
+            yield* ctx.setResult({
               timezone: ctx.args.filter,
-            }))
-          ),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              yield* Deferred.await(refreshGate);
-              yield* ctx.setResult({
-                timezone: ctx.args.filter,
-              });
-            })
-          ),
-        }),
+            });
+          })
+        ),
       });
 
       get label(): string {
@@ -728,19 +711,17 @@ describe("React DOM adapter", () => {
     let refreshCount = 0;
 
     class AttachWindowNode extends NodeBase<ProfileSpec> {
-      static readonly spec = resourceSpec<ProfileSpec>({
+      static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/attach-window",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ProfileSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ timezone: "initial" })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              refreshCount += 1;
-              yield* ctx.setResult({ timezone: `fresh-${refreshCount}` });
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ timezone: "initial" })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            refreshCount += 1;
+            yield* ctx.setResult({ timezone: `fresh-${refreshCount}` });
+          })
+        ),
       });
 
       get timezone(): string {
@@ -783,14 +764,12 @@ describe("React DOM adapter", () => {
     type FilteredSpec = ProfileSpec<{ readonly filter: string }>;
 
     class NoOpArgsProfileNode extends NodeBase<FilteredSpec> {
-      static readonly spec = resourceSpec<FilteredSpec>({
+      static readonly spec = resourceSpec.effect<FilteredSpec>({
         tag: "react-dom/resources/no-op-args-profile",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<FilteredSpec>({
-          acquire: Driver.Acquire((ctx) => Effect.sync(() => ({ timezone: ctx.args.filter }))),
-          refresh: Driver.Refresh((ctx) => ctx.setResult({ timezone: ctx.args.filter })),
-        }),
+        acquire: Driver.Acquire((ctx) => Effect.sync(() => ({ timezone: ctx.args.filter }))),
+        refresh: Driver.Refresh((ctx) => ctx.setResult({ timezone: ctx.args.filter })),
       });
 
       get label(): string {
@@ -849,14 +828,12 @@ describe("React DOM adapter", () => {
     type FilteredSpec = ProfileSpec<{ readonly filter: string }>;
 
     class NoOpArgsNodesProfileNode extends NodeBase<FilteredSpec> {
-      static readonly spec = resourceSpec<FilteredSpec>({
+      static readonly spec = resourceSpec.effect<FilteredSpec>({
         tag: "react-dom/resources/no-op-args-nodes-profile",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<FilteredSpec>({
-          acquire: Driver.Acquire((ctx) => Effect.sync(() => ({ timezone: ctx.args.filter }))),
-          refresh: Driver.Refresh((ctx) => ctx.setResult({ timezone: ctx.args.filter })),
-        }),
+        acquire: Driver.Acquire((ctx) => Effect.sync(() => ({ timezone: ctx.args.filter }))),
+        refresh: Driver.Refresh((ctx) => ctx.setResult({ timezone: ctx.args.filter })),
       });
 
       get label(): string {
@@ -916,18 +893,16 @@ describe("React DOM adapter", () => {
       let attempts = 0;
 
       class RetryProfileNode extends NodeBase<ProfileSpec> {
-        static readonly spec = resourceSpec<ProfileSpec>({
+        static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/retry-profile",
           key: () => Key.singleton(),
           dependencies: dependencies(() => ({})),
-          driver: Driver.Effect<ProfileSpec>({
-            acquire: Driver.Acquire(() => {
-              attempts += 1;
+          acquire: Driver.Acquire(() => {
+            attempts += 1;
 
-              return attempts === 1
-                ? Effect.fail(new Error("first acquire failed"))
-                : Effect.succeed({ timezone: "UTC" });
-            }),
+            return attempts === 1
+              ? Effect.fail(new Error("first acquire failed"))
+              : Effect.succeed({ timezone: "UTC" });
           }),
         });
 
@@ -995,18 +970,16 @@ describe("React DOM adapter", () => {
       let attempts = 0;
 
       class RecoverableProfileNode extends NodeBase<ProfileSpec> {
-        static readonly spec = resourceSpec<ProfileSpec>({
+        static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/recoverable-profile",
           key: () => Key.singleton(),
           dependencies: dependencies(() => ({})),
-          driver: Driver.Effect<ProfileSpec>({
-            acquire: Driver.Acquire(() => {
-              attempts += 1;
+          acquire: Driver.Acquire(() => {
+            attempts += 1;
 
-              return attempts === 1
-                ? Effect.fail(new Error("first acquire failed"))
-                : Effect.succeed({ timezone: "UTC" });
-            }),
+            return attempts === 1
+              ? Effect.fail(new Error("first acquire failed"))
+              : Effect.succeed({ timezone: "UTC" });
           }),
         });
 
@@ -1096,18 +1069,16 @@ describe("React DOM adapter", () => {
       let attempts = 0;
 
       class UnmountedRetryNode extends NodeBase<ProfileSpec> {
-        static readonly spec = resourceSpec<ProfileSpec>({
+        static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/unmounted-retry",
           key: () => Key.singleton(),
           dependencies: dependencies(() => ({})),
-          driver: Driver.Effect<ProfileSpec>({
-            acquire: Driver.Acquire(() => {
-              attempts += 1;
+          acquire: Driver.Acquire(() => {
+            attempts += 1;
 
-              return attempts === 2
-                ? Effect.fail(new Error("re-acquire failed"))
-                : Effect.succeed({ timezone: `ready-${attempts}` });
-            }),
+            return attempts === 2
+              ? Effect.fail(new Error("re-acquire failed"))
+              : Effect.succeed({ timezone: `ready-${attempts}` });
           }),
         });
 
@@ -1206,13 +1177,11 @@ describe("React DOM adapter", () => {
 
     try {
       class DecoratedErrorNode extends NodeBase<ProfileSpec> {
-        static readonly spec = resourceSpec<ProfileSpec>({
+        static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/decorated-error",
           key: () => Key.singleton(),
           dependencies: dependencies(() => ({})),
-          driver: Driver.Effect<ProfileSpec>({
-            acquire: Driver.Acquire(() => Effect.fail(new Error("backend 500"))),
-          }),
+          acquire: Driver.Acquire(() => Effect.fail(new Error("backend 500"))),
         });
       }
 
@@ -1285,24 +1254,22 @@ describe("React DOM adapter", () => {
     let refreshed = 0;
 
     class ControlsProfileNode extends NodeBase<ProfileSpec> {
-      static readonly spec = resourceSpec<ProfileSpec>({
+      static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/controls-profile",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ProfileSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.sync(() => {
-              acquired += 1;
-              return { timezone: `acquire-${acquired}` };
-            })
-          ),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.sync(() => {
-              refreshed += 1;
-              return ctx.setResult({ timezone: `refresh-${refreshed}` });
-            }).pipe(Effect.flatten)
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.sync(() => {
+            acquired += 1;
+            return { timezone: `acquire-${acquired}` };
+          })
+        ),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.sync(() => {
+            refreshed += 1;
+            return ctx.setResult({ timezone: `refresh-${refreshed}` });
+          }).pipe(Effect.flatten)
+        ),
       });
     }
 
@@ -1386,24 +1353,22 @@ describe("React DOM adapter", () => {
     >;
 
     class ControlsProfileNode extends NodeBase<ControlsProfileSpec> {
-      static readonly spec = resourceSpec<ControlsProfileSpec>({
+      static readonly spec = resourceSpec.effect<ControlsProfileSpec>({
         tag: "react-dom/resources/plural-controls-profile",
         key: (args) => Key.structure({ id: args.id }),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ControlsProfileSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.sync(() => ({
-              timezone: `${ctx.args.id}:acquire-${increment(acquired, ctx.args.id)}`,
-            }))
-          ),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.sync(() =>
-              ctx.setResult({
-                timezone: `${ctx.args.id}:refresh-${increment(refreshed, ctx.args.id)}`,
-              })
-            ).pipe(Effect.flatten)
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.sync(() => ({
+            timezone: `${ctx.args.id}:acquire-${increment(acquired, ctx.args.id)}`,
+          }))
+        ),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.sync(() =>
+            ctx.setResult({
+              timezone: `${ctx.args.id}:refresh-${increment(refreshed, ctx.args.id)}`,
+            })
+          ).pipe(Effect.flatten)
+        ),
       });
     }
 
@@ -1470,18 +1435,16 @@ describe("React DOM adapter", () => {
     let acquired = 0;
 
     class EvictedVisibleNode extends NodeBase<ProfileSpec> {
-      static readonly spec = resourceSpec<ProfileSpec>({
+      static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/evicted-visible",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ProfileSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.sync(() => {
-              acquired += 1;
-              return { timezone: `ready-${acquired}` };
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.sync(() => {
+            acquired += 1;
+            return { timezone: `ready-${acquired}` };
+          })
+        ),
       });
 
       get timezone(): string {
@@ -1538,18 +1501,16 @@ describe("React DOM adapter", () => {
     let acquired = 0;
 
     class StrictEvictedVisibleNode extends NodeBase<ProfileSpec> {
-      static readonly spec = resourceSpec<ProfileSpec>({
+      static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/strict-evicted-visible",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ProfileSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.sync(() => {
-              acquired += 1;
-              return { timezone: `ready-${acquired}` };
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.sync(() => {
+            acquired += 1;
+            return { timezone: `ready-${acquired}` };
+          })
+        ),
       });
 
       get timezone(): string {
@@ -1618,18 +1579,16 @@ describe("React DOM adapter", () => {
       let acquired = 0;
 
       class ActivityRevivalNode extends NodeBase<ProfileSpec> {
-        static readonly spec = resourceSpec<ProfileSpec>({
+        static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/activity-revival",
           key: () => Key.singleton(),
           dependencies: dependencies(() => ({})),
-          driver: Driver.Effect<ProfileSpec>({
-            acquire: Driver.Acquire(() =>
-              Effect.sync(() => {
-                acquired += 1;
-                return { timezone: `ready-${acquired}` };
-              })
-            ),
-          }),
+          acquire: Driver.Acquire(() =>
+            Effect.sync(() => {
+              acquired += 1;
+              return { timezone: `ready-${acquired}` };
+            })
+          ),
         });
 
         get timezone(): string {
@@ -1698,22 +1657,20 @@ describe("React DOM adapter", () => {
     type FilteredControlsSpec = ProfileSpec<{ readonly filter: string }>;
 
     class FilteredControlsNode extends NodeBase<FilteredControlsSpec> {
-      static readonly spec = resourceSpec<FilteredControlsSpec>({
+      static readonly spec = resourceSpec.effect<FilteredControlsSpec>({
         tag: "react-dom/resources/filtered-controls",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<FilteredControlsSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.succeed({
-              timezone: ctx.args.filter,
-            })
-          ),
-          refresh: Driver.Refresh((ctx) =>
-            ctx.setResult({
-              timezone: ctx.args.filter,
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.succeed({
+            timezone: ctx.args.filter,
+          })
+        ),
+        refresh: Driver.Refresh((ctx) =>
+          ctx.setResult({
+            timezone: ctx.args.filter,
+          })
+        ),
       });
     }
 
@@ -1783,22 +1740,20 @@ describe("React DOM adapter", () => {
     >;
 
     class KeyedControlsNode extends NodeBase<KeyedControlsSpec> {
-      static readonly spec = resourceSpec<KeyedControlsSpec>({
+      static readonly spec = resourceSpec.effect<KeyedControlsSpec>({
         tag: "react-dom/resources/keyed-controls",
         key: (args) => Key.structure({ id: args.id }),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<KeyedControlsSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.succeed({
-              timezone: ctx.args.filter,
-            })
-          ),
-          refresh: Driver.Refresh((ctx) =>
-            ctx.setResult({
-              timezone: ctx.args.filter,
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.succeed({
+            timezone: ctx.args.filter,
+          })
+        ),
+        refresh: Driver.Refresh((ctx) =>
+          ctx.setResult({
+            timezone: ctx.args.filter,
+          })
+        ),
       });
     }
 
@@ -1866,22 +1821,20 @@ describe("React DOM adapter", () => {
     type OvertakeControlsSpec = ProfileSpec<{ readonly filter: string }>;
 
     class OvertakeControlsNode extends NodeBase<OvertakeControlsSpec> {
-      static readonly spec = resourceSpec<OvertakeControlsSpec>({
+      static readonly spec = resourceSpec.effect<OvertakeControlsSpec>({
         tag: "react-dom/resources/overtake-controls",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<OvertakeControlsSpec>({
-          acquire: Driver.Acquire((ctx) => Effect.succeed({ timezone: ctx.args.filter })),
-          refresh: Driver.Refresh((ctx) =>
-            ctx.args.filter === "fail"
-              ? Effect.gen(function* () {
-                  yield* Deferred.succeed(failStarted, undefined);
-                  yield* Deferred.await(failGate);
-                  return yield* Effect.fail({ _tag: "RefreshRejected" });
-                })
-              : ctx.setResult({ timezone: ctx.args.filter })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) => Effect.succeed({ timezone: ctx.args.filter })),
+        refresh: Driver.Refresh((ctx) =>
+          ctx.args.filter === "fail"
+            ? Effect.gen(function* () {
+                yield* Deferred.succeed(failStarted, undefined);
+                yield* Deferred.await(failGate);
+                return yield* Effect.fail({ _tag: "RefreshRejected" });
+              })
+            : ctx.setResult({ timezone: ctx.args.filter })
+        ),
       });
     }
 
@@ -2014,18 +1967,16 @@ describe("React DOM adapter", () => {
     const gateB = await Effect.runPromise(Deferred.make<Profile>());
 
     class ParallelNodeA extends NodeBase<ProfileSpec> {
-      static readonly spec = resourceSpec<ProfileSpec>({
+      static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/parallel-a",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ProfileSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(startedA, undefined);
-              return yield* Deferred.await(gateA);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(startedA, undefined);
+            return yield* Deferred.await(gateA);
+          })
+        ),
       });
 
       get timezone(): string {
@@ -2034,18 +1985,16 @@ describe("React DOM adapter", () => {
     }
 
     class ParallelNodeB extends NodeBase<ProfileSpec> {
-      static readonly spec = resourceSpec<ProfileSpec>({
+      static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/parallel-b",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ProfileSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(startedB, undefined);
-              return yield* Deferred.await(gateB);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(startedB, undefined);
+            return yield* Deferred.await(gateB);
+          })
+        ),
       });
 
       get timezone(): string {
@@ -2101,34 +2050,30 @@ describe("React DOM adapter", () => {
       let failingAttempts = 0;
 
       class GoodNode extends NodeBase<ProfileSpec> {
-        static readonly spec = resourceSpec<ProfileSpec>({
+        static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/use-nodes-good",
           key: () => Key.singleton(),
           dependencies: dependencies(() => ({})),
-          driver: Driver.Effect<ProfileSpec>({
-            acquire: Driver.Acquire(() =>
-              Effect.sync(() => {
-                goodAttempts += 1;
-                return { timezone: "good" };
-              })
-            ),
-          }),
+          acquire: Driver.Acquire(() =>
+            Effect.sync(() => {
+              goodAttempts += 1;
+              return { timezone: "good" };
+            })
+          ),
         });
       }
 
       class FailingNode extends NodeBase<ProfileSpec> {
-        static readonly spec = resourceSpec<ProfileSpec>({
+        static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/use-nodes-failing",
           key: () => Key.singleton(),
           dependencies: dependencies(() => ({})),
-          driver: Driver.Effect<ProfileSpec>({
-            acquire: Driver.Acquire(() =>
-              Effect.sync(() => {
-                failingAttempts += 1;
-                return Effect.fail(new Error("child failed"));
-              }).pipe(Effect.flatten)
-            ),
-          }),
+          acquire: Driver.Acquire(() =>
+            Effect.sync(() => {
+              failingAttempts += 1;
+              return Effect.fail(new Error("child failed"));
+            }).pipe(Effect.flatten)
+          ),
         });
       }
 
@@ -2174,25 +2119,23 @@ describe("React DOM adapter", () => {
     type FilteredNodesProfileSpec = ProfileSpec<{ readonly filter: string }>;
 
     class FilteredNodesProfileNode extends NodeBase<FilteredNodesProfileSpec> {
-      static readonly spec = resourceSpec<FilteredNodesProfileSpec>({
+      static readonly spec = resourceSpec.effect<FilteredNodesProfileSpec>({
         tag: "react-dom/resources/use-nodes-filtered-profile",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<FilteredNodesProfileSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.succeed({
+        acquire: Driver.Acquire((ctx) =>
+          Effect.succeed({
+            timezone: ctx.args.filter,
+          })
+        ),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            yield* Deferred.await(refreshGate);
+            yield* ctx.setResult({
               timezone: ctx.args.filter,
-            })
-          ),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              yield* Deferred.await(refreshGate);
-              yield* ctx.setResult({
-                timezone: ctx.args.filter,
-              });
-            })
-          ),
-        }),
+            });
+          })
+        ),
       });
 
       get label(): string {
@@ -2201,13 +2144,11 @@ describe("React DOM adapter", () => {
     }
 
     class StaticNodesProfileNode extends NodeBase<ProfileSpec> {
-      static readonly spec = resourceSpec<ProfileSpec>({
+      static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/use-nodes-static-profile",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ProfileSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ timezone: "static" })),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ timezone: "static" })),
       });
 
       get label(): string {
@@ -2266,18 +2207,16 @@ describe("React DOM adapter", () => {
     let acquired = 0;
 
     class StrictNodesEvictedNode extends NodeBase<ProfileSpec> {
-      static readonly spec = resourceSpec<ProfileSpec>({
+      static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/strict-nodes-evicted",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ProfileSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.sync(() => {
-              acquired += 1;
-              return { timezone: `ready-${acquired}` };
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.sync(() => {
+            acquired += 1;
+            return { timezone: `ready-${acquired}` };
+          })
+        ),
       });
 
       get timezone(): string {
@@ -2361,34 +2300,30 @@ describe("React DOM adapter", () => {
     const gateB = await Effect.runPromise(Deferred.make<Profile>());
 
     class PreloadLayerNodeA extends NodeBase<ProfileSpec> {
-      static readonly spec = resourceSpec<ProfileSpec>({
+      static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/preload-layer-a",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ProfileSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(startedA, undefined);
-              return yield* Deferred.await(gateA);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(startedA, undefined);
+            return yield* Deferred.await(gateA);
+          })
+        ),
       });
     }
 
     class PreloadLayerNodeB extends NodeBase<ProfileSpec> {
-      static readonly spec = resourceSpec<ProfileSpec>({
+      static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/preload-layer-b",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ProfileSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(startedB, undefined);
-              return yield* Deferred.await(gateB);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(startedB, undefined);
+            return yield* Deferred.await(gateB);
+          })
+        ),
       });
     }
 
@@ -2441,35 +2376,31 @@ describe("React DOM adapter", () => {
     let secondAttempts = 0;
 
     class FirstPreloadLayerNode extends NodeBase<ProfileSpec> {
-      static readonly spec = resourceSpec<ProfileSpec>({
+      static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/preload-first-layer",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ProfileSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(firstStarted, undefined);
-              return yield* Deferred.await(firstGate);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(firstStarted, undefined);
+            return yield* Deferred.await(firstGate);
+          })
+        ),
       });
     }
 
     class SecondPreloadLayerNode extends NodeBase<ProfileSpec> {
-      static readonly spec = resourceSpec<ProfileSpec>({
+      static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/preload-second-layer",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ProfileSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              secondAttempts += 1;
-              yield* Deferred.succeed(secondStarted, undefined);
-              return yield* Deferred.await(secondGate);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            secondAttempts += 1;
+            yield* Deferred.succeed(secondStarted, undefined);
+            return yield* Deferred.await(secondGate);
+          })
+        ),
       });
     }
 
@@ -2518,13 +2449,11 @@ describe("React DOM adapter", () => {
 
     try {
       class FailingPreloadNode extends NodeBase<ProfileSpec> {
-        static readonly spec = resourceSpec<ProfileSpec>({
+        static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/preload-failing",
           key: () => Key.singleton(),
           dependencies: dependencies(() => ({})),
-          driver: Driver.Effect<ProfileSpec>({
-            acquire: Driver.Acquire(() => Effect.fail(new Error("preload failed"))),
-          }),
+          acquire: Driver.Acquire(() => Effect.fail(new Error("preload failed"))),
         });
       }
 
@@ -2568,6 +2497,7 @@ describe("React DOM adapter", () => {
 
     try {
       type InvalidReadSpec = NodeSpec<{
+        readonly mode: "effect";
         readonly args: EmptyArgs;
         readonly key: Key.Singleton;
         readonly deps: {
@@ -2577,13 +2507,11 @@ describe("React DOM adapter", () => {
       }>;
 
       class InvalidReadNode extends NodeBase<InvalidReadSpec> {
-        static readonly spec = resourceSpec<InvalidReadSpec>({
+        static readonly spec = resourceSpec.effect<InvalidReadSpec>({
           tag: "react-dom/resources/invalid-read",
           key: () => Key.singleton(),
           dependencies: dependencies(() => ({ self: dep(InvalidReadNode, {}) })),
-          driver: Driver.Effect<InvalidReadSpec>({
-            acquire: Driver.Acquire(() => Effect.succeed({ timezone: "never" })),
-          }),
+          acquire: Driver.Acquire(() => Effect.succeed({ timezone: "never" })),
         });
       }
 
@@ -2629,13 +2557,11 @@ describe("React DOM adapter", () => {
 
     try {
       class StoppedRuntimeNode extends NodeBase<ProfileSpec> {
-        static readonly spec = resourceSpec<ProfileSpec>({
+        static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/stopped-runtime",
           key: () => Key.singleton(),
           dependencies: dependencies(() => ({})),
-          driver: Driver.Effect<ProfileSpec>({
-            acquire: Driver.Acquire(() => Effect.succeed({ timezone: "UTC" })),
-          }),
+          acquire: Driver.Acquire(() => Effect.succeed({ timezone: "UTC" })),
         });
       }
 
@@ -2682,19 +2608,17 @@ describe("React DOM adapter", () => {
     let attempts = 0;
 
     class PendingProfileNode extends NodeBase<ProfileSpec> {
-      static readonly spec = resourceSpec<ProfileSpec>({
+      static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/remount-pending",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ProfileSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              attempts += 1;
-              yield* Deferred.succeed(started, undefined);
-              return yield* Deferred.await(gate);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            attempts += 1;
+            yield* Deferred.succeed(started, undefined);
+            return yield* Deferred.await(gate);
+          })
+        ),
       });
 
       get timezone(): string {
@@ -2752,13 +2676,11 @@ describe("React DOM adapter", () => {
 
   test("provider runtime swap creates a new store and boots against the next runtime", async () => {
     class RuntimeSwapNode extends NodeBase<ProfileSpec> {
-      static readonly spec = resourceSpec<ProfileSpec>({
+      static readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/runtime-swap",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ProfileSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ timezone: "base" })),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ timezone: "base" })),
       });
 
       get timezone(): string {
@@ -2767,13 +2689,11 @@ describe("React DOM adapter", () => {
     }
 
     class RuntimeSwapOverrideNode extends RuntimeSwapNode {
-      static override readonly spec = resourceSpec<ProfileSpec>({
+      static override readonly spec = resourceSpec.effect<ProfileSpec>({
         tag: "react-dom/resources/runtime-swap",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ProfileSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ timezone: "override" })),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ timezone: "override" })),
       });
 
       get timezone(): string {
@@ -2828,13 +2748,11 @@ describe("React DOM adapter", () => {
 
     try {
       class StableNode extends NodeBase<ProfileSpec> {
-        static readonly spec = resourceSpec<ProfileSpec>({
+        static readonly spec = resourceSpec.effect<ProfileSpec>({
           tag: "react-dom/resources/stable-key-set",
           key: () => Key.singleton(),
           dependencies: dependencies(() => ({})),
-          driver: Driver.Effect<ProfileSpec>({
-            acquire: Driver.Acquire(() => Effect.succeed({ timezone: "UTC" })),
-          }),
+          acquire: Driver.Acquire(() => Effect.succeed({ timezone: "UTC" })),
         });
       }
 

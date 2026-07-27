@@ -20,26 +20,38 @@ export type {
 } from "./driver";
 export * as Driver from "./driver";
 export { resultCommit } from "./driver";
+export type { WithInternal } from "./envelope";
+export { carryInternal, internalOf, withInternal } from "./envelope";
 export * as Events from "./events";
 export * as Graph from "./graph";
+export { unwrapEffect, wrapPromise } from "./interop";
 export * as Key from "./keys";
 export * as MobX from "./mobx";
 export type {
+  AnyModeSpec,
+  AsyncModeSpec,
   Dep,
+  DependenciesRecord,
+  EffectModeSpec,
   FrondNode,
   NodeActions,
   NodeDescriptor,
   NodeSpec,
   NodeSpecActions,
   NodeSpecArgs,
+  NodeSpecClass,
   NodeSpecDeclaredDeps,
   NodeSpecInstance,
   NodeSpecKey,
   NodeSpecLike,
+  NodeSpecMode,
   NodeSpecResolvedDeps,
   NodeSpecResult,
   NodeTag,
   ResolvedDeps,
+  SpecWithDriverClass,
+  SpecWithDriverReplacement,
+  SpecWithDriverSpec,
 } from "./node";
 export {
   Args,
@@ -53,8 +65,13 @@ export {
   nodeSpec,
   resourceSpec,
   serviceSpec,
+  specWithDriver,
   tag,
 } from "./node";
 export * as Runtime from "./runtime";
 export { createRuntime, createRuntimeClient } from "./runtime";
+export type { RuntimeCoordinator, RuntimeLease } from "./runtimeCoordinator";
+export { createRuntimeCoordinator, FrondRuntimeBootSuperseded } from "./runtimeCoordinator";
 export * as Signals from "./signals";
+export type { TransitionOptions, TransitionOutcome, TransitionStep } from "./transition";
+export { createTransition, runTransition } from "./transition";

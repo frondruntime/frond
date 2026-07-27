@@ -10,44 +10,51 @@ function makeBag() {
     nodeId: "graph/test:v1:singleton" as NodeId,
     tag: "graph/test",
   } as unknown as GraphNodeCell;
-  const bag = makeOperationDisposers(cell, (_nodeId, _reason, failures) =>
-    Effect.sync(() => {
-      reported.push(...failures);
-    })
+  const bag = makeOperationDisposers(
+    cell,
+    (_nodeId, _reason, failures) =>
+      Effect.sync(() => {
+        reported.push(...failures);
+      }),
+    20
   );
 
-  return { bag, reported };
+  return { bag, cell, reported };
 }
 
 describe("operation disposers", () => {
   test("interrupt drain after ready hand-off runs nothing and keeps the ready disposer set", async () => {
-    const { bag } = makeBag();
+    const { bag, cell } = makeBag();
     const runs: Array<string> = [];
     bag.add(() => runs.push("acquired"));
 
-    const readyDisposers = bag.handOff();
+    const registry = bag.handOff();
     const failures = await Effect.runPromise(bag.drain("interrupt"));
 
     expect(failures).toEqual([]);
     expect(runs).toEqual([]);
-    expect(readyDisposers).toHaveLength(1);
 
-    for (const disposer of readyDisposers) {
-      disposer();
-    }
+    // The committed node still owns its disposers: the registry's teardown
+    // drain runs them.
+    const drainFailures = await Effect.runPromise(registry.drain(cell, 20));
 
+    expect(drainFailures).toEqual([]);
     expect(runs).toEqual(["acquired"]);
   });
 
-  test("late adds after hand-off accumulate into the ready disposer set instead of running", () => {
-    const { bag } = makeBag();
+  test("late adds after hand-off accumulate into the ready disposer registry instead of running", async () => {
+    const { bag, cell } = makeBag();
     const runs: Array<string> = [];
 
-    const readyDisposers = bag.handOff();
+    const registry = bag.handOff();
     bag.add(() => runs.push("late"));
 
     expect(runs).toEqual([]);
-    expect(readyDisposers).toHaveLength(1);
+
+    const drainFailures = await Effect.runPromise(registry.drain(cell, 20));
+
+    expect(drainFailures).toEqual([]);
+    expect(runs).toEqual(["late"]);
   });
 
   test("drain without hand-off runs collected disposers and settles late adds to run immediately", async () => {

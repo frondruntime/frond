@@ -140,6 +140,7 @@ describe("graph liveness", () => {
 
   test("graph observers unsubscribe independently and remain best-effort", async () => {
     type ObservableSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -153,20 +154,18 @@ describe("graph liveness", () => {
     }>;
 
     class ObservableNode extends NodeBase<ObservableSpec> {
-      static readonly spec = resourceSpec<ObservableSpec>({
+      static readonly spec = resourceSpec.effect<ObservableSpec>({
         tag: "graph/resources/observer-channel",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ObservableSpec>({
-          resultValidity: { _tag: "Manual" },
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          actions: {
-            setValidity: Driver.Action((ctx, input) => ctx.setResultValidity(input)),
-          },
-          live: Driver.Live({
-            start: () => Effect.fail(new Error("live observer channel failure")),
-            stop: () => Effect.void,
-          }),
+        resultValidity: { _tag: "Manual" },
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        actions: {
+          setValidity: Driver.Action((ctx, input) => ctx.setResultValidity(input)),
+        },
+        live: Driver.Live({
+          start: () => Effect.fail(new Error("live observer channel failure")),
+          stop: () => Effect.void,
         }),
       });
     }
@@ -432,6 +431,7 @@ describe("graph liveness", () => {
     const deliveries: Array<NodeLiveDemandSnapshot> = [];
     const cleanups: Array<string> = [];
     type PreReadyLiveSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -439,23 +439,21 @@ describe("graph liveness", () => {
     }>;
 
     class PreReadyLiveNode extends NodeBase<PreReadyLiveSpec> {
-      static readonly spec = resourceSpec<PreReadyLiveSpec>({
+      static readonly spec = resourceSpec.effect<PreReadyLiveSpec>({
         tag: "graph/resources/pre-ready-live",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<PreReadyLiveSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          live: Driver.Live({
-            start: (_ctx, demand) =>
-              Effect.sync(() => {
-                deliveries.push(demand);
-                return "live";
-              }),
-            stop: (_ctx, resource) =>
-              Effect.sync(() => {
-                cleanups.push(resource);
-              }),
-          }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        live: Driver.Live({
+          start: (_ctx, demand) =>
+            Effect.sync(() => {
+              deliveries.push(demand);
+              return "live";
+            }),
+          stop: (_ctx, resource) =>
+            Effect.sync(() => {
+              cleanups.push(resource);
+            }),
         }),
       });
     }
@@ -504,6 +502,7 @@ describe("graph liveness", () => {
     const failure = new Error("live unavailable after readiness");
     const observedFailures: Array<unknown> = [];
     type PreReadyFailingLiveSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -511,16 +510,14 @@ describe("graph liveness", () => {
     }>;
 
     class PreReadyFailingLiveNode extends NodeBase<PreReadyFailingLiveSpec> {
-      static readonly spec = resourceSpec<PreReadyFailingLiveSpec>({
+      static readonly spec = resourceSpec.effect<PreReadyFailingLiveSpec>({
         tag: "graph/resources/pre-ready-failing-live",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<PreReadyFailingLiveSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          live: Driver.Live({
-            start: () => Effect.fail(failure),
-            stop: () => Effect.void,
-          }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        live: Driver.Live({
+          start: () => Effect.fail(failure),
+          stop: () => Effect.void,
         }),
       });
     }
@@ -567,6 +564,7 @@ describe("graph liveness", () => {
     const deliveries: Array<NodeLiveDemandSnapshot> = [];
     const cleanups: Array<string> = [];
     type StableLiveSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -574,23 +572,21 @@ describe("graph liveness", () => {
     }>;
 
     class StableLiveNode extends NodeBase<StableLiveSpec> {
-      static readonly spec = resourceSpec<StableLiveSpec>({
+      static readonly spec = resourceSpec.effect<StableLiveSpec>({
         tag: "graph/resources/stable-live-demand",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<StableLiveSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          live: Driver.Live({
-            start: (_ctx, demand) =>
-              Effect.sync(() => {
-                deliveries.push(demand);
-                return "live";
-              }),
-            stop: (_ctx, resource) =>
-              Effect.sync(() => {
-                cleanups.push(resource);
-              }),
-          }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        live: Driver.Live({
+          start: (_ctx, demand) =>
+            Effect.sync(() => {
+              deliveries.push(demand);
+              return "live";
+            }),
+          stop: (_ctx, resource) =>
+            Effect.sync(() => {
+              cleanups.push(resource);
+            }),
         }),
       });
     }
@@ -650,6 +646,7 @@ describe("graph liveness", () => {
       [];
     const cleanups: Array<number> = [];
     type RestartingLiveSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -657,24 +654,22 @@ describe("graph liveness", () => {
     }>;
 
     class RestartingLiveNode extends NodeBase<RestartingLiveSpec> {
-      static readonly spec = resourceSpec<RestartingLiveSpec>({
+      static readonly spec = resourceSpec.effect<RestartingLiveSpec>({
         tag: "graph/resources/restarting-live-demand",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<RestartingLiveSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          live: Driver.Live({
-            start: (_ctx, demand) =>
-              Effect.sync(() => {
-                const runId = deliveries.length + 1;
-                deliveries.push({ runId, demand });
-                return runId;
-              }),
-            stop: (_ctx, runId) =>
-              Effect.sync(() => {
-                cleanups.push(runId);
-              }),
-          }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        live: Driver.Live({
+          start: (_ctx, demand) =>
+            Effect.sync(() => {
+              const runId = deliveries.length + 1;
+              deliveries.push({ runId, demand });
+              return runId;
+            }),
+          stop: (_ctx, runId) =>
+            Effect.sync(() => {
+              cleanups.push(runId);
+            }),
         }),
       });
     }
@@ -782,6 +777,7 @@ describe("graph liveness", () => {
       readonly demand: NodeLiveDemandSnapshot;
     }> = [];
     type UpdatingLiveSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -789,32 +785,30 @@ describe("graph liveness", () => {
     }>;
 
     class UpdatingLiveNode extends NodeBase<UpdatingLiveSpec> {
-      static readonly spec = resourceSpec<UpdatingLiveSpec>({
+      static readonly spec = resourceSpec.effect<UpdatingLiveSpec>({
         tag: "graph/resources/updating-live-demand",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<UpdatingLiveSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          live: Driver.Live({
-            start: (_ctx, demand) =>
-              Effect.sync(() => {
-                starts.push(demand);
-                return { id: starts.length, current: demand } satisfies LiveResourceRecord;
-              }),
-            update: (_ctx, resource, demand) =>
-              Effect.sync(() => {
-                updates.push(demand);
-                resource.current = demand;
-              }),
-            stop: (ctx, resource) =>
-              Effect.sync(() => {
-                stops.push({
-                  id: resource.id,
-                  reason: ctx.reason._tag,
-                  demand: resource.current,
-                });
-              }),
-          }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        live: Driver.Live({
+          start: (_ctx, demand) =>
+            Effect.sync(() => {
+              starts.push(demand);
+              return { id: starts.length, current: demand } satisfies LiveResourceRecord;
+            }),
+          update: (_ctx, resource, demand) =>
+            Effect.sync(() => {
+              updates.push(demand);
+              resource.current = demand;
+            }),
+          stop: (ctx, resource) =>
+            Effect.sync(() => {
+              stops.push({
+                id: resource.id,
+                reason: ctx.reason._tag,
+                demand: resource.current,
+              });
+            }),
         }),
       });
     }
@@ -912,6 +906,7 @@ describe("graph liveness", () => {
     const updates: Array<NodeLiveDemandSnapshot> = [];
     const stops: Array<{ readonly id: number; readonly reason: string }> = [];
     type UpdatingFailureSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -919,28 +914,26 @@ describe("graph liveness", () => {
     }>;
 
     class UpdatingFailureNode extends NodeBase<UpdatingFailureSpec> {
-      static readonly spec = resourceSpec<UpdatingFailureSpec>({
+      static readonly spec = resourceSpec.effect<UpdatingFailureSpec>({
         tag: "graph/resources/update-failure-live-demand",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<UpdatingFailureSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          live: Driver.Live({
-            start: (_ctx, demand) =>
-              Effect.sync(() => {
-                const resource = { id: starts.length + 1, demand } satisfies LiveResourceRecord;
-                starts.push(resource);
-                return resource;
-              }),
-            update: (_ctx, _resource, demand) =>
-              Effect.sync(() => {
-                updates.push(demand);
-              }).pipe(Effect.andThen(Effect.fail(cause))),
-            stop: (ctx, resource) =>
-              Effect.sync(() => {
-                stops.push({ id: resource.id, reason: ctx.reason._tag });
-              }),
-          }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        live: Driver.Live({
+          start: (_ctx, demand) =>
+            Effect.sync(() => {
+              const resource = { id: starts.length + 1, demand } satisfies LiveResourceRecord;
+              starts.push(resource);
+              return resource;
+            }),
+          update: (_ctx, _resource, demand) =>
+            Effect.sync(() => {
+              updates.push(demand);
+            }).pipe(Effect.andThen(Effect.fail(cause))),
+          stop: (ctx, resource) =>
+            Effect.sync(() => {
+              stops.push({ id: resource.id, reason: ctx.reason._tag });
+            }),
         }),
       });
     }
@@ -1012,6 +1005,7 @@ describe("graph liveness", () => {
 
   test("live start update and stop timeouts surface typed live failures", async () => {
     type StartTimeoutSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1019,16 +1013,14 @@ describe("graph liveness", () => {
     }>;
 
     class StartTimeoutNode extends NodeBase<StartTimeoutSpec> {
-      static readonly spec = resourceSpec<StartTimeoutSpec>({
+      static readonly spec = resourceSpec.effect<StartTimeoutSpec>({
         tag: "graph/resources/live-start-timeout",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<StartTimeoutSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          live: Driver.Live({
-            start: () => Effect.never,
-            stop: () => Effect.void,
-          }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        live: Driver.Live({
+          start: () => Effect.never,
+          stop: () => Effect.void,
         }),
       });
     }
@@ -1066,6 +1058,7 @@ describe("graph liveness", () => {
 
     const updateStops: Array<string> = [];
     type UpdateTimeoutSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1073,24 +1066,22 @@ describe("graph liveness", () => {
     }>;
 
     class UpdateTimeoutNode extends NodeBase<UpdateTimeoutSpec> {
-      static readonly spec = resourceSpec<UpdateTimeoutSpec>({
+      static readonly spec = resourceSpec.effect<UpdateTimeoutSpec>({
         tag: "graph/resources/live-update-timeout",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<UpdateTimeoutSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          live: Driver.Live({
-            start: (_ctx, demand) =>
-              Effect.succeed({
-                demand,
-                id: updateStops.length + 1,
-              }),
-            update: () => Effect.never,
-            stop: (ctx) =>
-              Effect.sync(() => {
-                updateStops.push(ctx.reason._tag);
-              }),
-          }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        live: Driver.Live({
+          start: (_ctx, demand) =>
+            Effect.succeed({
+              demand,
+              id: updateStops.length + 1,
+            }),
+          update: () => Effect.never,
+          stop: (ctx) =>
+            Effect.sync(() => {
+              updateStops.push(ctx.reason._tag);
+            }),
         }),
       });
     }
@@ -1135,6 +1126,7 @@ describe("graph liveness", () => {
     expect(updateStops).toEqual(["UpdateFailed"]);
 
     type StopTimeoutSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1142,16 +1134,14 @@ describe("graph liveness", () => {
     }>;
 
     class StopTimeoutNode extends NodeBase<StopTimeoutSpec> {
-      static readonly spec = resourceSpec<StopTimeoutSpec>({
+      static readonly spec = resourceSpec.effect<StopTimeoutSpec>({
         tag: "graph/resources/live-stop-timeout",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<StopTimeoutSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          live: Driver.Live({
-            start: () => Effect.succeed("live"),
-            stop: () => Effect.never,
-          }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        live: Driver.Live({
+          start: () => Effect.succeed("live"),
+          stop: () => Effect.never,
         }),
       });
     }
@@ -1247,6 +1237,7 @@ describe("graph liveness", () => {
     const cleanups: Array<{ readonly resource: string; readonly reason: string }> = [];
 
     type LiveSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1254,23 +1245,21 @@ describe("graph liveness", () => {
     }>;
 
     class LiveNode extends NodeBase<LiveSpec> {
-      static readonly spec = resourceSpec<LiveSpec>({
+      static readonly spec = resourceSpec.effect<LiveSpec>({
         tag: "graph/resources/live",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<LiveSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          live: Driver.Live({
-            start: (_ctx, demand) =>
-              Effect.sync(() => {
-                deliveries.push(demand);
-                return "live";
-              }),
-            stop: (ctx, resource) =>
-              Effect.sync(() => {
-                cleanups.push({ resource, reason: ctx.reason._tag });
-              }),
-          }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        live: Driver.Live({
+          start: (_ctx, demand) =>
+            Effect.sync(() => {
+              deliveries.push(demand);
+              return "live";
+            }),
+          stop: (ctx, resource) =>
+            Effect.sync(() => {
+              cleanups.push({ resource, reason: ctx.reason._tag });
+            }),
         }),
       });
     }
@@ -1315,6 +1304,7 @@ describe("graph liveness", () => {
     ): Promise<ReadonlyArray<{ readonly resource: string; readonly reason: string }>> {
       const cleanups: Array<{ readonly resource: string; readonly reason: string }> = [];
       type LiveResourceSpec = NodeSpec<{
+        readonly mode: "effect";
         readonly args: Record<string, never>;
         readonly key: Key.Singleton;
         readonly deps: Record<string, never>;
@@ -1322,19 +1312,17 @@ describe("graph liveness", () => {
       }>;
 
       class LiveResourceNode extends NodeBase<LiveResourceSpec> {
-        static readonly spec = resourceSpec<LiveResourceSpec>({
+        static readonly spec = resourceSpec.effect<LiveResourceSpec>({
           tag,
           key: () => Key.singleton(),
           dependencies: dependencies(() => ({})),
-          driver: Driver.Effect<LiveResourceSpec>({
-            acquire: Driver.Acquire(() => Effect.succeed("ready")),
-            live: Driver.Live({
-              start: () => Effect.succeed(tag),
-              stop: (ctx, resource) =>
-                Effect.sync(() => {
-                  cleanups.push({ resource, reason: ctx.reason._tag });
-                }),
-            }),
+          acquire: Driver.Acquire(() => Effect.succeed("ready")),
+          live: Driver.Live({
+            start: () => Effect.succeed(tag),
+            stop: (ctx, resource) =>
+              Effect.sync(() => {
+                cleanups.push({ resource, reason: ctx.reason._tag });
+              }),
           }),
         });
       }
@@ -1382,6 +1370,7 @@ describe("graph liveness", () => {
     const deliveries: Array<unknown> = [];
     const cleanups: Array<string> = [];
     type AsyncLiveSpec = NodeSpec<{
+      readonly mode: "async";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1389,21 +1378,19 @@ describe("graph liveness", () => {
     }>;
 
     class AsyncLiveNode extends NodeBase<AsyncLiveSpec> {
-      static readonly spec = resourceSpec<AsyncLiveSpec>({
+      static readonly spec = resourceSpec.async<AsyncLiveSpec>({
         tag: "graph/resources/async-live",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Async<AsyncLiveSpec>({
-          acquire: Driver.Acquire(async () => "ready"),
-          live: Driver.Live({
-            start: async (_ctx, demand) => {
-              deliveries.push(demand);
-              return "live";
-            },
-            stop: async (_ctx, resource) => {
-              cleanups.push(resource);
-            },
-          }),
+        acquire: Driver.Acquire(async () => "ready"),
+        live: Driver.Live({
+          start: async (_ctx, demand) => {
+            deliveries.push(demand);
+            return "live";
+          },
+          stop: async (_ctx, resource) => {
+            cleanups.push(resource);
+          },
         }),
       });
     }
@@ -1439,6 +1426,7 @@ describe("graph liveness", () => {
 
     const cause = new Error("async live rejected");
     type AsyncFailingLiveSpec = NodeSpec<{
+      readonly mode: "async";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1446,18 +1434,16 @@ describe("graph liveness", () => {
     }>;
 
     class AsyncFailingLiveNode extends NodeBase<AsyncFailingLiveSpec> {
-      static readonly spec = resourceSpec<AsyncFailingLiveSpec>({
+      static readonly spec = resourceSpec.async<AsyncFailingLiveSpec>({
         tag: "graph/resources/async-live-failure",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Async<AsyncFailingLiveSpec>({
-          acquire: Driver.Acquire(async () => "ready"),
-          live: Driver.Live({
-            start: async () => {
-              throw cause;
-            },
-            stop: async () => undefined,
-          }),
+        acquire: Driver.Acquire(async () => "ready"),
+        live: Driver.Live({
+          start: async () => {
+            throw cause;
+          },
+          stop: async () => undefined,
         }),
       });
     }
@@ -1507,6 +1493,7 @@ describe("graph liveness", () => {
     const updateStarted = await Effect.runPromise(Deferred.make<void>());
     const updateAborted = await Effect.runPromise(Deferred.make<void>());
     type AbortableUpdateSpec = NodeSpec<{
+      readonly mode: "async";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1514,32 +1501,30 @@ describe("graph liveness", () => {
     }>;
 
     class AbortableUpdateNode extends NodeBase<AbortableUpdateSpec> {
-      static readonly spec = resourceSpec<AbortableUpdateSpec>({
+      static readonly spec = resourceSpec.async<AbortableUpdateSpec>({
         tag: "graph/resources/abortable-live-update",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Async<AbortableUpdateSpec>({
-          acquire: Driver.Acquire(async () => "ready"),
-          live: Driver.Live({
-            start: async () => "live",
-            update: async (ctx) => {
-              await Effect.runPromise(Deferred.succeed(updateStarted, undefined));
-              await new Promise<void>((resolve) => {
-                const markAborted = () => {
-                  void Effect.runPromise(Deferred.succeed(updateAborted, undefined));
-                  resolve();
-                };
+        acquire: Driver.Acquire(async () => "ready"),
+        live: Driver.Live({
+          start: async () => "live",
+          update: async (ctx) => {
+            await Effect.runPromise(Deferred.succeed(updateStarted, undefined));
+            await new Promise<void>((resolve) => {
+              const markAborted = () => {
+                void Effect.runPromise(Deferred.succeed(updateAborted, undefined));
+                resolve();
+              };
 
-                if (ctx.signal.aborted) {
-                  markAborted();
-                  return;
-                }
+              if (ctx.signal.aborted) {
+                markAborted();
+                return;
+              }
 
-                ctx.signal.addEventListener("abort", markAborted, { once: true });
-              });
-            },
-            stop: async () => undefined,
-          }),
+              ctx.signal.addEventListener("abort", markAborted, { once: true });
+            });
+          },
+          stop: async () => undefined,
         }),
       });
     }
@@ -1575,6 +1560,7 @@ describe("graph liveness", () => {
     const stopStarted = await Effect.runPromise(Deferred.make<void>());
     const stopAborted = await Effect.runPromise(Deferred.make<void>());
     type AbortableStopSpec = NodeSpec<{
+      readonly mode: "async";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1582,31 +1568,29 @@ describe("graph liveness", () => {
     }>;
 
     class AbortableStopNode extends NodeBase<AbortableStopSpec> {
-      static readonly spec = resourceSpec<AbortableStopSpec>({
+      static readonly spec = resourceSpec.async<AbortableStopSpec>({
         tag: "graph/resources/abortable-live-stop",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Async<AbortableStopSpec>({
-          acquire: Driver.Acquire(async () => "ready"),
-          live: Driver.Live({
-            start: async () => "live",
-            stop: async (ctx) => {
-              await Effect.runPromise(Deferred.succeed(stopStarted, undefined));
-              await new Promise<void>((resolve) => {
-                const markAborted = () => {
-                  void Effect.runPromise(Deferred.succeed(stopAborted, undefined));
-                  resolve();
-                };
+        acquire: Driver.Acquire(async () => "ready"),
+        live: Driver.Live({
+          start: async () => "live",
+          stop: async (ctx) => {
+            await Effect.runPromise(Deferred.succeed(stopStarted, undefined));
+            await new Promise<void>((resolve) => {
+              const markAborted = () => {
+                void Effect.runPromise(Deferred.succeed(stopAborted, undefined));
+                resolve();
+              };
 
-                if (ctx.signal.aborted) {
-                  markAborted();
-                  return;
-                }
+              if (ctx.signal.aborted) {
+                markAborted();
+                return;
+              }
 
-                ctx.signal.addEventListener("abort", markAborted, { once: true });
-              });
-            },
-          }),
+              ctx.signal.addEventListener("abort", markAborted, { once: true });
+            });
+          },
         }),
       });
     }
@@ -1635,6 +1619,7 @@ describe("graph liveness", () => {
   test("live startup failure is stored and clears after later non-live cleanup", async () => {
     const cause = new Error("socket refused");
     type FailingLiveSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1642,16 +1627,14 @@ describe("graph liveness", () => {
     }>;
 
     class FailingLiveNode extends NodeBase<FailingLiveSpec> {
-      static readonly spec = resourceSpec<FailingLiveSpec>({
+      static readonly spec = resourceSpec.effect<FailingLiveSpec>({
         tag: "graph/resources/live-start-failure",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<FailingLiveSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          live: Driver.Live({
-            start: () => Effect.fail(cause),
-            stop: () => Effect.void,
-          }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        live: Driver.Live({
+          start: () => Effect.fail(cause),
+          stop: () => Effect.void,
         }),
       });
     }
@@ -1705,6 +1688,7 @@ describe("graph liveness", () => {
   test("live startup defects preserve Effect cause in typed failure", async () => {
     const cause = new TypeError("live died");
     type DefectLiveSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1712,16 +1696,14 @@ describe("graph liveness", () => {
     }>;
 
     class DefectLiveNode extends NodeBase<DefectLiveSpec> {
-      static readonly spec = resourceSpec<DefectLiveSpec>({
+      static readonly spec = resourceSpec.effect<DefectLiveSpec>({
         tag: "graph/resources/live-start-defect",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<DefectLiveSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          live: Driver.Live({
-            start: () => Effect.die(cause),
-            stop: () => Effect.void,
-          }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        live: Driver.Live({
+          start: () => Effect.die(cause),
+          stop: () => Effect.void,
         }),
       });
     }
@@ -1751,6 +1733,7 @@ describe("graph liveness", () => {
   test("live stop failure is returned and stored on release", async () => {
     const cause = new Error("unsubscribe failed");
     type LiveDisposeFailureSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1758,16 +1741,14 @@ describe("graph liveness", () => {
     }>;
 
     class LiveDisposeFailureNode extends NodeBase<LiveDisposeFailureSpec> {
-      static readonly spec = resourceSpec<LiveDisposeFailureSpec>({
+      static readonly spec = resourceSpec.effect<LiveDisposeFailureSpec>({
         tag: "graph/resources/live-dispose-failure",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<LiveDisposeFailureSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          live: Driver.Live({
-            start: () => Effect.succeed("live"),
-            stop: () => Effect.fail(cause),
-          }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        live: Driver.Live({
+          start: () => Effect.succeed("live"),
+          stop: () => Effect.fail(cause),
         }),
       });
     }
@@ -1804,6 +1785,7 @@ describe("graph liveness", () => {
   test("live failure observers are best-effort and do not fail lease commands", async () => {
     const cause = new Error("socket refused");
     type FailingLiveSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1811,16 +1793,14 @@ describe("graph liveness", () => {
     }>;
 
     class FailingLiveNode extends NodeBase<FailingLiveSpec> {
-      static readonly spec = resourceSpec<FailingLiveSpec>({
+      static readonly spec = resourceSpec.effect<FailingLiveSpec>({
         tag: "graph/resources/live-observer-failure",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<FailingLiveSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          live: Driver.Live({
-            start: () => Effect.fail(cause),
-            stop: () => Effect.void,
-          }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        live: Driver.Live({
+          start: () => Effect.fail(cause),
+          stop: () => Effect.void,
         }),
       });
     }
@@ -1852,6 +1832,7 @@ describe("graph liveness", () => {
       markStarted = resolve;
     });
     type HangingLiveSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1859,20 +1840,18 @@ describe("graph liveness", () => {
     }>;
 
     class HangingLiveNode extends NodeBase<HangingLiveSpec> {
-      static readonly spec = resourceSpec<HangingLiveSpec>({
+      static readonly spec = resourceSpec.effect<HangingLiveSpec>({
         tag: "graph/resources/live-start-interrupt",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<HangingLiveSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          live: Driver.Live({
-            start: (ctx) =>
-              Effect.sync(() => {
-                startSignal = ctx.signal;
-                markStarted();
-              }).pipe(Effect.flatMap(() => Effect.never)),
-            stop: () => Effect.void,
-          }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        live: Driver.Live({
+          start: (ctx) =>
+            Effect.sync(() => {
+              startSignal = ctx.signal;
+              markStarted();
+            }).pipe(Effect.flatMap(() => Effect.never)),
+          stop: () => Effect.void,
         }),
       });
     }

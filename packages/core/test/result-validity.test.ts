@@ -15,6 +15,7 @@ import {
   type NodeSpec,
   resourceSpec,
   resultCommit,
+  unwrapEffect,
 } from "./graphTestFixtures";
 
 describe("result validity", () => {
@@ -82,7 +83,7 @@ describe("result validity", () => {
     const handle = runtime.client.node(ActionPreservesValidityNode, {});
 
     await handle.ensureReady();
-    await handle.runAction("rename", { value: "renamed" });
+    await unwrapEffect(handle.action("rename", { value: "renamed" }));
 
     expect(handle.read()).toMatchObject({
       _tag: "Ready",
@@ -115,7 +116,7 @@ describe("result validity", () => {
     const handle = runtime.client.node(ActionExpiresNode, {});
 
     await handle.ensureReady();
-    await handle.runAction("expire");
+    await unwrapEffect(handle.action("expire"));
     const read = handle.read();
     const rawRead = runtime.client.__unsafe.readNode(handle.nodeId);
     const snapshot = await handle.snapshot();
@@ -155,7 +156,7 @@ describe("result validity", () => {
     const handle = runtime.client.node(ActionExpiresNode, {});
 
     await handle.ensureReady();
-    await handle.runAction("expire");
+    await unwrapEffect(handle.action("expire"));
     expect(handle.read()._tag).toBe("Idle");
     expect(runtime.client.__unsafe.readNode(handle.nodeId)).toMatchObject({ _tag: "Expired" });
 
@@ -190,7 +191,7 @@ describe("result validity", () => {
     await handle.ensureReady();
     const before = await handle.snapshot();
     await handle.acquireLiveLease("manual", { pair: "BTC/USD" });
-    await handle.runAction("expire");
+    await unwrapEffect(handle.action("expire"));
 
     await handle.ensureReady();
     const after = await handle.snapshot();
@@ -274,7 +275,7 @@ describe("result validity", () => {
     const handle = runtime.client.node(RefreshRejectedWhenExpiredNode, {});
 
     await handle.ensureReady();
-    await handle.runAction("expire");
+    await unwrapEffect(handle.action("expire"));
     const refresh = await handle.refresh();
 
     expect(refresh).toMatchObject({
@@ -328,7 +329,7 @@ describe("result validity", () => {
     const handle = runtime.client.node(FailingExpiredInvalidationNode, {});
 
     await handle.ensureReady();
-    await handle.runAction("expire");
+    await unwrapEffect(handle.action("expire"));
 
     await handle.ensureReady();
     const snapshot = await handle.snapshot();
@@ -436,7 +437,7 @@ describe("result validity", () => {
 
     await handle.ensureReady();
     await Effect.runPromise(Effect.sleep("60 millis"));
-    const action = await handle.runAction("touch");
+    const action = await unwrapEffect(handle.action("touch"));
 
     expect(action).toMatchObject({ _tag: "Failure" });
 
@@ -473,6 +474,7 @@ describe("result validity", () => {
 });
 
 type DefaultValiditySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -480,17 +482,16 @@ type DefaultValiditySpec = NodeSpec<{
 }>;
 
 class DefaultValidityNode extends NodeBase<DefaultValiditySpec> {
-  static readonly spec = resourceSpec<DefaultValiditySpec>({
+  static readonly spec = resourceSpec.effect<DefaultValiditySpec>({
     tag: "result-validity/default",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<DefaultValiditySpec>({
-      acquire: Driver.Acquire(() => Effect.succeed({ value: "current" })),
-    }),
+    acquire: Driver.Acquire(() => Effect.succeed({ value: "current" })),
   });
 }
 
 type ManualStaleSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -498,27 +499,26 @@ type ManualStaleSpec = NodeSpec<{
 }>;
 
 class ManualStaleNode extends NodeBase<ManualStaleSpec> {
-  static readonly spec = resourceSpec<ManualStaleSpec>({
+  static readonly spec = resourceSpec.effect<ManualStaleSpec>({
     tag: "result-validity/manual-stale",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<ManualStaleSpec>({
-      resultValidity: { _tag: "Manual" },
-      acquire: Driver.Acquire(() =>
-        Effect.succeed(
-          resultCommit(
-            { value: "stale" },
-            {
-              validity: { _tag: "Stale", staleAt: 10 },
-            }
-          )
+    resultValidity: { _tag: "Manual" },
+    acquire: Driver.Acquire(() =>
+      Effect.succeed(
+        resultCommit(
+          { value: "stale" },
+          {
+            validity: { _tag: "Stale", staleAt: 10 },
+          }
         )
-      ),
-    }),
+      )
+    ),
   });
 }
 
 type BareCommitSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -526,17 +526,16 @@ type BareCommitSpec = NodeSpec<{
 }>;
 
 class BareCommitNode extends NodeBase<BareCommitSpec> {
-  static readonly spec = resourceSpec<BareCommitSpec>({
+  static readonly spec = resourceSpec.effect<BareCommitSpec>({
     tag: "result-validity/bare-commit",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<BareCommitSpec>({
-      acquire: Driver.Acquire(() => Effect.succeed({ result: { value: "domain" } })),
-    }),
+    acquire: Driver.Acquire(() => Effect.succeed({ result: { value: "domain" } })),
   });
 }
 
 type TimeBoundStaleSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -544,31 +543,30 @@ type TimeBoundStaleSpec = NodeSpec<{
 }>;
 
 class TimeBoundStaleNode extends NodeBase<TimeBoundStaleSpec> {
-  static readonly spec = resourceSpec<TimeBoundStaleSpec>({
+  static readonly spec = resourceSpec.effect<TimeBoundStaleSpec>({
     tag: "result-validity/time-bound-stale",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<TimeBoundStaleSpec>({
-      resultValidity: {
-        _tag: "TimeBound",
-        staleAfter: "1 millis",
-        expireAfter: "100000 weeks",
-      },
-      acquire: Driver.Acquire(() =>
-        Effect.succeed(
-          resultCommit(
-            { value: "time-bound-stale" },
-            {
-              loadedAt: 0,
-            }
-          )
+    resultValidity: {
+      _tag: "TimeBound",
+      staleAfter: "1 millis",
+      expireAfter: "100000 weeks",
+    },
+    acquire: Driver.Acquire(() =>
+      Effect.succeed(
+        resultCommit(
+          { value: "time-bound-stale" },
+          {
+            loadedAt: 0,
+          }
         )
-      ),
-    }),
+      )
+    ),
   });
 }
 
 type TimeBoundExpiredSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -576,26 +574,24 @@ type TimeBoundExpiredSpec = NodeSpec<{
 }>;
 
 class TimeBoundExpiredNode extends NodeBase<TimeBoundExpiredSpec> {
-  static readonly spec = resourceSpec<TimeBoundExpiredSpec>({
+  static readonly spec = resourceSpec.effect<TimeBoundExpiredSpec>({
     tag: "result-validity/time-bound-expired",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<TimeBoundExpiredSpec>({
-      resultValidity: {
-        _tag: "TimeBound",
-        expireAfter: "50 millis",
-      },
-      acquire: Driver.Acquire(() =>
-        Effect.succeed(
-          resultCommit(
-            { value: "time-bound-expired" },
-            {
-              loadedAt: 0,
-            }
-          )
+    resultValidity: {
+      _tag: "TimeBound",
+      expireAfter: "50 millis",
+    },
+    acquire: Driver.Acquire(() =>
+      Effect.succeed(
+        resultCommit(
+          { value: "time-bound-expired" },
+          {
+            loadedAt: 0,
+          }
         )
-      ),
-    }),
+      )
+    ),
   });
 }
 
@@ -603,6 +599,7 @@ let acquireAfterExpirationCount = 0;
 const actionExpiresLiveStarts: Array<unknown> = [];
 const actionExpiresLiveStops: Array<string> = [];
 type ActionExpiresSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -613,41 +610,40 @@ type ActionExpiresSpec = NodeSpec<{
 }>;
 
 class ActionExpiresNode extends NodeBase<ActionExpiresSpec> {
-  static readonly spec = resourceSpec<ActionExpiresSpec>({
+  static readonly spec = resourceSpec.effect<ActionExpiresSpec>({
     tag: "result-validity/action-expires",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<ActionExpiresSpec>({
-      resultValidity: { _tag: "Manual" },
-      acquire: Driver.Acquire(() => {
-        acquireAfterExpirationCount += 1;
+    resultValidity: { _tag: "Manual" },
+    acquire: Driver.Acquire(() => {
+      acquireAfterExpirationCount += 1;
 
-        return Effect.succeed({
-          value:
-            acquireAfterExpirationCount === 1
-              ? "current"
-              : `reacquired:${acquireAfterExpirationCount - 1}`,
-        });
-      }),
-      actions: {
-        expire: Driver.Action((ctx) => ctx.setResultValidity({ _tag: "Expired", expiredAt: 10 })),
-      },
-      live: Driver.Live({
-        start: (_ctx, demand) =>
-          Effect.sync(() => {
-            actionExpiresLiveStarts.push(demand);
-            return "live";
-          }),
-        stop: (ctx) =>
-          Effect.sync(() => {
-            actionExpiresLiveStops.push(ctx.reason._tag);
-          }),
-      }),
+      return Effect.succeed({
+        value:
+          acquireAfterExpirationCount === 1
+            ? "current"
+            : `reacquired:${acquireAfterExpirationCount - 1}`,
+      });
+    }),
+    actions: {
+      expire: Driver.Action((ctx) => ctx.setResultValidity({ _tag: "Expired", expiredAt: 10 })),
+    },
+    live: Driver.Live({
+      start: (_ctx, demand) =>
+        Effect.sync(() => {
+          actionExpiresLiveStarts.push(demand);
+          return "live";
+        }),
+      stop: (ctx) =>
+        Effect.sync(() => {
+          actionExpiresLiveStops.push(ctx.reason._tag);
+        }),
     }),
   });
 }
 
 type StaleRefreshFailureSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -655,29 +651,28 @@ type StaleRefreshFailureSpec = NodeSpec<{
 }>;
 
 class StaleRefreshFailureNode extends NodeBase<StaleRefreshFailureSpec> {
-  static readonly spec = resourceSpec<StaleRefreshFailureSpec>({
+  static readonly spec = resourceSpec.effect<StaleRefreshFailureSpec>({
     tag: "result-validity/stale-refresh-failure",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<StaleRefreshFailureSpec>({
-      resultValidity: { _tag: "Manual" },
-      acquire: Driver.Acquire(() =>
-        Effect.succeed(
-          resultCommit(
-            { value: "stale-before-refresh" },
-            {
-              validity: { _tag: "Stale", staleAt: 10 },
-            }
-          )
+    resultValidity: { _tag: "Manual" },
+    acquire: Driver.Acquire(() =>
+      Effect.succeed(
+        resultCommit(
+          { value: "stale-before-refresh" },
+          {
+            validity: { _tag: "Stale", staleAt: 10 },
+          }
         )
-      ),
-      refresh: Driver.Refresh(() => Effect.fail(new TypeError("stale refresh failed"))),
-    }),
+      )
+    ),
+    refresh: Driver.Refresh(() => Effect.fail(new TypeError("stale refresh failed"))),
   });
 }
 
 let expiredRefreshCalls = 0;
 type RefreshRejectedWhenExpiredSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -688,25 +683,24 @@ type RefreshRejectedWhenExpiredSpec = NodeSpec<{
 }>;
 
 class RefreshRejectedWhenExpiredNode extends NodeBase<RefreshRejectedWhenExpiredSpec> {
-  static readonly spec = resourceSpec<RefreshRejectedWhenExpiredSpec>({
+  static readonly spec = resourceSpec.effect<RefreshRejectedWhenExpiredSpec>({
     tag: "result-validity/refresh-rejected-when-expired",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<RefreshRejectedWhenExpiredSpec>({
-      resultValidity: { _tag: "Manual" },
-      acquire: Driver.Acquire(() => Effect.succeed({ value: "current" })),
-      refresh: Driver.Refresh(() => {
-        expiredRefreshCalls += 1;
-        return Effect.succeed({ value: "refreshed" });
-      }),
-      actions: {
-        expire: Driver.Action((ctx) => ctx.setResultValidity({ _tag: "Expired", expiredAt: 10 })),
-      },
+    resultValidity: { _tag: "Manual" },
+    acquire: Driver.Acquire(() => Effect.succeed({ value: "current" })),
+    refresh: Driver.Refresh(() => {
+      expiredRefreshCalls += 1;
+      return Effect.succeed({ value: "refreshed" });
     }),
+    actions: {
+      expire: Driver.Action((ctx) => ctx.setResultValidity({ _tag: "Expired", expiredAt: 10 })),
+    },
   });
 }
 
 type SoonExpiringInvalidationSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -714,17 +708,15 @@ type SoonExpiringInvalidationSpec = NodeSpec<{
 }>;
 
 class SoonExpiringInvalidationNode extends NodeBase<SoonExpiringInvalidationSpec> {
-  static readonly spec = resourceSpec<SoonExpiringInvalidationSpec>({
+  static readonly spec = resourceSpec.effect<SoonExpiringInvalidationSpec>({
     tag: "result-validity/soon-expiring-invalidation",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<SoonExpiringInvalidationSpec>({
-      resultValidity: {
-        _tag: "TimeBound",
-        expireAfter: "1 millis",
-      },
-      acquire: Driver.Acquire(() => Effect.succeed({ value: "current" })),
-    }),
+    resultValidity: {
+      _tag: "TimeBound",
+      expireAfter: "1 millis",
+    },
+    acquire: Driver.Acquire(() => Effect.succeed({ value: "current" })),
   });
 }
 
@@ -732,6 +724,7 @@ let expiryTeardownReleaseRuns = 0;
 let expiryTeardownDisposerRuns = 0;
 let expiryTeardownAcquireRuns = 0;
 type ExpiryTeardownSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -739,36 +732,35 @@ type ExpiryTeardownSpec = NodeSpec<{
 }>;
 
 class ExpiryTeardownNode extends NodeBase<ExpiryTeardownSpec> {
-  static readonly spec = resourceSpec<ExpiryTeardownSpec>({
+  static readonly spec = resourceSpec.effect<ExpiryTeardownSpec>({
     tag: "result-validity/expiry-teardown",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<ExpiryTeardownSpec>({
-      resultValidity: {
-        _tag: "TimeBound",
-        // Margin: wide enough that the post-re-acquire read is not racing the
-        // expiry clock, while the 50ms sleep still guarantees expiry.
-        expireAfter: "25 millis",
-      },
-      acquire: Driver.Acquire((ctx) =>
-        Effect.sync(() => {
-          expiryTeardownAcquireRuns += 1;
-          ctx.disposers.add(() => {
-            expiryTeardownDisposerRuns += 1;
-          });
-          return { value: `acquired:${expiryTeardownAcquireRuns}` };
-        })
-      ),
-      release: Driver.Release(() =>
-        Effect.sync(() => {
-          expiryTeardownReleaseRuns += 1;
-        })
-      ),
-    }),
+    resultValidity: {
+      _tag: "TimeBound",
+      // Margin: wide enough that the post-re-acquire read is not racing the
+      // expiry clock, while the 50ms sleep still guarantees expiry.
+      expireAfter: "25 millis",
+    },
+    acquire: Driver.Acquire((ctx) =>
+      Effect.sync(() => {
+        expiryTeardownAcquireRuns += 1;
+        ctx.disposers.add(() => {
+          expiryTeardownDisposerRuns += 1;
+        });
+        return { value: `acquired:${expiryTeardownAcquireRuns}` };
+      })
+    ),
+    release: Driver.Release(() =>
+      Effect.sync(() => {
+        expiryTeardownReleaseRuns += 1;
+      })
+    ),
   });
 }
 
 type ActionPreservesValiditySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -779,31 +771,30 @@ type ActionPreservesValiditySpec = NodeSpec<{
 }>;
 
 class ActionPreservesValidityNode extends NodeBase<ActionPreservesValiditySpec> {
-  static readonly spec = resourceSpec<ActionPreservesValiditySpec>({
+  static readonly spec = resourceSpec.effect<ActionPreservesValiditySpec>({
     tag: "result-validity/action-preserves-validity",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<ActionPreservesValiditySpec>({
-      resultValidity: { _tag: "Manual" },
-      acquire: Driver.Acquire(() =>
-        Effect.succeed(
-          resultCommit(
-            { value: "stale" },
-            {
-              validity: { _tag: "Stale", staleAt: 10 },
-            }
-          )
+    resultValidity: { _tag: "Manual" },
+    acquire: Driver.Acquire(() =>
+      Effect.succeed(
+        resultCommit(
+          { value: "stale" },
+          {
+            validity: { _tag: "Stale", staleAt: 10 },
+          }
         )
-      ),
-      actions: {
-        rename: Driver.Action((ctx, input) => ctx.setResult({ value: input.value })),
-      },
-    }),
+      )
+    ),
+    actions: {
+      rename: Driver.Action((ctx, input) => ctx.setResult({ value: input.value })),
+    },
   });
 }
 
 let failingInvalidationAcquireCount = 0;
 type FailingExpiredInvalidationSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -814,27 +805,26 @@ type FailingExpiredInvalidationSpec = NodeSpec<{
 }>;
 
 class FailingExpiredInvalidationNode extends NodeBase<FailingExpiredInvalidationSpec> {
-  static readonly spec = resourceSpec<FailingExpiredInvalidationSpec>({
+  static readonly spec = resourceSpec.effect<FailingExpiredInvalidationSpec>({
     tag: "result-validity/failing-expired-invalidation",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<FailingExpiredInvalidationSpec>({
-      resultValidity: { _tag: "Manual" },
-      acquire: Driver.Acquire(() => {
-        failingInvalidationAcquireCount += 1;
+    resultValidity: { _tag: "Manual" },
+    acquire: Driver.Acquire(() => {
+      failingInvalidationAcquireCount += 1;
 
-        return failingInvalidationAcquireCount === 1
-          ? Effect.succeed({ value: "current" })
-          : Effect.fail(new TypeError("expired invalidation acquire failed"));
-      }),
-      actions: {
-        expire: Driver.Action((ctx) => ctx.setResultValidity({ _tag: "Expired", expiredAt: 10 })),
-      },
+      return failingInvalidationAcquireCount === 1
+        ? Effect.succeed({ value: "current" })
+        : Effect.fail(new TypeError("expired invalidation acquire failed"));
     }),
+    actions: {
+      expire: Driver.Action((ctx) => ctx.setResultValidity({ _tag: "Expired", expiredAt: 10 })),
+    },
   });
 }
 
 type StaleDependencySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -842,27 +832,26 @@ type StaleDependencySpec = NodeSpec<{
 }>;
 
 class StaleDependencyNode extends NodeBase<StaleDependencySpec> {
-  static readonly spec = resourceSpec<StaleDependencySpec>({
+  static readonly spec = resourceSpec.effect<StaleDependencySpec>({
     tag: "result-validity/stale-dependency",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<StaleDependencySpec>({
-      resultValidity: { _tag: "Manual" },
-      acquire: Driver.Acquire(() =>
-        Effect.succeed(
-          resultCommit(
-            { value: "stale-dependency" },
-            {
-              validity: { _tag: "Stale", staleAt: 10 },
-            }
-          )
+    resultValidity: { _tag: "Manual" },
+    acquire: Driver.Acquire(() =>
+      Effect.succeed(
+        resultCommit(
+          { value: "stale-dependency" },
+          {
+            validity: { _tag: "Stale", staleAt: 10 },
+          }
         )
-      ),
-    }),
+      )
+    ),
   });
 }
 
 type DependentOnStaleDependencySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: {
@@ -872,19 +861,18 @@ type DependentOnStaleDependencySpec = NodeSpec<{
 }>;
 
 class DependentOnStaleDependencyNode extends NodeBase<DependentOnStaleDependencySpec> {
-  static readonly spec = resourceSpec<DependentOnStaleDependencySpec>({
+  static readonly spec = resourceSpec.effect<DependentOnStaleDependencySpec>({
     tag: "result-validity/dependent-on-stale",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({ dependency: dep(StaleDependencyNode, {}) })),
-    driver: Driver.Effect<DependentOnStaleDependencySpec>({
-      acquire: Driver.Acquire((ctx) =>
-        Effect.succeed({ value: `dependent:${ctx.deps.dependency.result.value}` })
-      ),
-    }),
+    acquire: Driver.Acquire((ctx) =>
+      Effect.succeed({ value: `dependent:${ctx.deps.dependency.result.value}` })
+    ),
   });
 }
 
 type ExpiredDependencySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -892,27 +880,26 @@ type ExpiredDependencySpec = NodeSpec<{
 }>;
 
 class ExpiredDependencyNode extends NodeBase<ExpiredDependencySpec> {
-  static readonly spec = resourceSpec<ExpiredDependencySpec>({
+  static readonly spec = resourceSpec.effect<ExpiredDependencySpec>({
     tag: "result-validity/expired-dependency",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<ExpiredDependencySpec>({
-      resultValidity: { _tag: "Manual" },
-      acquire: Driver.Acquire(() =>
-        Effect.succeed(
-          resultCommit(
-            { value: "expired-dependency" },
-            {
-              validity: { _tag: "Expired", expiredAt: 10 },
-            }
-          )
+    resultValidity: { _tag: "Manual" },
+    acquire: Driver.Acquire(() =>
+      Effect.succeed(
+        resultCommit(
+          { value: "expired-dependency" },
+          {
+            validity: { _tag: "Expired", expiredAt: 10 },
+          }
         )
-      ),
-    }),
+      )
+    ),
   });
 }
 
 type DependentOnExpiredDependencySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: {
@@ -922,19 +909,18 @@ type DependentOnExpiredDependencySpec = NodeSpec<{
 }>;
 
 class DependentOnExpiredDependencyNode extends NodeBase<DependentOnExpiredDependencySpec> {
-  static readonly spec = resourceSpec<DependentOnExpiredDependencySpec>({
+  static readonly spec = resourceSpec.effect<DependentOnExpiredDependencySpec>({
     tag: "result-validity/dependent-on-expired",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({ dependency: dep(ExpiredDependencyNode, {}) })),
-    driver: Driver.Effect<DependentOnExpiredDependencySpec>({
-      acquire: Driver.Acquire((ctx) =>
-        Effect.succeed({ value: `dependent:${ctx.deps.dependency.result.value}` })
-      ),
-    }),
+    acquire: Driver.Acquire((ctx) =>
+      Effect.succeed({ value: `dependent:${ctx.deps.dependency.result.value}` })
+    ),
   });
 }
 
 type InvalidPolicySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -942,23 +928,22 @@ type InvalidPolicySpec = NodeSpec<{
 }>;
 
 class InvalidPolicyNode extends NodeBase<InvalidPolicySpec> {
-  static readonly spec = resourceSpec<InvalidPolicySpec>({
+  static readonly spec = resourceSpec.effect<InvalidPolicySpec>({
     tag: "result-validity/invalid-policy",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<InvalidPolicySpec>({
-      resultValidity: {
-        _tag: "TimeBound",
-        staleAfter: "10 seconds",
-        expireAfter: "5 seconds",
-      },
-      acquire: Driver.Acquire(() => Effect.succeed({ value: "invalid" })),
-    }),
+    resultValidity: {
+      _tag: "TimeBound",
+      staleAfter: "10 seconds",
+      expireAfter: "5 seconds",
+    },
+    acquire: Driver.Acquire(() => Effect.succeed({ value: "invalid" })),
   });
 }
 
 let slowTimeBoundAcquireRuns = 0;
 type SlowTimeBoundAcquireSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -966,28 +951,27 @@ type SlowTimeBoundAcquireSpec = NodeSpec<{
 }>;
 
 class SlowTimeBoundAcquireNode extends NodeBase<SlowTimeBoundAcquireSpec> {
-  static readonly spec = resourceSpec<SlowTimeBoundAcquireSpec>({
+  static readonly spec = resourceSpec.effect<SlowTimeBoundAcquireSpec>({
     tag: "result-validity/slow-time-bound-acquire",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<SlowTimeBoundAcquireSpec>({
-      resultValidity: {
-        _tag: "TimeBound",
-        expireAfter: "40 millis",
-      },
-      acquire: Driver.Acquire(() =>
-        Effect.gen(function* () {
-          slowTimeBoundAcquireRuns += 1;
-          yield* Effect.sleep("80 millis");
-          return { value: "slow" };
-        })
-      ),
-    }),
+    resultValidity: {
+      _tag: "TimeBound",
+      expireAfter: "40 millis",
+    },
+    acquire: Driver.Acquire(() =>
+      Effect.gen(function* () {
+        slowTimeBoundAcquireRuns += 1;
+        yield* Effect.sleep("80 millis");
+        return { value: "slow" };
+      })
+    ),
   });
 }
 
 const argsUpdateAcquireSeen: Array<{ readonly page: number }> = [];
 type ArgsUpdateReacquireSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: { readonly page: number };
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -995,26 +979,25 @@ type ArgsUpdateReacquireSpec = NodeSpec<{
 }>;
 
 class ArgsUpdateReacquireNode extends NodeBase<ArgsUpdateReacquireSpec> {
-  static readonly spec = resourceSpec<ArgsUpdateReacquireSpec>({
+  static readonly spec = resourceSpec.effect<ArgsUpdateReacquireSpec>({
     tag: "result-validity/args-update-reacquire",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<ArgsUpdateReacquireSpec>({
-      resultValidity: {
-        _tag: "TimeBound",
-        expireAfter: "20 millis",
-      },
-      acquire: Driver.Acquire((ctx) =>
-        Effect.sync(() => {
-          argsUpdateAcquireSeen.push(ctx.args);
-          return { page: ctx.args.page };
-        })
-      ),
-    }),
+    resultValidity: {
+      _tag: "TimeBound",
+      expireAfter: "20 millis",
+    },
+    acquire: Driver.Acquire((ctx) =>
+      Effect.sync(() => {
+        argsUpdateAcquireSeen.push(ctx.args);
+        return { page: ctx.args.page };
+      })
+    ),
   });
 }
 
 type ClockExpiredDependencySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -1022,23 +1005,22 @@ type ClockExpiredDependencySpec = NodeSpec<{
 }>;
 
 class ClockExpiredDependencyNode extends NodeBase<ClockExpiredDependencySpec> {
-  static readonly spec = resourceSpec<ClockExpiredDependencySpec>({
+  static readonly spec = resourceSpec.effect<ClockExpiredDependencySpec>({
     tag: "result-validity/clock-expired-dependency",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<ClockExpiredDependencySpec>({
-      resultValidity: {
-        _tag: "TimeBound",
-        expireAfter: "20 millis",
-      },
-      acquire: Driver.Acquire(() => Effect.succeed({ value: "clock-expired-dependency" })),
-    }),
+    resultValidity: {
+      _tag: "TimeBound",
+      expireAfter: "20 millis",
+    },
+    acquire: Driver.Acquire(() => Effect.succeed({ value: "clock-expired-dependency" })),
   });
 }
 
 let clockExpiredDependencyRefreshRuns = 0;
 let clockExpiredDependencyActionRuns = 0;
 type DependentOnClockExpiredDependencySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: {
@@ -1051,29 +1033,28 @@ type DependentOnClockExpiredDependencySpec = NodeSpec<{
 }>;
 
 class DependentOnClockExpiredDependencyNode extends NodeBase<DependentOnClockExpiredDependencySpec> {
-  static readonly spec = resourceSpec<DependentOnClockExpiredDependencySpec>({
+  static readonly spec = resourceSpec.effect<DependentOnClockExpiredDependencySpec>({
     tag: "result-validity/dependent-on-clock-expired",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({ dependency: dep(ClockExpiredDependencyNode, {}) })),
-    driver: Driver.Effect<DependentOnClockExpiredDependencySpec>({
-      acquire: Driver.Acquire((ctx) =>
-        Effect.succeed({ value: `dependent:${ctx.deps.dependency.result.value}` })
-      ),
-      refresh: Driver.Refresh((ctx) => {
-        clockExpiredDependencyRefreshRuns += 1;
-        return ctx.setResult({ value: "refreshed" });
-      }),
-      actions: {
-        touch: Driver.Action((ctx) => {
-          clockExpiredDependencyActionRuns += 1;
-          return ctx.setResult({ value: "touched" });
-        }),
-      },
+    acquire: Driver.Acquire((ctx) =>
+      Effect.succeed({ value: `dependent:${ctx.deps.dependency.result.value}` })
+    ),
+    refresh: Driver.Refresh((ctx) => {
+      clockExpiredDependencyRefreshRuns += 1;
+      return ctx.setResult({ value: "refreshed" });
     }),
+    actions: {
+      touch: Driver.Action((ctx) => {
+        clockExpiredDependencyActionRuns += 1;
+        return ctx.setResult({ value: "touched" });
+      }),
+    },
   });
 }
 
 type InvalidCommitSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -1081,21 +1062,19 @@ type InvalidCommitSpec = NodeSpec<{
 }>;
 
 class InvalidCommitNode extends NodeBase<InvalidCommitSpec> {
-  static readonly spec = resourceSpec<InvalidCommitSpec>({
+  static readonly spec = resourceSpec.effect<InvalidCommitSpec>({
     tag: "result-validity/invalid-commit",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<InvalidCommitSpec>({
-      acquire: Driver.Acquire(() =>
-        Effect.succeed(
-          resultCommit(
-            { value: "invalid" },
-            {
-              loadedAt: Number.POSITIVE_INFINITY,
-            }
-          )
+    acquire: Driver.Acquire(() =>
+      Effect.succeed(
+        resultCommit(
+          { value: "invalid" },
+          {
+            loadedAt: Number.POSITIVE_INFINITY,
+          }
         )
-      ),
-    }),
+      )
+    ),
   });
 }

@@ -76,6 +76,7 @@ describe("graph eviction", () => {
   test("eviction interrupts active acquire and removes the graph record", async () => {
     const started = await Effect.runPromise(Deferred.make<void>());
     type HangingSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -83,18 +84,16 @@ describe("graph eviction", () => {
     }>;
 
     class HangingNode extends NodeBase<HangingSpec> {
-      static readonly spec = serviceSpec<HangingSpec>({
+      static readonly spec = serviceSpec.effect<HangingSpec>({
         tag: "services/evict-hanging",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<HangingSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(started, undefined);
-              return yield* Effect.never;
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined);
+            return yield* Effect.never;
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -133,6 +132,7 @@ describe("graph eviction", () => {
     let disposerRuns = 0;
     let lateDisposerRuns = 0;
     type InterruptedAcquireSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -140,23 +140,21 @@ describe("graph eviction", () => {
     }>;
 
     class InterruptedAcquireNode extends NodeBase<InterruptedAcquireSpec> {
-      static readonly spec = serviceSpec<InterruptedAcquireSpec>({
+      static readonly spec = serviceSpec.effect<InterruptedAcquireSpec>({
         tag: "services/evict-interrupted-acquire",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<InterruptedAcquireSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.gen(function* () {
-              acquireSignal = ctx.signal;
-              lateDisposers = (disposer) => ctx.disposers.add(disposer);
-              ctx.disposers.add(() => {
-                disposerRuns += 1;
-              });
-              yield* Deferred.succeed(started, undefined);
-              return yield* Effect.never;
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.gen(function* () {
+            acquireSignal = ctx.signal;
+            lateDisposers = (disposer) => ctx.disposers.add(disposer);
+            ctx.disposers.add(() => {
+              disposerRuns += 1;
+            });
+            yield* Deferred.succeed(started, undefined);
+            return yield* Effect.never;
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -197,6 +195,7 @@ describe("graph eviction", () => {
     let refreshSignal: AbortSignal | undefined;
     let refreshDisposerRuns = 0;
     type InterruptedRefreshSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -204,23 +203,21 @@ describe("graph eviction", () => {
     }>;
 
     class InterruptedRefreshNode extends NodeBase<InterruptedRefreshSpec> {
-      static readonly spec = serviceSpec<InterruptedRefreshSpec>({
+      static readonly spec = serviceSpec.effect<InterruptedRefreshSpec>({
         tag: "services/evict-interrupted-refresh",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<InterruptedRefreshSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              refreshSignal = ctx.signal;
-              ctx.disposers.add(() => {
-                refreshDisposerRuns += 1;
-              });
-              yield* Deferred.succeed(refreshStarted, undefined);
-              return yield* Effect.never;
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            refreshSignal = ctx.signal;
+            ctx.disposers.add(() => {
+              refreshDisposerRuns += 1;
+            });
+            yield* Deferred.succeed(refreshStarted, undefined);
+            return yield* Effect.never;
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -253,6 +250,7 @@ describe("graph eviction", () => {
     let actionSignal: AbortSignal | undefined;
     let actionDisposerRuns = 0;
     type InterruptedActionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -263,25 +261,23 @@ describe("graph eviction", () => {
     }>;
 
     class InterruptedActionNode extends NodeBase<InterruptedActionSpec> {
-      static readonly spec = serviceSpec<InterruptedActionSpec>({
+      static readonly spec = serviceSpec.effect<InterruptedActionSpec>({
         tag: "services/evict-interrupted-action",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<InterruptedActionSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-          actions: {
-            block: Driver.Action((ctx) =>
-              Effect.gen(function* () {
-                actionSignal = ctx.signal;
-                ctx.disposers.add(() => {
-                  actionDisposerRuns += 1;
-                });
-                yield* Deferred.succeed(actionStarted, undefined);
-                return yield* Effect.never;
-              })
-            ),
-          },
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        actions: {
+          block: Driver.Action((ctx) =>
+            Effect.gen(function* () {
+              actionSignal = ctx.signal;
+              ctx.disposers.add(() => {
+                actionDisposerRuns += 1;
+              });
+              yield* Deferred.succeed(actionStarted, undefined);
+              return yield* Effect.never;
+            })
+          ),
+        },
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -315,6 +311,7 @@ describe("graph eviction", () => {
     const refreshStarted = await Effect.runPromise(Deferred.make<void>());
     const refreshGate = await Effect.runPromise(Deferred.make<void>());
     type RefreshSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -322,20 +319,18 @@ describe("graph eviction", () => {
     }>;
 
     class RefreshNode extends NodeBase<RefreshSpec> {
-      static readonly spec = serviceSpec<RefreshSpec>({
+      static readonly spec = serviceSpec.effect<RefreshSpec>({
         tag: "services/evict-refresh",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<RefreshSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(refreshStarted, undefined);
-              yield* Deferred.await(refreshGate);
-              yield* ctx.setResult({ value: "late" });
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(refreshStarted, undefined);
+            yield* Deferred.await(refreshGate);
+            yield* ctx.setResult({ value: "late" });
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -379,6 +374,7 @@ describe("graph eviction", () => {
     const actionStarted = await Effect.runPromise(Deferred.make<void>());
     const actionGate = await Effect.runPromise(Deferred.make<void>());
     type ActionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -389,22 +385,20 @@ describe("graph eviction", () => {
     }>;
 
     class ActionNode extends NodeBase<ActionSpec> {
-      static readonly spec = serviceSpec<ActionSpec>({
+      static readonly spec = serviceSpec.effect<ActionSpec>({
         tag: "services/evict-action",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ActionSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-          actions: {
-            setValue: Driver.Action((ctx) =>
-              Effect.gen(function* () {
-                yield* Deferred.succeed(actionStarted, undefined);
-                yield* Deferred.await(actionGate);
-                yield* ctx.setResult({ value: "late" });
-              })
-            ),
-          },
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        actions: {
+          setValue: Driver.Action((ctx) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(actionStarted, undefined);
+              yield* Deferred.await(actionGate);
+              yield* ctx.setResult({ value: "late" });
+            })
+          ),
+        },
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -447,6 +441,7 @@ describe("graph eviction", () => {
     const refreshStarted = await Effect.runPromise(Deferred.make<void>());
     const refreshGate = await Effect.runPromise(Deferred.make<void>());
     type ArgsSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly page: number };
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -454,22 +449,20 @@ describe("graph eviction", () => {
     }>;
 
     class ArgsNode extends NodeBase<ArgsSpec> {
-      static readonly spec = serviceSpec<ArgsSpec>({
+      static readonly spec = serviceSpec.effect<ArgsSpec>({
         tag: "services/evict-args",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ArgsSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ page: 1 })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(refreshStarted, undefined);
-              yield* Deferred.await(refreshGate);
-              yield* ctx.setResult({
-                page: ctx.args.page,
-              });
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ page: 1 })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(refreshStarted, undefined);
+            yield* Deferred.await(refreshGate);
+            yield* ctx.setResult({
+              page: ctx.args.page,
+            });
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -513,6 +506,7 @@ describe("graph eviction", () => {
     let childAttempts = 0;
 
     type EvictedDependencySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -520,23 +514,22 @@ describe("graph eviction", () => {
     }>;
 
     class EvictedDependencyNode extends NodeBase<EvictedDependencySpec> {
-      static readonly spec = serviceSpec<EvictedDependencySpec>({
+      static readonly spec = serviceSpec.effect<EvictedDependencySpec>({
         tag: "services/evict-dependency-child",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<EvictedDependencySpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              childAttempts += 1;
-              yield* Deferred.succeed(childStarted, undefined);
-              return yield* Deferred.await(childGate);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            childAttempts += 1;
+            yield* Deferred.succeed(childStarted, undefined);
+            return yield* Deferred.await(childGate);
+          })
+        ),
       });
     }
 
     type EvictedDependencyRootSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -546,13 +539,11 @@ describe("graph eviction", () => {
     }>;
 
     class EvictedDependencyRoot extends NodeBase<EvictedDependencyRootSpec> {
-      static readonly spec = resourceSpec<EvictedDependencyRootSpec>({
+      static readonly spec = resourceSpec.effect<EvictedDependencyRootSpec>({
         tag: "resources/evict-dependency-root",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({ child: dep(EvictedDependencyNode, {}) })),
-        driver: Driver.Effect<EvictedDependencyRootSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("root")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("root")),
       });
     }
 
@@ -593,6 +584,7 @@ describe("graph eviction", () => {
     let childDisposerRuns = 0;
 
     type DependencySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -600,26 +592,25 @@ describe("graph eviction", () => {
     }>;
 
     class DependencyNode extends NodeBase<DependencySpec> {
-      static readonly spec = serviceSpec<DependencySpec>({
+      static readonly spec = serviceSpec.effect<DependencySpec>({
         tag: "services/dependent-evict-child",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<DependencySpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(childStarted, undefined);
-              const value = yield* Deferred.await(childGate);
-              ctx.disposers.add(() => {
-                childDisposerRuns += 1;
-              });
-              return value;
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(childStarted, undefined);
+            const value = yield* Deferred.await(childGate);
+            ctx.disposers.add(() => {
+              childDisposerRuns += 1;
+            });
+            return value;
+          })
+        ),
       });
     }
 
     type DependentSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -629,13 +620,11 @@ describe("graph eviction", () => {
     }>;
 
     class DependentNode extends NodeBase<DependentSpec> {
-      static readonly spec = resourceSpec<DependentSpec>({
+      static readonly spec = resourceSpec.effect<DependentSpec>({
         tag: "resources/dependent-evict-root",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({ child: dep(DependencyNode, {}) })),
-        driver: Driver.Effect<DependentSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("root")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("root")),
       });
     }
 
@@ -708,6 +697,7 @@ describe("graph eviction", () => {
 
   test("invalid planned nodes can be evicted", async () => {
     type InvalidKeySpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: { readonly value: number };
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -715,13 +705,11 @@ describe("graph eviction", () => {
     }>;
 
     class InvalidKeyNode extends NodeBase<InvalidKeySpec> {
-      static readonly spec = serviceSpec<InvalidKeySpec>({
+      static readonly spec = serviceSpec.effect<InvalidKeySpec>({
         tag: "services/evict-invalid",
         key: (args) => ({ value: args.value }) as never,
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<InvalidKeySpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
       });
     }
     const graph = makeInMemoryGraphSystem();
@@ -741,51 +729,48 @@ describe("graph eviction", () => {
 
   test("orders evicted nodes by dependency depth in a chain", async () => {
     type DepthLeafSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
     class DepthLeafNode extends NodeBase<DepthLeafSpec> {
-      static readonly spec = serviceSpec<DepthLeafSpec>({
+      static readonly spec = serviceSpec.effect<DepthLeafSpec>({
         tag: "services/depth-leaf",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<DepthLeafSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("leaf")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("leaf")),
       });
     }
     type DepthMidSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: { readonly leaf: Dep<typeof DepthLeafNode> };
       readonly result: string;
     }>;
     class DepthMidNode extends NodeBase<DepthMidSpec> {
-      static readonly spec = resourceSpec<DepthMidSpec>({
+      static readonly spec = resourceSpec.effect<DepthMidSpec>({
         tag: "resources/depth-mid",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({ leaf: dep(DepthLeafNode, {}) })),
-        driver: Driver.Effect<DepthMidSpec>({
-          acquire: Driver.Acquire((ctx) => Effect.succeed(`mid:${ctx.deps.leaf.result}`)),
-        }),
+        acquire: Driver.Acquire((ctx) => Effect.succeed(`mid:${ctx.deps.leaf.result}`)),
       });
     }
     type DepthTopSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: { readonly mid: Dep<typeof DepthMidNode> };
       readonly result: string;
     }>;
     class DepthTopNode extends NodeBase<DepthTopSpec> {
-      static readonly spec = resourceSpec<DepthTopSpec>({
+      static readonly spec = resourceSpec.effect<DepthTopSpec>({
         tag: "resources/depth-top",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({ mid: dep(DepthMidNode, {}) })),
-        driver: Driver.Effect<DepthTopSpec>({
-          acquire: Driver.Acquire((ctx) => Effect.succeed(`top:${ctx.deps.mid.result}`)),
-        }),
+        acquire: Driver.Acquire((ctx) => Effect.succeed(`top:${ctx.deps.mid.result}`)),
       });
     }
 
@@ -818,22 +803,22 @@ describe("graph eviction", () => {
 
   test("orders a diamond subgraph by dependency depth", async () => {
     type DiamondLeafSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
       readonly result: string;
     }>;
     class DiamondLeafNode extends NodeBase<DiamondLeafSpec> {
-      static readonly spec = serviceSpec<DiamondLeafSpec>({
+      static readonly spec = serviceSpec.effect<DiamondLeafSpec>({
         tag: "services/diamond-leaf",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<DiamondLeafSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("leaf")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("leaf")),
       });
     }
     type DiamondSideSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: { readonly leaf: Dep<typeof DiamondLeafNode> };
@@ -841,18 +826,17 @@ describe("graph eviction", () => {
     }>;
     const diamondSide = (tag: string) =>
       class extends NodeBase<DiamondSideSpec> {
-        static readonly spec = resourceSpec<DiamondSideSpec>({
+        static readonly spec = resourceSpec.effect<DiamondSideSpec>({
           tag,
           key: () => Key.singleton(),
           dependencies: dependencies(() => ({ leaf: dep(DiamondLeafNode, {}) })),
-          driver: Driver.Effect<DiamondSideSpec>({
-            acquire: Driver.Acquire((ctx) => Effect.succeed(`${tag}:${ctx.deps.leaf.result}`)),
-          }),
+          acquire: Driver.Acquire((ctx) => Effect.succeed(`${tag}:${ctx.deps.leaf.result}`)),
         });
       };
     const DiamondLeftNode = diamondSide("resources/diamond-left");
     const DiamondRightNode = diamondSide("resources/diamond-right");
     type DiamondTopSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -862,18 +846,16 @@ describe("graph eviction", () => {
       readonly result: string;
     }>;
     class DiamondTopNode extends NodeBase<DiamondTopSpec> {
-      static readonly spec = resourceSpec<DiamondTopSpec>({
+      static readonly spec = resourceSpec.effect<DiamondTopSpec>({
         tag: "resources/diamond-top",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({
           left: dep(DiamondLeftNode, {}),
           right: dep(DiamondRightNode, {}),
         })),
-        driver: Driver.Effect<DiamondTopSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.succeed(`top:${ctx.deps.left.result}:${ctx.deps.right.result}`)
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.succeed(`top:${ctx.deps.left.result}:${ctx.deps.right.result}`)
+        ),
       });
     }
 
@@ -908,6 +890,7 @@ describe("graph eviction", () => {
 
   test("release timeout during eviction returns cleanup failure and removes graph records", async () => {
     type HangingReleaseSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -915,14 +898,12 @@ describe("graph eviction", () => {
     }>;
 
     class HangingReleaseNode extends NodeBase<HangingReleaseSpec> {
-      static readonly spec = serviceSpec<HangingReleaseSpec>({
+      static readonly spec = serviceSpec.effect<HangingReleaseSpec>({
         tag: "services/evict-hanging-release",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<HangingReleaseSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          release: Driver.Release(() => Effect.never),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        release: Driver.Release(() => Effect.never),
       });
     }
     const graph = makeInMemoryGraphSystem({

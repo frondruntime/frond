@@ -19,6 +19,7 @@ import {
   Preload,
   useNode,
   useNodeControls,
+  useNodeRead,
   useNodeState,
   useNodes,
   useNodesControls,
@@ -29,18 +30,17 @@ type TransportResult = {
 };
 
 type TransportSpec = import("@frondruntime/core").NodeSpec<{
+  readonly mode: "effect";
   readonly args: Args.None;
   readonly key: Key.Singleton;
   readonly result: TransportResult;
 }>;
 
 class TransportNode extends NodeBase<TransportSpec> {
-  static readonly spec = serviceSpec<TransportSpec>({
+  static readonly spec = serviceSpec.effect<TransportSpec>({
     tag: tag("react-types/transport"),
     key: () => Key.singleton(),
-    driver: Driver.Effect<TransportSpec>({
-      acquire: Driver.Acquire(() => Effect.succeed({ token: "token" } satisfies TransportResult)),
-    }),
+    acquire: Driver.Acquire(() => Effect.succeed({ token: "token" } satisfies TransportResult)),
   });
 
   get bearer(): string {
@@ -65,6 +65,7 @@ type ProfileDeps = {
 };
 
 type ProfileSpec = import("@frondruntime/core").NodeSpec<{
+  readonly mode: "async";
   readonly args: ProfileArgs;
   readonly key: Key.Structure<{ readonly id: string }>;
   readonly deps: ProfileDeps;
@@ -87,16 +88,14 @@ const profileActions = {
 };
 
 class ProfileNode extends NodeBase<ProfileSpec> {
-  static readonly spec = resourceSpec<ProfileSpec>({
+  static readonly spec = resourceSpec.async<ProfileSpec, typeof profileActions>({
     tag: tag("react-types/profile"),
     key: (args) => Key.structure({ id: args.id }),
     dependencies: dependencies(() => ({
       transport: dep(TransportNode, Args.none),
     })),
-    driver: Driver.Async<ProfileSpec, typeof profileActions>({
-      acquire: Driver.Acquire((): ProfileResult => ({ name: "Ada" })),
-      actions: profileActions,
-    }),
+    acquire: Driver.Acquire((): ProfileResult => ({ name: "Ada" })),
+    actions: profileActions,
   });
 
   rename(name: string): Promise<{ readonly ok: true }> {
@@ -119,6 +118,17 @@ function ReactTypeContractProbe(): null {
     | import("@frondruntime/core").Graph.NodeOperationFailure
     | undefined;
   profileState.resultValidity satisfies import("@frondruntime/core").Graph.ResultValidity;
+
+  // Non-throwing read hook returns the tagged union to Match on inline.
+  const profileRead = useNodeRead(ProfileNode, { id: "profile-read" });
+  profileRead._tag satisfies "Unwired" | "Idle" | "Pending" | "Ready" | "Error";
+  if (profileRead._tag === "Ready") {
+    // Ready.result is definitively the declared result type — no `| undefined`
+    // arm to defend against — and Ready.node is the typed instance.
+    profileRead.result.name satisfies string;
+    profileRead.node satisfies ProfileNode;
+    profileRead.node.rename("Ada") satisfies Promise<{ readonly ok: true }>;
+  }
 
   // @ts-expect-error node state does not expose raw driver result separately
   profileState.result;

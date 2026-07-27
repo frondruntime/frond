@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import type { Disposer } from "../../driver";
 import type { GraphNodeCell } from "../cell/cellModel";
 import { phaseArgs } from "../cell/cellPhase";
 import { appendReadyDisposersState, commitReadyOperationState } from "../cell/cellTransitions";
@@ -13,7 +14,7 @@ export function commitReadyOperationResult(input: {
   readonly resultState: ResultState;
   readonly previousValidity: ResultValidity;
   readonly validityReason: ResultValidityChangedReason;
-  readonly operationDisposers: ReadonlyArray<() => void>;
+  readonly operationDisposers: ReadonlyArray<Disposer>;
 }): Effect.Effect<void> {
   return Effect.gen(function* () {
     const latest = yield* input.cell.state.get;
@@ -46,7 +47,7 @@ export function commitReadyOperationResult(input: {
 
 export function appendOperationDisposers(
   cell: GraphNodeCell,
-  operationDisposers: ReadonlyArray<() => void>
+  operationDisposers: ReadonlyArray<Disposer>
 ): Effect.Effect<void> {
   return operationDisposers.length === 0
     ? Effect.void

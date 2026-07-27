@@ -15,7 +15,8 @@ import {
   type LiveResourceStopReason,
   ReleaseFailed,
 } from "../types";
-import { runDisposers } from "./disposers";
+import { type InvokedDisposers, makeDisposerRegistry } from "./disposers";
+import { nodeCloseCancellation } from "./nodeLifetime";
 
 export interface ReadyTeardownTimeouts {
   readonly release: DriverOperationTimeoutMs;
@@ -33,14 +34,26 @@ export function teardownReadyData(
   liveStopReason: LiveResourceStopReason
 ): Effect.Effect<ReadonlyArray<GraphFailure>> {
   return Effect.gen(function* () {
+    // Node-lifetime signal: aborts exactly once, before driver teardown hooks
+    // run, so long-lived callbacks bound to ctx.nodeSignal quiesce first.
+    // AbortController.abort is idempotent for repeated teardown entries.
+    ready.nodeLifetime.abort(nodeCloseCancellation(liveStopReason));
     const liveFailures = yield* stopCurrentLiveResource(
       cell,
       ready.liveResource,
       timeouts.live,
       liveStopReason
     );
-    const releaseFailures = yield* runRelease(cell, ready.node, timeouts.release);
-    const disposerFailures = yield* runDisposers(cell, ready.disposers);
+    // Same incarnation, same once-only set: the release hook's own registry
+    // dedupes against the disposers this ready data collected, so a function
+    // reachable from both paths still runs exactly once per incarnation.
+    const releaseFailures = yield* runRelease(
+      cell,
+      ready.node,
+      timeouts.release,
+      ready.disposers.invoked
+    );
+    const disposerFailures = yield* ready.disposers.drain(cell, timeouts.release);
     closeReadyNode(ready.node);
     return [...liveFailures, ...releaseFailures, ...disposerFailures];
   });
@@ -79,7 +92,8 @@ function releasedGraphNodeState(
 function runRelease(
   cell: GraphNodeCell,
   node: object,
-  timeout: DriverOperationTimeoutMs
+  timeout: DriverOperationTimeoutMs,
+  invoked: InvokedDisposers
 ): Effect.Effect<ReadonlyArray<GraphFailure>> {
   const { release } = cell.descriptor.driver;
 
@@ -88,13 +102,15 @@ function runRelease(
   }
 
   const abortController = new AbortController();
-  const releaseDisposers: Array<() => void> = [];
+  // Sibling registry of the same incarnation: fresh list, shared invoked set,
+  // so release-hook disposers dedupe against everything the ready data ran.
+  const releaseDisposers = makeDisposerRegistry(invoked);
   const ctx = makeDisposeContext({
     node,
     abortController,
     disposers: {
       add: (disposer) => {
-        releaseDisposers.push(disposer);
+        releaseDisposers.add(disposer);
       },
     },
   });
@@ -118,7 +134,10 @@ function runRelease(
       "driver-release",
       (cause) => Effect.succeed([toReleaseFailed(cell, cause)])
     );
-    const disposerFailures = yield* runDisposers(cell, releaseDisposers);
+    // Release-hook disposers get the same drain semantics as ready-data
+    // disposers: bounded per disposer, and one registered during the drain
+    // still runs and is awaited.
+    const disposerFailures = yield* releaseDisposers.drain(cell, timeout);
 
     return [...releaseFailures, ...disposerFailures];
   });

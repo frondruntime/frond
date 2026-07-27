@@ -134,7 +134,9 @@ export function sameDependencyIds(
   }
 
   for (const key of leftKeys) {
-    if (!Object.hasOwn(right, key) || left[key] !== right[key]) {
+    // Object.prototype.hasOwnProperty.call instead of Object.hasOwn: consumer
+    // Hermes/React Native targets do not ship Object.hasOwn.
+    if (!Object.prototype.hasOwnProperty.call(right, key) || left[key] !== right[key]) {
       return false;
     }
   }

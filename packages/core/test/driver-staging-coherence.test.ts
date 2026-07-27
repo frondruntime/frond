@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Cause } from "effect";
-import { FrondNodeSpecError } from "../src/node";
+import { FrondNodeSpecError, nodeSpec } from "../src/node";
 import {
   AcquireFailed,
   type ActionContract,
@@ -307,15 +307,19 @@ describe("driver staging coherence", () => {
     expect((node?.result as PatchBox | undefined)?.value).toBe(1);
   });
 
-  test("unwrapped hook descriptors fail loudly at driver construction", () => {
+  test("unwrapped hook descriptors fail loudly at spec construction", () => {
     expect(() =>
-      Driver.Async({
+      nodeSpec.async({
+        tag: "staging/unwrapped-async" as never,
+        key: () => Key.singleton(),
         acquire: (() => "ready") as never,
       })
     ).toThrow(FrondNodeSpecError);
 
     expect(() =>
-      Driver.Effect({
+      nodeSpec.effect({
+        tag: "staging/unwrapped-effect" as never,
+        key: () => Key.singleton(),
         acquire: Driver.Acquire(() => Effect.succeed("ready")),
         refresh: (() => Effect.void) as never,
       })
@@ -370,6 +374,7 @@ describe("driver staging coherence", () => {
 type ResultShape = { readonly value: string };
 
 type AcquireStagedSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -377,42 +382,39 @@ type AcquireStagedSpec = NodeSpec<{
 }>;
 
 class AcquireStagedWithoutReturnNode extends NodeBase<AcquireStagedSpec> {
-  static readonly spec = serviceSpec<AcquireStagedSpec>({
+  static readonly spec = serviceSpec.effect<AcquireStagedSpec>({
     tag: "staging/acquire-staged",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<AcquireStagedSpec>({
-      resultValidity: { _tag: "Manual" },
-      acquire: Driver.Acquire((ctx) =>
-        Effect.gen(function* () {
-          yield* ctx.setResult({ value: "staged" });
-          yield* ctx.setResultValidity({ _tag: "Stale", staleAt: 10 });
-          return undefined as never;
-        })
-      ),
-    }),
+    resultValidity: { _tag: "Manual" },
+    acquire: Driver.Acquire((ctx) =>
+      Effect.gen(function* () {
+        yield* ctx.setResult({ value: "staged" });
+        yield* ctx.setResultValidity({ _tag: "Stale", staleAt: 10 });
+        return undefined as never;
+      })
+    ),
   });
 }
 
 class AcquireReturnPrecedenceNode extends NodeBase<AcquireStagedSpec> {
-  static readonly spec = serviceSpec<AcquireStagedSpec>({
+  static readonly spec = serviceSpec.effect<AcquireStagedSpec>({
     tag: "staging/acquire-return",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<AcquireStagedSpec>({
-      resultValidity: { _tag: "Manual" },
-      acquire: Driver.Acquire((ctx) =>
-        Effect.gen(function* () {
-          yield* ctx.setResult({ value: "staged" });
-          yield* ctx.setResultValidity({ _tag: "Stale", staleAt: 10 });
-          return { value: "returned" };
-        })
-      ),
-    }),
+    resultValidity: { _tag: "Manual" },
+    acquire: Driver.Acquire((ctx) =>
+      Effect.gen(function* () {
+        yield* ctx.setResult({ value: "staged" });
+        yield* ctx.setResultValidity({ _tag: "Stale", staleAt: 10 });
+        return { value: "returned" };
+      })
+    ),
   });
 }
 
 type RefreshStagingSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -420,43 +422,40 @@ type RefreshStagingSpec = NodeSpec<{
 }>;
 
 class RefreshStagedWithoutReturnNode extends NodeBase<RefreshStagingSpec> {
-  static readonly spec = serviceSpec<RefreshStagingSpec>({
+  static readonly spec = serviceSpec.effect<RefreshStagingSpec>({
     tag: "staging/refresh-staged",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<RefreshStagingSpec>({
-      resultValidity: { _tag: "Manual" },
-      acquire: Driver.Acquire(() => Effect.succeed({ value: "initial" })),
-      refresh: Driver.Refresh((ctx) =>
-        Effect.gen(function* () {
-          yield* ctx.setResult({ value: "staged" });
-          yield* ctx.setResultValidity({ _tag: "Stale", staleAt: 20 });
-        })
-      ),
-    }),
+    resultValidity: { _tag: "Manual" },
+    acquire: Driver.Acquire(() => Effect.succeed({ value: "initial" })),
+    refresh: Driver.Refresh((ctx) =>
+      Effect.gen(function* () {
+        yield* ctx.setResult({ value: "staged" });
+        yield* ctx.setResultValidity({ _tag: "Stale", staleAt: 20 });
+      })
+    ),
   });
 }
 
 class RefreshReturnPrecedenceNode extends NodeBase<RefreshStagingSpec> {
-  static readonly spec = serviceSpec<RefreshStagingSpec>({
+  static readonly spec = serviceSpec.effect<RefreshStagingSpec>({
     tag: "staging/refresh-return",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<RefreshStagingSpec>({
-      resultValidity: { _tag: "Manual" },
-      acquire: Driver.Acquire(() => Effect.succeed({ value: "initial" })),
-      refresh: Driver.Refresh((ctx) =>
-        Effect.gen(function* () {
-          yield* ctx.setResult({ value: "staged" });
-          yield* ctx.setResultValidity({ _tag: "Stale", staleAt: 20 });
-          return { value: "returned" } as never;
-        })
-      ),
-    }),
+    resultValidity: { _tag: "Manual" },
+    acquire: Driver.Acquire(() => Effect.succeed({ value: "initial" })),
+    refresh: Driver.Refresh((ctx) =>
+      Effect.gen(function* () {
+        yield* ctx.setResult({ value: "staged" });
+        yield* ctx.setResultValidity({ _tag: "Stale", staleAt: 20 });
+        return { value: "returned" } as never;
+      })
+    ),
   });
 }
 
 type ActionStagingSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -467,26 +466,25 @@ type ActionStagingSpec = NodeSpec<{
 }>;
 
 class ActionStagedWithoutReturnNode extends NodeBase<ActionStagingSpec> {
-  static readonly spec = serviceSpec<ActionStagingSpec>({
+  static readonly spec = serviceSpec.effect<ActionStagingSpec>({
     tag: "staging/action-staged",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<ActionStagingSpec>({
-      resultValidity: { _tag: "Manual" },
-      acquire: Driver.Acquire(() => Effect.succeed({ value: "initial" })),
-      actions: {
-        stage: Driver.Action((ctx) =>
-          Effect.gen(function* () {
-            yield* ctx.setResult({ value: "staged" });
-            yield* ctx.setResultValidity({ _tag: "Stale", staleAt: 30 });
-          })
-        ),
-      },
-    }),
+    resultValidity: { _tag: "Manual" },
+    acquire: Driver.Acquire(() => Effect.succeed({ value: "initial" })),
+    actions: {
+      stage: Driver.Action((ctx) =>
+        Effect.gen(function* () {
+          yield* ctx.setResult({ value: "staged" });
+          yield* ctx.setResultValidity({ _tag: "Stale", staleAt: 30 });
+        })
+      ),
+    },
   });
 }
 
 type ActionOutputOnlySpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -497,37 +495,33 @@ type ActionOutputOnlySpec = NodeSpec<{
 }>;
 
 class ActionOutputOnlyNode extends NodeBase<ActionOutputOnlySpec> {
-  static readonly spec = serviceSpec<ActionOutputOnlySpec>({
+  static readonly spec = serviceSpec.effect<ActionOutputOnlySpec>({
     tag: "staging/action-output-only",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<ActionOutputOnlySpec>({
-      acquire: Driver.Acquire(() => Effect.succeed({ value: "initial" })),
-      actions: {
-        count: Driver.Action(() => Effect.succeed(3)),
-      },
-    }),
+    acquire: Driver.Acquire(() => Effect.succeed({ value: "initial" })),
+    actions: {
+      count: Driver.Action(() => Effect.succeed(3)),
+    },
   });
 }
 
 class ActionOutputWithStagedResultNode extends NodeBase<ActionStagingSpec> {
-  static readonly spec = serviceSpec<ActionStagingSpec>({
+  static readonly spec = serviceSpec.effect<ActionStagingSpec>({
     tag: "staging/action-output-staged",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<ActionStagingSpec>({
-      resultValidity: { _tag: "Manual" },
-      acquire: Driver.Acquire(() => Effect.succeed({ value: "initial" })),
-      actions: {
-        stage: Driver.Action((ctx) =>
-          Effect.gen(function* () {
-            yield* ctx.setResult({ value: "staged" });
-            yield* ctx.setResultValidity({ _tag: "Stale", staleAt: 30 });
-            return { value: "returned" };
-          })
-        ),
-      },
-    }),
+    resultValidity: { _tag: "Manual" },
+    acquire: Driver.Acquire(() => Effect.succeed({ value: "initial" })),
+    actions: {
+      stage: Driver.Action((ctx) =>
+        Effect.gen(function* () {
+          yield* ctx.setResult({ value: "staged" });
+          yield* ctx.setResultValidity({ _tag: "Stale", staleAt: 30 });
+          return { value: "returned" };
+        })
+      ),
+    },
   });
 }
 
@@ -535,6 +529,7 @@ let timeBoundSourceAcquireRuns = 0;
 let timeBoundSourceRefreshRuns = 0;
 
 type TimeBoundSourceSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -546,36 +541,35 @@ type TimeBoundSourceSpec = NodeSpec<{
 }>;
 
 class TimeBoundSourceNode extends NodeBase<TimeBoundSourceSpec> {
-  static readonly spec = serviceSpec<TimeBoundSourceSpec>({
+  static readonly spec = serviceSpec.effect<TimeBoundSourceSpec>({
     tag: "staging/time-bound-source",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<TimeBoundSourceSpec>({
-      resultValidity: {
-        _tag: "TimeBound",
-        staleAfter: "10 minutes",
-        expireAfter: "20 minutes",
-      },
-      acquire: Driver.Acquire(() =>
-        Effect.sync(() => {
-          timeBoundSourceAcquireRuns += 1;
-          return { value: `source:${timeBoundSourceAcquireRuns}` };
-        })
-      ),
-      refresh: Driver.Refresh(() =>
-        Effect.sync(() => {
-          timeBoundSourceRefreshRuns += 1;
-        })
-      ),
-      actions: {
-        stale: Driver.Action((ctx) => ctx.setResultValidity({ _tag: "Stale", staleAt: 40 })),
-        expire: Driver.Action((ctx) => ctx.setResultValidity({ _tag: "Expired", expiredAt: 50 })),
-      },
-    }),
+    resultValidity: {
+      _tag: "TimeBound",
+      staleAfter: "10 minutes",
+      expireAfter: "20 minutes",
+    },
+    acquire: Driver.Acquire(() =>
+      Effect.sync(() => {
+        timeBoundSourceAcquireRuns += 1;
+        return { value: `source:${timeBoundSourceAcquireRuns}` };
+      })
+    ),
+    refresh: Driver.Refresh(() =>
+      Effect.sync(() => {
+        timeBoundSourceRefreshRuns += 1;
+      })
+    ),
+    actions: {
+      stale: Driver.Action((ctx) => ctx.setResultValidity({ _tag: "Stale", staleAt: 40 })),
+      expire: Driver.Action((ctx) => ctx.setResultValidity({ _tag: "Expired", expiredAt: 50 })),
+    },
   });
 }
 
 type TimeBoundDependentSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: {
@@ -588,20 +582,18 @@ type TimeBoundDependentSpec = NodeSpec<{
 }>;
 
 class TimeBoundDependentNode extends NodeBase<TimeBoundDependentSpec> {
-  static readonly spec = resourceSpec<TimeBoundDependentSpec>({
+  static readonly spec = resourceSpec.effect<TimeBoundDependentSpec>({
     tag: "staging/time-bound-dependent",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({
       source: dep(TimeBoundSourceNode, {}),
     })),
-    driver: Driver.Effect<TimeBoundDependentSpec>({
-      acquire: Driver.Acquire((ctx) =>
-        Effect.succeed({ value: `dependent:${ctx.deps.source.result.value}` })
-      ),
-      actions: {
-        readSource: Driver.Action((ctx) => ctx.refreshDep("source").pipe(Effect.asVoid)),
-      },
-    }),
+    acquire: Driver.Acquire((ctx) =>
+      Effect.succeed({ value: `dependent:${ctx.deps.source.result.value}` })
+    ),
+    actions: {
+      readSource: Driver.Action((ctx) => ctx.refreshDep("source").pipe(Effect.asVoid)),
+    },
   });
 }
 
@@ -610,6 +602,7 @@ class PatchBox {
 }
 
 type ClassPatchSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -621,52 +614,49 @@ type ClassPatchSpec = NodeSpec<{
 }>;
 
 class ClassPatchRejectedNode extends NodeBase<ClassPatchSpec> {
-  static readonly spec = serviceSpec<ClassPatchSpec>({
+  static readonly spec = serviceSpec.effect<ClassPatchSpec>({
     tag: "staging/class-patch-rejected",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<ClassPatchSpec>({
-      acquire: Driver.Acquire(() => Effect.succeed(new PatchBox(0))),
-      actions: {
-        mutate: Driver.Action((ctx) =>
-          ctx.patchResult((current) => {
-            current.value += 1;
-          })
-        ),
-        mutateThenFail: Driver.Action(() => Effect.fail({ _tag: "Unused" })),
-      },
-    }),
+    acquire: Driver.Acquire(() => Effect.succeed(new PatchBox(0))),
+    actions: {
+      mutate: Driver.Action((ctx) =>
+        ctx.patchResult((current) => {
+          current.value += 1;
+        })
+      ),
+      mutateThenFail: Driver.Action(() => Effect.fail({ _tag: "Unused" })),
+    },
   });
 }
 
 class ClassPatchSharedNode extends NodeBase<ClassPatchSpec> {
-  static readonly spec = serviceSpec<ClassPatchSpec>({
+  static readonly spec = serviceSpec.effect<ClassPatchSpec>({
     tag: "staging/class-patch-shared",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<ClassPatchSpec>({
-      resultPatch: { nonPlainClone: "share" },
-      acquire: Driver.Acquire(() => Effect.succeed(new PatchBox(0))),
-      actions: {
-        mutate: Driver.Action((ctx) =>
-          ctx.patchResult((current) => {
+    resultPatch: { nonPlainClone: "share" },
+    acquire: Driver.Acquire(() => Effect.succeed(new PatchBox(0))),
+    actions: {
+      mutate: Driver.Action((ctx) =>
+        ctx.patchResult((current) => {
+          current.value += 1;
+        })
+      ),
+      mutateThenFail: Driver.Action((ctx) =>
+        Effect.gen(function* () {
+          yield* ctx.patchResult((current) => {
             current.value += 1;
-          })
-        ),
-        mutateThenFail: Driver.Action((ctx) =>
-          Effect.gen(function* () {
-            yield* ctx.patchResult((current) => {
-              current.value += 1;
-            });
-            return yield* Effect.fail({ _tag: "AfterPatchFailure" });
-          })
-        ),
-      },
-    }),
+          });
+          return yield* Effect.fail({ _tag: "AfterPatchFailure" });
+        })
+      ),
+    },
   });
 }
 
 type TimeoutSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -674,35 +664,29 @@ type TimeoutSpec = NodeSpec<{
 }>;
 
 class DriverTimeoutNode extends NodeBase<TimeoutSpec> {
-  static readonly spec = serviceSpec<TimeoutSpec>({
+  static readonly spec = serviceSpec.effect<TimeoutSpec>({
     tag: "staging/driver-timeout",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<TimeoutSpec>({
-      acquire: Driver.Acquire(() => Effect.sleep("20 millis").pipe(Effect.timeout("1 millis"))),
-    }),
+    acquire: Driver.Acquire(() => Effect.sleep("20 millis").pipe(Effect.timeout("1 millis"))),
   });
 }
 
 class OperationTimeoutNode extends NodeBase<TimeoutSpec> {
-  static readonly spec = serviceSpec<TimeoutSpec>({
+  static readonly spec = serviceSpec.effect<TimeoutSpec>({
     tag: "staging/operation-timeout",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<TimeoutSpec>({
-      acquire: Driver.Acquire(() => Effect.sleep("50 millis").pipe(Effect.as("ready"))),
-    }),
+    acquire: Driver.Acquire(() => Effect.sleep("50 millis").pipe(Effect.as("ready"))),
   });
 }
 
 class ReleaseFailureNode extends NodeBase<TimeoutSpec> {
-  static readonly spec = serviceSpec<TimeoutSpec>({
+  static readonly spec = serviceSpec.effect<TimeoutSpec>({
     tag: "staging/release-failure",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<TimeoutSpec>({
-      acquire: Driver.Acquire(() => Effect.succeed("ready")),
-      release: Driver.Release(() => Effect.fail({ _tag: "ReleaseRejected" })),
-    }),
+    acquire: Driver.Acquire(() => Effect.succeed("ready")),
+    release: Driver.Release(() => Effect.fail({ _tag: "ReleaseRejected" })),
   });
 }

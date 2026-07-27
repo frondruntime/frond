@@ -16,6 +16,7 @@ export type ReactNodeSpec<
   TResult,
   TNode extends object,
 > = NodeSpec<{
+  readonly mode: Frond.Driver.DriverMode;
   readonly args: TArgs;
   readonly deps: TDeps;
   readonly result: TResult;

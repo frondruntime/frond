@@ -34,6 +34,16 @@ export interface GraphCellSubmitOptions {
    * It is intentionally not an Effect: admission cleanup must not park the cell permit.
    */
   readonly onComplete?: (() => void) | undefined;
+  /**
+   * Propagates awaiter interruption to the submission: interrupting the fiber
+   * that awaits the task claims the reply and interrupts the worker, so the
+   * operation's own interruption handling runs (e.g. an action's onInterrupt
+   * aborts its AbortSignal). Only single-owner operations may set this; a task
+   * shared by multiple awaiters (joined actions, deduped readiness, refreshes)
+   * must NOT be interruptible, or one awaiter leaving would abort work the
+   * others still need.
+   */
+  readonly interruptible?: boolean | undefined;
 }
 
 interface AcceptedGraphCellSubmission {
@@ -132,7 +142,25 @@ export function makeGraphCellActor(): Effect.Effect<GraphCellActor> {
           submission.fiber = yield* workerEffect.pipe(
             Effect.forkIn(scope, { startImmediately: true })
           );
-          return { await: Deferred.await(reply) };
+
+          // For a single-owner operation, propagate awaiter interruption to the
+          // submission: claiming the reply runs the operation's own interruption
+          // handling (an action aborts its AbortSignal) and interrupts the
+          // worker. Shared tasks (joined actions, deduped readiness, refreshes)
+          // omit the flag and keep running for their other awaiters.
+          const awaitReply =
+            options?.interruptible === true
+              ? Deferred.await(reply).pipe(
+                  Effect.onInterrupt(() =>
+                    submission.interruptOnce({
+                      _tag: "Interrupted",
+                      detail: "operation awaiter interrupted",
+                    })
+                  )
+                )
+              : Deferred.await(reply);
+
+          return { await: awaitReply };
         })
       );
 

@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import { isObservableObject } from "mobx";
 import type {
   AsyncAcquireDriverContext,
   AsyncDisposeContext,
@@ -33,6 +34,7 @@ export function makeDriverContext<TDeps extends object>(input: {
   readonly args: unknown;
   readonly deps: TDeps;
   readonly abortController: AbortController;
+  readonly nodeSignal: AbortSignal;
   readonly disposers: DisposerBag;
   readonly signals: RuntimeSignalAccess;
   readonly refreshDep: <K extends keyof TDeps & string>(
@@ -66,6 +68,9 @@ export function makeAcquireDriverContext<TDeps extends object>(input: {
   readonly args: unknown;
   readonly deps: TDeps;
   readonly abortController: AbortController;
+  // Contract: `abortController` is operation-scoped, `nodeSignal` spans the
+  // ready-node incarnation. See the ctx docs on DriverAcquireContext.
+  readonly nodeSignal: AbortSignal;
   readonly disposers: DisposerBag;
   readonly signals: RuntimeSignalAccess;
   readonly getCurrentResultState: () => ResultState;
@@ -129,6 +134,7 @@ export function makeAcquireDriverContext<TDeps extends object>(input: {
     args: input.args,
     deps: input.deps,
     signal: input.abortController.signal,
+    nodeSignal: input.nodeSignal,
     disposers: input.disposers,
     signals: input.signals,
     setResult: (next) =>
@@ -171,6 +177,7 @@ export function makeAcquireDriverContext<TDeps extends object>(input: {
     args: input.args,
     deps: input.deps,
     signal: input.abortController.signal,
+    nodeSignal: input.nodeSignal,
     disposers: input.disposers,
     signals: bridgeAsyncDriverSignals(input.signals),
     setResult,
@@ -190,36 +197,87 @@ function clonePatchableResult(
     return value.map((entry) => clonePatchableResult(entry, options, context));
   }
 
+  // MobX observable objects masquerade as plain objects (the dynamic proxy
+  // reports Object.prototype) while every own property forwards into the
+  // shared `$mobx` administration: a descriptor-copied "clone" is either a
+  // write-through alias (a failed operation leaks its staged writes into
+  // committed state) or a lying pseudo-observable carrying a foreign `$mobx`
+  // slot. They take the documented non-plain contract instead — authors pick
+  // staging semantics through `resultPatch.nonPlainClone`, and without it the
+  // patch fails loudly. Checked before the plain-object path on purpose.
+  if (typeof value === "object" && value !== null && isObservableObject(value)) {
+    return cloneNonPlainResult(value, options, context);
+  }
+
   if (isPlainObject(value)) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [
-        key,
-        clonePatchableResult(entry, options, context),
-      ])
-    );
+    // Copy EVERY own property — string and symbol keys, enumerable or not —
+    // and keep the original prototype (plain objects may be null-prototype).
+    // Enumerable string-keyed properties are patchable data and are staged by
+    // VALUE snapshot: data values are cloned recursively and accessors are
+    // evaluated into writable data slots, matching the historical
+    // staging-isolation semantics — a staged write must never travel through
+    // an original setter into committed state. Everything else (symbol-keyed
+    // slots such as the result envelope's internal, non-enumerable
+    // properties) is carried by reference with its original descriptor: those
+    // are identity-bearing internals, not patchable data, and cloning them
+    // would break or reject non-plain values like sockets and
+    // AbortControllers.
+    const descriptors = Object.getOwnPropertyDescriptors(value) as Record<
+      PropertyKey,
+      PropertyDescriptor
+    >;
+
+    for (const key of Reflect.ownKeys(descriptors)) {
+      const descriptor = descriptors[key];
+
+      if (descriptor === undefined || typeof key !== "string" || descriptor.enumerable !== true) {
+        continue;
+      }
+
+      if ("value" in descriptor) {
+        descriptor.value = clonePatchableResult(descriptor.value, options, context);
+        continue;
+      }
+
+      descriptors[key] = {
+        value: clonePatchableResult(descriptor.get?.call(value), options, context),
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      };
+    }
+
+    return Object.create(Object.getPrototypeOf(value), descriptors);
   }
 
   if (typeof value === "object" && value !== null) {
-    const nonPlainClone = options?.nonPlainClone;
-
-    if (nonPlainClone === "share") {
-      return value;
-    }
-
-    if (typeof nonPlainClone === "function") {
-      return nonPlainClone(value);
-    }
-
-    throw new GraphInvariantViolation({
-      nodeId: context.nodeId,
-      tag: context.tag,
-      invariant:
-        "driver patchResult requires resultPatch.nonPlainClone for non-plain result values",
-      cause: { constructorName: value.constructor?.name },
-    });
+    return cloneNonPlainResult(value, options, context);
   }
 
   return value;
+}
+
+function cloneNonPlainResult(
+  value: object,
+  options: ResultPatchOptions | undefined,
+  context: GraphNodeCell
+): unknown {
+  const nonPlainClone = options?.nonPlainClone;
+
+  if (nonPlainClone === "share") {
+    return value;
+  }
+
+  if (typeof nonPlainClone === "function") {
+    return nonPlainClone(value);
+  }
+
+  throw new GraphInvariantViolation({
+    nodeId: context.nodeId,
+    tag: context.tag,
+    invariant: "driver patchResult requires resultPatch.nonPlainClone for non-plain result values",
+    cause: { constructorName: value.constructor?.name },
+  });
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -237,7 +295,13 @@ function assertPatchableResult(
   options: ResultPatchOptions | undefined,
   context: GraphNodeCell
 ): void {
-  if (typeof value !== "object" || value === null || Array.isArray(value) || isPlainObject(value)) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return;
+  }
+
+  // Same classification as the clone path: a MobX observable is non-plain
+  // even when its proxy reports a plain prototype.
+  if (isPlainObject(value) && !isObservableObject(value)) {
     return;
   }
 

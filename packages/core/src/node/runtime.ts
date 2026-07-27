@@ -1,4 +1,4 @@
-import { Match } from "effect";
+import { Effect, Match } from "effect";
 import {
   makeObservable,
   observable,
@@ -7,6 +7,7 @@ import {
   runInAction,
   untracked,
 } from "mobx";
+import { type Disposer, type DriverMode, recoverDriverMode } from "../driver/types";
 import type { ActionResult } from "../graph/types";
 import type { KeyInput } from "../keys";
 import type {
@@ -16,6 +17,7 @@ import type {
   NodeSpec,
   NodeSpecActions,
   NodeSpecArgs,
+  NodeSpecMode,
   NodeSpecResolvedDeps,
   NodeSpecResult,
 } from "./types";
@@ -26,8 +28,14 @@ import type {
  * `super()` receives graph-owned ready state from a construction context. Direct
  * construction outside Frond throws, and closed ready nodes reject runtime-backed
  * reads/actions after release, eviction, or graph stop.
+ *
+ * The action mode is derived from the spec shape: declare
+ * `NodeSpec<{ mode: "effect"; ... }>` and extend `NodeBase<Spec>` — there is no
+ * second type argument, so the class can never disagree with the shape.
  */
-export class NodeBase<TSpec extends NodeSpec<{ readonly result?: unknown }>> {
+export class NodeBase<
+  TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
+> {
   private _nodeId: NodeId;
 
   private _tagSlot: string;
@@ -40,9 +48,11 @@ export class NodeBase<TSpec extends NodeSpec<{ readonly result?: unknown }>> {
 
   private _action: RuntimeActionExecutor;
 
+  private _actionEffect: RuntimeActionEffectExecutor;
+
   private _reportResultObserved: RuntimeResultObservationReporter;
 
-  private _addDisposer: (disposer: () => void) => void;
+  private _addDisposer: (disposer: Disposer) => void;
 
   private _resultObserved = false;
 
@@ -50,7 +60,12 @@ export class NodeBase<TSpec extends NodeSpec<{ readonly result?: unknown }>> {
 
   private _closed = false;
 
-  readonly actions: NodeActions<NodeSpecActions<TSpec>>;
+  // Internal action facade in the spec shape's declared mode. Effect nodes
+  // declare `NodeSpec<{ mode: "effect"; ... }>` so `this.actions` types as
+  // Effect-native with no second NodeBase type argument. Consumers of a node
+  // always get the authoritative mode from the static spec via
+  // `NodeSpecInstance`.
+  readonly actions: NodeActions<NodeSpecActions<TSpec>, NodeSpecMode<TSpec>>;
 
   constructor() {
     const construction = currentReadyNodeConstruction as
@@ -71,11 +86,20 @@ export class NodeBase<TSpec extends NodeSpec<{ readonly result?: unknown }>> {
     this._deps = construction.deps;
     this._result = construction.result;
     this._action = construction.action;
+    this._actionEffect = construction.actionEffect;
     this._reportResultObserved = construction.reportResultObserved;
     this._addDisposer = construction.addDisposer;
-    this.actions = makeActionFacade<NodeSpecActions<TSpec>>(
+    // One facade per node, in the driver's authored representation: effect nodes
+    // hand back Effects, async nodes hand back Promises. The runtime executes
+    // every action as an Effect internally either way. Runtime construction
+    // always goes through a validated node spec class, so the shared mode
+    // recovery finds the authored mode; exotic subclassing degrades to "async"
+    // rather than throwing during construction.
+    const runsAsEffect = recoverDriverMode(new.target) === "effect";
+    this.actions = makeActionFacade<NodeActions<NodeSpecActions<TSpec>, NodeSpecMode<TSpec>>>(
       declaredActionPredicate(new.target),
-      (name, input) => this._runAction(name, input)
+      (name, input) =>
+        runsAsEffect ? this._runActionEffect(name, input) : this._runAction(name, input)
     );
 
     makeObservable<NodeBase<TSpec>, "_args" | "_deps" | "_result">(this, {
@@ -134,6 +158,28 @@ export class NodeBase<TSpec extends NodeSpec<{ readonly result?: unknown }>> {
     );
   }
 
+  private _runActionEffect(name: string, input?: unknown): Effect.Effect<unknown, unknown> {
+    // Match the async channel's closed semantics, but stay Effect-native: a
+    // closed node fails the returned Effect rather than rejecting a Promise.
+    // Suspend so the closed check reads the node state at run time, not at the
+    // moment the Effect value is constructed.
+    return Effect.suspend((): Effect.Effect<unknown, unknown> => {
+      if (this._closed) {
+        return Effect.fail(new FrondNodeClosed(`action:${name}`));
+      }
+
+      return this._actionEffect(name, input).pipe(
+        Effect.flatMap((result) =>
+          Match.value(result).pipe(
+            Match.tag("Success", ({ value }) => Effect.succeed(value)),
+            Match.tag("Failure", ({ error }) => Effect.fail(error)),
+            Match.exhaustive
+          )
+        )
+      );
+    });
+  }
+
   /**
    * Reports field-level MobX observation as driver liveness demand.
    *
@@ -151,7 +197,7 @@ export class NodeBase<TSpec extends NodeSpec<{ readonly result?: unknown }>> {
    * Disposers registered here run when Frond closes this ready node, not when a
    * React component unmounts unless that unmount releases or evicts the node.
    */
-  protected onRuntimeClose(disposer: () => void): void {
+  protected onRuntimeClose(disposer: Disposer): void {
     this._assertOpen("runtime close disposer");
     this._addDisposer(disposer);
   }
@@ -226,15 +272,21 @@ export class NodeBase<TSpec extends NodeSpec<{ readonly result?: unknown }>> {
 }
 
 export type FrondNode<
-  TSpecOrArgs = NodeSpec<{ readonly result: unknown }>,
+  TSpecOrArgs = NodeSpec<{ readonly mode: DriverMode; readonly result: unknown }>,
   TDeps extends object = never,
   TResult = never,
   TActions extends ActionContracts = Record<string, never>,
+  TMode extends DriverMode = "async",
 > = [TDeps] extends [never]
-  ? NodeBase<TSpecOrArgs extends NodeSpec ? TSpecOrArgs : NodeSpec<{ readonly result: unknown }>>
+  ? NodeBase<
+      TSpecOrArgs extends NodeSpec
+        ? TSpecOrArgs
+        : NodeSpec<{ readonly mode: TMode; readonly result: unknown }>
+    >
   : TSpecOrArgs extends KeyInput
     ? NodeBase<
         NodeSpec<{
+          readonly mode: TMode;
           readonly args: TSpecOrArgs;
           readonly deps: TDeps;
           readonly result: TResult;
@@ -244,6 +296,11 @@ export type FrondNode<
     : never;
 
 export type RuntimeActionExecutor = (name: string, input?: unknown) => Promise<ActionResult>;
+
+export type RuntimeActionEffectExecutor = (
+  name: string,
+  input?: unknown
+) => Effect.Effect<ActionResult>;
 
 export type RuntimeResultObservationReporter = (scope: unknown, observed: boolean) => void;
 
@@ -260,8 +317,9 @@ export type RuntimeReadyNodeConstruction<TArgs, TDeps extends object, TResult> =
   readonly deps: TDeps;
   readonly result: TResult;
   readonly action: RuntimeActionExecutor;
+  readonly actionEffect: RuntimeActionEffectExecutor;
   readonly reportResultObserved: RuntimeResultObservationReporter;
-  readonly addDisposer: (disposer: () => void) => void;
+  readonly addDisposer: (disposer: Disposer) => void;
 };
 
 export type RuntimeReadyNodeUpdate<TArgs, TDeps extends object, TResult> = {
@@ -332,7 +390,9 @@ export function asRuntimeReadyNodeControl<TArgs, TDeps extends object, TResult>(
 // Protocol trap names the JavaScript runtime probes on arbitrary objects.
 // Returning a callable for "then" makes the facade a thenable, so awaiting it
 // never settles and dispatches a phantom action; "toJSON" fires on stringify.
-const PROTOCOL_PROPERTY_NAMES: ReadonlySet<string> = new Set([
+// Shared with the runtime client's handle-action proxy — one authoritative set
+// of trap names, even though the two proxies' dispatch policies differ.
+export const PROTOCOL_PROPERTY_NAMES: ReadonlySet<string> = new Set([
   "then",
   "catch",
   "finally",
@@ -368,10 +428,10 @@ function declaredActionPredicate(target: unknown): (name: string) => boolean {
   return (name) => read(name)._tag === "Found";
 }
 
-function makeActionFacade<TActions extends ActionContracts>(
+function makeActionFacade<TFacade extends object>(
   isDeclaredAction: (name: string) => boolean,
-  runAction: (name: string, input?: unknown) => Promise<unknown>
-): NodeActions<TActions> {
+  runAction: (name: string, input?: unknown) => unknown
+): TFacade {
   // Only declared action contract names dispatch. Every other property reads as
   // undefined so the facade is never mistaken for a thenable and never invents
   // phantom actions for protocol probes such as "then" or "toJSON".
@@ -386,5 +446,5 @@ function makeActionFacade<TActions extends ActionContracts>(
     has(_target, property) {
       return typeof property === "string" && isDeclaredAction(property);
     },
-  }) as NodeActions<TActions>;
+  }) as TFacade;
 }

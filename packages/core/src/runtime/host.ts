@@ -139,6 +139,10 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
     const syncProjectionContext = () => ({ now: syncClock.now() });
     const readNodeSnapshotSync: RuntimeHostService["readNodeSnapshotSync"] = (nodeId) =>
       graphSystem.readNodeSnapshotSync(nodeId, syncProjectionContext());
+    const readNodeRevisionSync: RuntimeHostService["readNodeRevisionSync"] = (nodeId) =>
+      graphSystem.readNodeRevisionSync(nodeId);
+    const readPendingOperationsSync: RuntimeHostService["readPendingOperationsSync"] = () =>
+      graphSystem.readPendingOperationsSync();
     const readNodeSnapshot: RuntimeHostService["readNodeSnapshot"] = (nodeId) =>
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
@@ -466,6 +470,8 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
       resolveNodeIdSync,
       getStatusSync,
       readNodeSnapshotSync,
+      readNodeRevisionSync,
+      readPendingOperationsSync,
       readNodeSnapshot,
       submit,
       control,

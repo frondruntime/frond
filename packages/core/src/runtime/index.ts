@@ -1,8 +1,13 @@
 export { createRuntime } from "./bridge";
-export type { RuntimeHandleResult } from "./client";
+export type {
+  RuntimeClientHost,
+  RuntimeEffectBridgeRunner,
+  RuntimeHandleResult,
+} from "./client";
 export { createRuntimeClient } from "./client";
-export type { RuntimeReadFailureKind } from "./errors";
+export type { FrondNodeReadiness, RuntimeReadFailureKind } from "./errors";
 export {
+  FrondNodeNotReady,
   FrondRuntimeClosed,
   FrondRuntimeInvariantViolation,
   FrondRuntimeReadError,
@@ -10,6 +15,7 @@ export {
 } from "./errors";
 export type {
   DisplayableResultValidity,
+  HandleActions,
   RawRuntimeNodeRead,
   Runtime,
   RuntimeCancellationReason,
@@ -20,6 +26,7 @@ export type {
   RuntimeError,
   RuntimeEvent,
   RuntimeEventRecord,
+  RuntimeHandleNode,
   RuntimeId,
   RuntimeInput,
   RuntimeNodeHandle,
@@ -30,6 +37,7 @@ export type {
   RuntimeNodeSnapshotLookup,
   RuntimeObserver,
   RuntimeOptions,
+  RuntimePendingOperation,
   RuntimeQuery,
   RuntimeQueryResult,
   RuntimeSignal,

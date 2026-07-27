@@ -14,7 +14,11 @@ import {
   effectBoundaryFailed,
   effectCauseHasOnlyExpectedFailures,
 } from "../driverExecution/effectBoundary";
-import { bridgeNodeActionRunner } from "../driverExecution/nodeActionBridge";
+import {
+  bridgeNodeActionEffectRunner,
+  bridgeNodeActionRunner,
+} from "../driverExecution/nodeActionBridge";
+import { type AcquireNodeLifetime, makeAcquireNodeLifetime } from "../lifecycle/nodeLifetime";
 import {
   interruptDriverOperation,
   makeOperationDisposers,
@@ -49,7 +53,14 @@ export function runAcquire(
 ): Effect.Effect<NodeRead> {
   return Effect.gen(function* () {
     const abortController = new AbortController();
-    const disposers = makeOperationDisposers(cell, env.state.notifyCleanupFailures);
+    // One node-lifetime signal per ready incarnation, created before the
+    // acquire hook runs so subscriptions can bind ctx.nodeSignal immediately.
+    const nodeLifetime = makeAcquireNodeLifetime();
+    const disposers = makeOperationDisposers(
+      cell,
+      env.state.notifyCleanupFailures,
+      env.driverTimeouts.release
+    );
     const initialState = yield* cell.state.get;
     const base = phaseBase(initialState.phase);
 
@@ -89,6 +100,7 @@ export function runAcquire(
       args: base.base.args,
       deps,
       abortController,
+      nodeSignal: nodeLifetime.signal,
       disposers,
       signals: env.signals,
       now: () => clock.currentTimeMillisUnsafe(),
@@ -117,7 +129,7 @@ export function runAcquire(
     }).pipe(
       Effect.matchEffect({
         onFailure: (cause) =>
-          cleanupAcquireDisposers(env, cell, disposers).pipe(
+          cleanupAcquireDisposers(env, cell, disposers, nodeLifetime).pipe(
             Effect.flatMap(() => failAcquireFailure(cell, attempt, cause))
           ),
         onSuccess: (acquired) =>
@@ -134,7 +146,7 @@ export function runAcquire(
               if (resultState.resultValidity._tag === "Expired") {
                 const expiredValidity = resultState.resultValidity;
 
-                return cleanupAcquireDisposers(env, cell, disposers).pipe(
+                return cleanupAcquireDisposers(env, cell, disposers, nodeLifetime).pipe(
                   Effect.flatMap(() => failExpiredAcquireResult(cell, attempt, expiredValidity))
                 );
               }
@@ -145,22 +157,28 @@ export function runAcquire(
                 attempt,
                 deps,
                 resultState,
-                disposers
+                disposers,
+                nodeLifetime
               );
             }),
             Effect.catchCause((cause) =>
-              cleanupAcquireDisposers(env, cell, disposers).pipe(
+              cleanupAcquireDisposers(env, cell, disposers, nodeLifetime).pipe(
                 Effect.flatMap(() => failAcquireCause(cell, attempt, cause))
               )
             )
           ),
       }),
       Effect.onInterrupt(() =>
-        interruptDriverOperation({
-          cell,
-          abortController,
-          disposers,
-          notifyCleanupFailures: env.state.notifyCleanupFailures,
+        Effect.gen(function* () {
+          // A post-commit interrupt must not abort the committed node's
+          // lifetime; abortIfUnowned is a no-op after the ready hand-off.
+          nodeLifetime.abortIfUnowned();
+          yield* interruptDriverOperation({
+            cell,
+            abortController,
+            disposers,
+            notifyCleanupFailures: env.state.notifyCleanupFailures,
+          });
         })
       )
     );
@@ -235,6 +253,7 @@ function completeAcquireSuccess(
   deps: Record<string, object>,
   resultState: ResultState,
   disposers: OperationDisposers,
+  nodeLifetime: AcquireNodeLifetime,
   liveTimeout: number,
   notifyLiveFailures: GraphLiveFailureObserver,
   reason: "acquire" = "acquire"
@@ -245,7 +264,7 @@ function completeAcquireSuccess(
     const base = phaseBase(latest.phase);
 
     if (base._tag === "Missing") {
-      return yield* cleanupAcquireDisposers(env, cell, disposers).pipe(
+      return yield* cleanupAcquireDisposers(env, cell, disposers, nodeLifetime).pipe(
         Effect.flatMap(() =>
           failAttempt(
             cell,
@@ -292,6 +311,9 @@ function completeAcquireSuccess(
               // post-commit interrupt drain a no-op so the committed node keeps
               // its disposers.
               disposers: disposers.handOff(),
+              // Ownership: ready data now owns the node-lifetime controller;
+              // teardown aborts it when this incarnation closes.
+              nodeLifetime: nodeLifetime.handOff(),
             },
           })
         : ({ _tag: "Stale", state: latest } as const);
@@ -300,7 +322,7 @@ function completeAcquireSuccess(
     });
 
     if (acquireCommit === "Stale") {
-      yield* cleanupAcquireDisposers(env, cell, disposers);
+      yield* cleanupAcquireDisposers(env, cell, disposers, nodeLifetime);
       return yield* Deferred.await(attempt.deferred);
     }
 
@@ -346,14 +368,15 @@ function constructAndCompleteAcquireSuccess(
   attempt: CellReadinessAttempt,
   deps: Record<string, object>,
   resultState: ResultState,
-  disposers: OperationDisposers
+  disposers: OperationDisposers,
+  nodeLifetime: AcquireNodeLifetime
 ): Effect.Effect<NodeRead> {
   return Effect.gen(function* () {
     const latest = yield* cell.state.get;
     const base = phaseBase(latest.phase);
 
     if (base._tag === "Missing") {
-      return yield* cleanupAcquireDisposers(env, cell, disposers).pipe(
+      return yield* cleanupAcquireDisposers(env, cell, disposers, nodeLifetime).pipe(
         Effect.flatMap(() =>
           failAttempt(
             cell,
@@ -385,6 +408,7 @@ function constructAndCompleteAcquireSuccess(
         deps,
         result: resultState.result,
         action: bridgeNodeActionRunner(env.state.executeNodeAction, cell.nodeId),
+        actionEffect: bridgeNodeActionEffectRunner(env.state.executeNodeAction, cell.nodeId),
         reportResultObserved: makeResultObservedReporter(env.state, {
           nodeId: cell.nodeId,
           tag: cell.tag,
@@ -396,7 +420,7 @@ function constructAndCompleteAcquireSuccess(
     });
 
     if (constructed._tag === "Failure") {
-      yield* cleanupAcquireDisposers(env, cell, disposers);
+      yield* cleanupAcquireDisposers(env, cell, disposers, nodeLifetime);
       return yield* failAcquireFailure(cell, attempt, constructed.failure);
     }
 
@@ -408,6 +432,7 @@ function constructAndCompleteAcquireSuccess(
       deps,
       resultState,
       disposers,
+      nodeLifetime,
       env.driverTimeouts.live,
       env.state.notifyLiveFailures
     );
@@ -438,9 +463,13 @@ function failExpiredAcquireResult(
 function cleanupAcquireDisposers(
   env: GraphOperationEnvironment,
   cell: GraphNodeCell,
-  disposers: OperationDisposers
+  disposers: OperationDisposers,
+  nodeLifetime: AcquireNodeLifetime
 ): Effect.Effect<void> {
   return Effect.gen(function* () {
+    // The incarnation never committed: abort its lifetime signal before the
+    // collected disposers run so callbacks bound to ctx.nodeSignal quiesce.
+    nodeLifetime.abortIfUnowned();
     const failures = yield* disposers.drain("acquire");
 
     if (failures.length > 0) {

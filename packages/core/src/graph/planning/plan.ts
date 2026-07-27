@@ -66,15 +66,27 @@ function materializeCellIfFresh(
     planningOutcome._tag === "Success"
       ? planningOutcome.value.base
       : baseForInvalidPlan(request.args);
-  const nodeState = makeGraphCellState({
-    phase:
-      planningOutcome._tag === "Success"
-        ? idleCell(planningOutcome.value.base)
-        : invalidCell(planningOutcome.failure, initialBase),
-    nextOperationId: 1,
-    nextAttemptId: 0,
-    nextLiveGeneration: 1,
-  } satisfies GraphNodeState);
+  // Seed the revision past any evicted predecessor for this node id so
+  // `readVersion` stays monotonic across evict + recreate instead of ABA-ing.
+  // Consume the entry: the recreated cell starts past the recorded value and a
+  // later eviction re-records it, so keeping it would only leak one map entry
+  // per distinct evicted node id.
+  const evictedRevision = state.evictedRevisionByNodeId.get(nodeId);
+  if (evictedRevision !== undefined) {
+    state.evictedRevisionByNodeId.delete(nodeId);
+  }
+  const nodeState = makeGraphCellState(
+    {
+      phase:
+        planningOutcome._tag === "Success"
+          ? idleCell(planningOutcome.value.base)
+          : invalidCell(planningOutcome.failure, initialBase),
+      nextOperationId: 1,
+      nextAttemptId: 0,
+      nextLiveGeneration: 1,
+    } satisfies GraphNodeState,
+    evictedRevision === undefined ? 0 : evictedRevision + 1
+  );
 
   // Owner: planning owns graph identity and dependency records before readiness.
   // Ready author nodes are constructed later by acquire, never during planning.

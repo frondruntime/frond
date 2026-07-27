@@ -81,6 +81,29 @@ export type PublicReadyValidityIsDisplayable = Expect<
     "Current" | "Stale"
   >
 >;
+// DEFINITIVE: Ready.result is exactly TResult — never `TResult | undefined`.
+// A Ready read always carries the committed result; `undefined` is observable
+// only when `undefined` is a valid member of the node's declared result type.
+// (A consumer auth fail-closed path depends on this being unambiguous.)
+export type PublicReadyResultIsExactlyTResult = Expect<
+  Equal<Extract<RuntimeRead, { readonly _tag: "Ready" }>["result"], { readonly ok: true }>
+>;
+type UndefinedResultRead = Frond.Runtime.RuntimeNodeRead<undefined>;
+export type ReadyUndefinedResultStaysExpressible = Expect<
+  Equal<Extract<UndefinedResultRead, { readonly _tag: "Ready" }>["result"], undefined>
+>;
+export type SnapshotReadyResultIsExactlyTResult = Expect<
+  Equal<Extract<RuntimeSnapshot, { readonly _tag: "Ready" }>["result"], { readonly ok: true }>
+>;
+// Ready.node threads the typed instance; the untyped default stays `object`
+// for genuinely spec-less (unsafe/diagnostic) reads.
+export type PublicReadyNodeDefaultsToObject = Expect<
+  Equal<Extract<RuntimeRead, { readonly _tag: "Ready" }>["node"], object>
+>;
+type TypedNodeRead = Frond.Runtime.RuntimeNodeRead<{ readonly ok: true }, { readonly probe: 1 }>;
+export type PublicReadyNodeCarriesInstanceType = Expect<
+  Equal<Extract<TypedNodeRead, { readonly _tag: "Ready" }>["node"], { readonly probe: 1 }>
+>;
 export type UnsafeReadKeepsRawTags = Expect<
   Equal<
     UnsafeRead["_tag"],
@@ -94,6 +117,63 @@ export type UnsafeReadKeepsRawTags = Expect<
     | "Unavailable"
     | "Invalid"
   >
+>;
+
+// handle.readReady() projects the handle's typed node instance (TNode), and
+// ensureReadyNode is its awaited counterpart.
+type TypedReadReadyHandle = Frond.Runtime.RuntimeNodeHandle<
+  Frond.Args.None,
+  { readonly ok: true },
+  Record<string, never>,
+  "async",
+  { readonly probe: 1 }
+>;
+export type ReadReadyReturnsTypedNode = Expect<
+  Equal<ReturnType<TypedReadReadyHandle["readReady"]>, { readonly probe: 1 }>
+>;
+export type EnsureReadyNodeReturnsTypedNode = Expect<
+  Equal<Awaited<ReturnType<TypedReadReadyHandle["ensureReadyNode"]>>, { readonly probe: 1 }>
+>;
+
+// FrondNodeNotReady is namespace-owned under Frond.Runtime, alongside the
+// other Frond* runtime errors.
+export type RuntimeNamespaceHasFrondNodeNotReady = Expect<
+  Equal<"FrondNodeNotReady" extends keyof typeof Frond.Runtime ? true : false, true>
+>;
+export type FrondNodeNotReadyReadiness = Expect<
+  Equal<
+    InstanceType<typeof Frond.Runtime.FrondNodeNotReady>["readiness"],
+    "unwired" | "idle" | "pending"
+  >
+>;
+
+// Caller cancellation rides work metadata: `signal` is an optional
+// AbortSignal, honored by `handle.action`.
+export type WorkMetadataSignalIsAbortSignal = Expect<
+  Equal<Frond.Runtime.RuntimeWorkMetadata["signal"], AbortSignal | undefined>
+>;
+({
+  source: "manual",
+  reason: "action",
+  signal: new AbortController().signal,
+}) satisfies Frond.Runtime.RuntimeWorkMetadata;
+// @ts-expect-error metadata.signal must be an AbortSignal, not a string.
+({ signal: "abort" }) satisfies Frond.Runtime.RuntimeWorkMetadata;
+
+// Quiescence reads live on the Runtime facade only, and pendingOperations
+// projects exclusively Running operations.
+export type RuntimeFacadeIsQuiescentIsBoolean = Expect<
+  Equal<ReturnType<Frond.Runtime.Runtime["isQuiescent"]>, boolean>
+>;
+export type PendingOperationIsRunningOnly = Expect<
+  Equal<Frond.Runtime.RuntimePendingOperation["operation"]["_tag"], "Running">
+>;
+
+// An opaque NodeSpecLike carrier must not collapse the typed handle's node
+// surface to `any` (lib `Function.prototype` is `any`); the documented
+// degrade for statically unrecoverable instance types is `object`.
+export type OpaqueHandleNodeIsObject = Expect<
+  Equal<Frond.Runtime.RuntimeHandleNode<Frond.NodeSpecLike>, object>
 >;
 
 export type NoRootRuntimeNodeHandle = Expect<
@@ -126,6 +206,14 @@ export type NoRuntimeSignalBus = Expect<
 >;
 export type NoNormalizedDriverContext = Expect<
   Equal<"NormalizedDriverContext" extends keyof typeof Frond.Driver ? true : false, false>
+>;
+// The flavored driver builders are public: `Driver.Async` / `Driver.Effect`
+// are the escape hatch pair feeding `fromDriver`, shape-mode constrained.
+export type DriverNamespaceHasAsync = Expect<
+  Equal<"Async" extends keyof typeof Frond.Driver ? true : false, true>
+>;
+export type DriverNamespaceHasEffect = Expect<
+  Equal<"Effect" extends keyof typeof Frond.Driver ? true : false, true>
 >;
 export type NoGraphSystemConstructor = Expect<
   Equal<"makeInMemoryGraphSystem" extends keyof typeof Frond.Graph ? true : false, false>

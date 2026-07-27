@@ -1,4 +1,10 @@
-import type { ActionAdmission, DriverActionRegistry, DriverActionRun, DriverHook } from "./types";
+import type {
+  ActionAdmission,
+  ActionTimeout,
+  DriverActionRegistry,
+  DriverActionRun,
+  DriverHook,
+} from "./types";
 
 export function makeDriverActionRegistry<
   TNode extends object,
@@ -12,6 +18,7 @@ export function makeDriverActionRegistry<
       {
         readonly run: DriverActionRun<TNode, TArgs, TDeps, TResult>;
         readonly admission: ActionAdmission;
+        readonly timeout: ActionTimeout | undefined;
       }
     >
   >
@@ -20,10 +27,19 @@ export function makeDriverActionRegistry<
     read: (action) => {
       // Own-key lookup only: a plain record inherits Object.prototype members,
       // so "constructor" or "toString" must not read as declared actions.
-      const descriptor = Object.hasOwn(actions, action) ? actions[action] : undefined;
+      // Object.prototype.hasOwnProperty.call instead of Object.hasOwn: consumer
+      // Hermes/React Native targets do not ship Object.hasOwn.
+      const descriptor = Object.prototype.hasOwnProperty.call(actions, action)
+        ? actions[action]
+        : undefined;
       return descriptor === undefined
         ? { _tag: "Missing", action }
-        : { _tag: "Found", run: descriptor.run, admission: descriptor.admission };
+        : {
+            _tag: "Found",
+            run: descriptor.run,
+            admission: descriptor.admission,
+            timeout: descriptor.timeout,
+          };
     },
   };
 }

@@ -68,6 +68,7 @@ describe("runtime config normalization", () => {
   test("minimal graph options require runtime id and normalize no-op signals", async () => {
     const retainedCounts: Array<number> = [];
     type SignalReaderSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -75,21 +76,19 @@ describe("runtime config normalization", () => {
     }>;
 
     class SignalReaderNode extends NodeBase<SignalReaderSpec> {
-      static readonly spec = serviceSpec<SignalReaderSpec>({
+      static readonly spec = serviceSpec.effect<SignalReaderSpec>({
         tag: "services/test-graph-signal-default",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SignalReaderSpec>({
-          acquire: Driver.Acquire((ctx) =>
-            Effect.gen(function* () {
-              const retained = yield* ctx.signals.readRetained({
-                channel: configSignalChannel,
-              });
-              retainedCounts.push(retained.length);
-              return "ready";
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) =>
+          Effect.gen(function* () {
+            const retained = yield* ctx.signals.readRetained({
+              channel: configSignalChannel,
+            });
+            retainedCounts.push(retained.length);
+            return "ready";
+          })
+        ),
       });
     }
     const graph = makeInMemoryGraphSystem({ runtimeId: "mock-test-runtime" });

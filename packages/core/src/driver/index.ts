@@ -1,13 +1,11 @@
 export { resultCommit } from "../graph/types";
-export {
-  Acquire,
-  Action,
-  Async,
-  Effect,
-  Live,
-  Refresh,
-  Release,
+export type {
+  AsyncActionImplementations,
+  AsyncInput,
+  EffectActionImplementations,
+  EffectInput,
 } from "./authoring";
+export { Acquire, Action, Async, Effect, Live, Refresh, Release } from "./authoring";
 export type {
   ActiveNodeLiveDemandSnapshot,
   AsyncLiveContext,
@@ -26,6 +24,8 @@ export type {
   ActionContract,
   ActionContracts,
   ActionOptions,
+  ActionTimeout,
+  ActionTimeoutInput,
   AsyncAcquireDriverContext,
   AsyncDisposeContext,
   AsyncDriver,
@@ -37,6 +37,7 @@ export type {
   AsyncRuntimeSignalAccess,
   AsyncRuntimeSignalSubscriber,
   DisposeContext,
+  Disposer,
   DisposerBag,
   Driver,
   DriverAcquireContext,

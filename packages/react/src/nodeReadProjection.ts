@@ -10,8 +10,14 @@ export function projectReactNodeRead<
   TResult,
   TNode extends object,
 >(input: {
-  readonly handle: Frond.Runtime.RuntimeNodeHandle<TArgs, TResult>;
-  readonly handleRead: Frond.Runtime.RuntimeNodeRead<TResult>;
+  readonly handle: Frond.Runtime.RuntimeNodeHandle<
+    TArgs,
+    TResult,
+    Record<string, never>,
+    "async",
+    TNode
+  >;
+  readonly handleRead: Frond.Runtime.RuntimeNodeRead<TResult, TNode>;
   readonly ensureReady: () => Promise<void>;
   readonly scheduleBoot: () => void;
   readonly scheduleReadinessAttempt: (attempt: Promise<unknown>) => void;
@@ -70,11 +76,13 @@ function runtimeReadErrorMessage(kind: Frond.Runtime.RuntimeReadFailureKind): st
 }
 
 function readyReactNodeState<TArgs, TDeps extends object, TResult, TNode extends object>(
-  handle: Frond.Runtime.RuntimeNodeHandle<TArgs, TResult>,
-  read: Extract<Frond.Runtime.RuntimeNodeRead<TResult>, { readonly _tag: "Ready" }>
+  handle: Frond.Runtime.RuntimeNodeHandle<TArgs, TResult, Record<string, never>, "async", TNode>,
+  read: Extract<Frond.Runtime.RuntimeNodeRead<TResult, TNode>, { readonly _tag: "Ready" }>
 ): ReactNodeState<TArgs, TDeps, TResult, TNode> {
   return {
     nodeId: handle.nodeId,
+    // The read hands back the typed instance; the remaining cast asserts only
+    // the FrondNode accessor surface every graph-constructed ready node has.
     node: read.node as TNode & FrondNode<TArgs, ResolvedDeps<TDeps>, TResult>,
     operation: read.operation,
     busy: read.busy,

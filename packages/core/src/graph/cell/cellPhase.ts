@@ -1,4 +1,5 @@
 import { type Deferred, Match } from "effect";
+import type { DisposerRegistry } from "../lifecycle/disposers";
 import { idleOperation } from "../operations/nodeOperation";
 import type {
   ActiveNodeLiveDemandSnapshot,
@@ -57,8 +58,15 @@ export interface ReadyData extends CellBase {
   readonly resultValidity: ResultValidity;
   readonly resultLoadedAt?: number | undefined;
   readonly resultValidityPolicy: NormalizedResultValidityPolicy;
-  readonly disposers: ReadonlyArray<() => void>;
+  // Ownership: the incarnation's disposer registry handed off by the acquire
+  // operation bag. Later operation commits append into the same registry so
+  // late adds through the bag and the teardown drain loop see one shared
+  // once-only set. Internal-only: never projected into NodeSnapshot.
+  readonly disposers: DisposerRegistry;
   readonly liveResource: LiveResourceState;
+  // Owner: node-lifetime controller for this ready incarnation. Handed off by
+  // the acquire commit; teardown aborts it exactly once when the node closes.
+  readonly nodeLifetime: AbortController;
 }
 
 export type CellPhaseBaseLookup =

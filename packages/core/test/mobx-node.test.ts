@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Deferred, Effect, Match } from "effect";
 import { autorun, observable, onBecomeObserved, onBecomeUnobserved } from "mobx";
-import { Driver, Key } from "../src";
+import { Driver, Key, unwrapEffect } from "../src";
 import { ActionFailed, GraphInvariantViolation, type NodeId, resultCommit } from "../src/graph";
 import { createNode } from "../src/mobx";
 import {
@@ -24,6 +24,7 @@ type Profile = {
 };
 
 type TransportSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: Record<string, never>;
@@ -31,17 +32,16 @@ type TransportSpec = NodeSpec<{
 }>;
 
 class TransportNode extends NodeBase<TransportSpec> {
-  static readonly spec = serviceSpec<TransportSpec>({
+  static readonly spec = serviceSpec.effect<TransportSpec>({
     tag: "mobx/services/transport",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({})),
-    driver: Driver.Effect<TransportSpec>({
-      acquire: Driver.Acquire(() => Effect.succeed("transport")),
-    }),
+    acquire: Driver.Acquire(() => Effect.succeed("transport")),
   });
 }
 
 type ProfileSpec = NodeSpec<{
+  readonly mode: "effect";
   readonly args: Record<string, never>;
   readonly key: Key.Singleton;
   readonly deps: {
@@ -58,35 +58,33 @@ type ProfileSpec = NodeSpec<{
 }>;
 
 class ProfileNode extends NodeBase<ProfileSpec> {
-  static readonly spec = resourceSpec<ProfileSpec>({
+  static readonly spec = resourceSpec.effect<ProfileSpec>({
     tag: "mobx/resources/profile",
     key: () => Key.singleton(),
     dependencies: dependencies(() => ({
       transport: dep(TransportNode, {}),
     })),
-    driver: Driver.Effect<ProfileSpec>({
-      acquire: Driver.Acquire((ctx) =>
-        Effect.succeed({ name: ctx.deps.transport.result, timezone: "UTC" })
-      ),
-      refresh: Driver.Refresh((ctx) =>
-        ctx.setResult({
-          name: ctx.deps.transport.result,
-          timezone: "PST",
+    acquire: Driver.Acquire((ctx) =>
+      Effect.succeed({ name: ctx.deps.transport.result, timezone: "UTC" })
+    ),
+    refresh: Driver.Refresh((ctx) =>
+      ctx.setResult({
+        name: ctx.deps.transport.result,
+        timezone: "PST",
+      })
+    ),
+    actions: {
+      updateTimezone: Driver.Action((ctx, input) =>
+        Effect.gen(function* () {
+          yield* ctx.patchResult((current) => {
+            current.timezone = input.timezone;
+          });
+
+          return { timezone: input.timezone };
         })
       ),
-      actions: {
-        updateTimezone: Driver.Action((ctx, input) =>
-          Effect.gen(function* () {
-            yield* ctx.patchResult((current) => {
-              current.timezone = input.timezone;
-            });
-
-            return { timezone: input.timezone };
-          })
-        ),
-        rejectTimezone: Driver.Action(() => Effect.fail({ _tag: "TimezoneRejected" } as const)),
-      },
-    }),
+      rejectTimezone: Driver.Action(() => Effect.fail({ _tag: "TimezoneRejected" } as const)),
+    },
   });
   get timezone(): string {
     return this.result.timezone;
@@ -173,6 +171,7 @@ describe("MobX node projection", () => {
 
   test("does not expose expired results as ordinary projected results", async () => {
     type ExpiredProfileSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -180,23 +179,21 @@ describe("MobX node projection", () => {
     }>;
 
     class ExpiredProfileNode extends NodeBase<ExpiredProfileSpec> {
-      static readonly spec = resourceSpec<ExpiredProfileSpec>({
+      static readonly spec = resourceSpec.effect<ExpiredProfileSpec>({
         tag: "mobx/resources/expired-profile",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ExpiredProfileSpec>({
-          resultValidity: { _tag: "Manual" },
-          acquire: Driver.Acquire(() =>
-            Effect.succeed(
-              resultCommit(
-                { name: "transport", timezone: "expired" },
-                {
-                  validity: { _tag: "Expired", expiredAt: 10 },
-                }
-              )
+        resultValidity: { _tag: "Manual" },
+        acquire: Driver.Acquire(() =>
+          Effect.succeed(
+            resultCommit(
+              { name: "transport", timezone: "expired" },
+              {
+                validity: { _tag: "Expired", expiredAt: 10 },
+              }
             )
-          ),
-        }),
+          )
+        ),
       });
     }
 
@@ -258,6 +255,7 @@ describe("MobX node projection", () => {
     };
 
     type MutableSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -266,21 +264,19 @@ describe("MobX node projection", () => {
     }>;
 
     class MutableNode extends NodeBase<MutableSpec> {
-      static readonly spec = resourceSpec<MutableSpec>({
+      static readonly spec = resourceSpec.effect<MutableSpec>({
         tag: "mobx/resources/node-mutation",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<MutableSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed(null)),
-          actions: {
-            mutateLabel: Driver.Action((ctx) =>
-              Effect.sync(() => {
-                ctx.node.label = "mutated by driver";
-                return ctx.node.label;
-              })
-            ),
-          },
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed(null)),
+        actions: {
+          mutateLabel: Driver.Action((ctx) =>
+            Effect.sync(() => {
+              ctx.node.label = "mutated by driver";
+              return ctx.node.label;
+            })
+          ),
+        },
       });
       label = "initial";
     }
@@ -291,7 +287,7 @@ describe("MobX node projection", () => {
     await runtime.submit({ _tag: "RuntimeStart" });
     await projection.ensureReady();
 
-    await projection.node.actions.mutateLabel();
+    await unwrapEffect(projection.node.actions.mutateLabel());
     expect(projection.node.label).toBe("mutated by driver");
 
     projection.dispose();
@@ -299,6 +295,7 @@ describe("MobX node projection", () => {
 
   test("facade nodes can compute through dependency node objects", async () => {
     type FacadeSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: {
@@ -308,15 +305,13 @@ describe("MobX node projection", () => {
     }>;
 
     class FacadeNode extends NodeBase<FacadeSpec> {
-      static readonly spec = resourceSpec<FacadeSpec>({
+      static readonly spec = resourceSpec.effect<FacadeSpec>({
         tag: "mobx/facades/profile-label",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({
           profile: dep(ProfileNode, {}),
         })),
-        driver: Driver.Effect<FacadeSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed(null)),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed(null)),
       });
       get profileLabel(): string {
         return this.deps.profile.timezone;
@@ -346,7 +341,7 @@ describe("MobX node projection", () => {
       observedTimezones.push(projection.node.timezone);
     });
 
-    const action = projection.node.actions.updateTimezone({ timezone: "CET" });
+    const action = unwrapEffect(projection.node.actions.updateTimezone({ timezone: "CET" }));
 
     expect(typeof action.then).toBe("function");
 
@@ -377,7 +372,7 @@ describe("MobX node projection", () => {
 
     await runtime.submit({ _tag: "RuntimeStart" });
     await projection.ensureReady();
-    await projection.node.actions.updateTimezone({ timezone: "CET" });
+    await unwrapEffect(projection.node.actions.updateTimezone({ timezone: "CET" }));
     const events = (await runtime.query({ _tag: "RuntimeEvents" })).events;
     const actionStarts = events.filter((record) => record.event._tag === "GraphActionStarted");
     const actionSuccesses = events.filter((record) => record.event._tag === "GraphActionSucceeded");
@@ -407,7 +402,9 @@ describe("MobX node projection", () => {
 
     await runtime.submit({ _tag: "RuntimeStart" });
     await projection.ensureReady();
-    await expect(projection.node.actions.rejectTimezone()).rejects.toBeInstanceOf(ActionFailed);
+    await expect(unwrapEffect(projection.node.actions.rejectTimezone())).rejects.toBeInstanceOf(
+      ActionFailed
+    );
     const events = (await runtime.query({ _tag: "RuntimeEvents" })).events;
     const actionStarts = events.filter((record) => record.event._tag === "GraphActionStarted");
     const actionFailures = events.filter((record) => record.event._tag === "GraphActionFailed");
@@ -461,7 +458,9 @@ describe("MobX node projection", () => {
     await runtime.submit({ _tag: "RuntimeStart" });
     await projection.ensureReady();
 
-    await expect(projection.node.actions.rejectTimezone()).rejects.toBeInstanceOf(ActionFailed);
+    await expect(unwrapEffect(projection.node.actions.rejectTimezone())).rejects.toBeInstanceOf(
+      ActionFailed
+    );
 
     projection.dispose();
   });
@@ -470,6 +469,7 @@ describe("MobX node projection", () => {
     const refreshStarted = await Effect.runPromise(Deferred.make<void>());
     const refreshGate = await Effect.runPromise(Deferred.make<void>());
     type SlowMobXSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -477,20 +477,18 @@ describe("MobX node projection", () => {
     }>;
 
     class SlowMobXNode extends NodeBase<SlowMobXSpec> {
-      static readonly spec = resourceSpec<SlowMobXSpec>({
+      static readonly spec = resourceSpec.effect<SlowMobXSpec>({
         tag: "mobx/resources/slow-operation",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SlowMobXSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(refreshStarted, undefined);
-              yield* Deferred.await(refreshGate);
-              yield* ctx.setResult({ value: "fresh" });
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(refreshStarted, undefined);
+            yield* Deferred.await(refreshGate);
+            yield* ctx.setResult({ value: "fresh" });
+          })
+        ),
       });
     }
     const runtime = createRuntime();
@@ -593,6 +591,7 @@ describe("MobX node projection", () => {
     const failure = new Error("live start failed once");
     let starts = 0;
     type FlakyLiveSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -600,21 +599,19 @@ describe("MobX node projection", () => {
     }>;
 
     class FlakyLiveNode extends NodeBase<FlakyLiveSpec> {
-      static readonly spec = resourceSpec<FlakyLiveSpec>({
+      static readonly spec = resourceSpec.effect<FlakyLiveSpec>({
         tag: "mobx/resources/flaky-live",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<FlakyLiveSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-          live: Driver.Live({
-            start: () =>
-              Effect.sync(() => {
-                starts += 1;
-              }).pipe(
-                Effect.flatMap(() => (starts === 1 ? Effect.fail(failure) : Effect.succeed("live")))
-              ),
-            stop: () => Effect.void,
-          }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
+        live: Driver.Live({
+          start: () =>
+            Effect.sync(() => {
+              starts += 1;
+            }).pipe(
+              Effect.flatMap(() => (starts === 1 ? Effect.fail(failure) : Effect.succeed("live")))
+            ),
+          stop: () => Effect.void,
         }),
       });
     }
@@ -651,6 +648,7 @@ describe("MobX node projection", () => {
     };
 
     type ScopedRatesSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -658,20 +656,18 @@ describe("MobX node projection", () => {
     }>;
 
     class ScopedRatesNode extends NodeBase<ScopedRatesSpec> {
-      static readonly spec = resourceSpec<ScopedRatesSpec>({
+      static readonly spec = resourceSpec.effect<ScopedRatesSpec>({
         tag: "mobx/resources/scoped-rates",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ScopedRatesSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.succeed({
-              rates: observable.map<Pair, number>([
-                ["BTC/USD", 1],
-                ["ETH/USD", 2],
-              ]),
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.succeed({
+            rates: observable.map<Pair, number>([
+              ["BTC/USD", 1],
+              ["ETH/USD", 2],
+            ]),
+          })
+        ),
       });
       constructor() {
         super();
@@ -733,6 +729,7 @@ describe("MobX node projection", () => {
 
   test("unsupported MobX live scopes surface typed live failures", async () => {
     type UnsupportedScopeSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -740,13 +737,11 @@ describe("MobX node projection", () => {
     }>;
 
     class UnsupportedScopeNode extends NodeBase<UnsupportedScopeSpec> {
-      static readonly spec = resourceSpec<UnsupportedScopeSpec>({
+      static readonly spec = resourceSpec.effect<UnsupportedScopeSpec>({
         tag: "mobx/resources/unsupported-live-scope",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<UnsupportedScopeSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
       });
       reportUnsupportedScope(): void {
         this.reportResultObserved(Symbol("scope"), true);
@@ -781,6 +776,7 @@ describe("MobX node projection", () => {
     };
 
     type RapidScopedRatesSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -788,17 +784,15 @@ describe("MobX node projection", () => {
     }>;
 
     class RapidScopedRatesNode extends NodeBase<RapidScopedRatesSpec> {
-      static readonly spec = resourceSpec<RapidScopedRatesSpec>({
+      static readonly spec = resourceSpec.effect<RapidScopedRatesSpec>({
         tag: "mobx/resources/rapid-scoped-rates",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<RapidScopedRatesSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.succeed({
-              rates: observable.map<Pair, number>([["BTC/USD", 1]]),
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.succeed({
+            rates: observable.map<Pair, number>([["BTC/USD", 1]]),
+          })
+        ),
       });
       constructor() {
         super();
@@ -852,6 +846,7 @@ describe("MobX node projection", () => {
     const liveGate = await Effect.runPromise(Deferred.make<void>());
     let liveStarts = 0;
     type InterruptedObservationSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -859,24 +854,22 @@ describe("MobX node projection", () => {
     }>;
 
     class InterruptedObservationNode extends NodeBase<InterruptedObservationSpec> {
-      static readonly spec = resourceSpec<InterruptedObservationSpec>({
+      static readonly spec = resourceSpec.effect<InterruptedObservationSpec>({
         tag: "mobx/resources/interrupted-observation-lease",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<InterruptedObservationSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.succeed({ values: observable.map([["value", "ready"]]) })
-          ),
-          live: Driver.Live({
-            start: () =>
-              Effect.gen(function* () {
-                liveStarts += 1;
-                yield* Deferred.succeed(liveStarted, undefined);
-                yield* Deferred.await(liveGate);
-                return "live";
-              }),
-            stop: () => Effect.void,
-          }),
+        acquire: Driver.Acquire(() =>
+          Effect.succeed({ values: observable.map([["value", "ready"]]) })
+        ),
+        live: Driver.Live({
+          start: () =>
+            Effect.gen(function* () {
+              liveStarts += 1;
+              yield* Deferred.succeed(liveStarted, undefined);
+              yield* Deferred.await(liveGate);
+              return "live";
+            }),
+          stop: () => Effect.void,
         }),
       });
 
@@ -900,15 +893,13 @@ describe("MobX node projection", () => {
     }
 
     class ConflictingObservationNode extends NodeBase<InterruptedObservationSpec> {
-      static readonly spec = resourceSpec<InterruptedObservationSpec>({
+      static readonly spec = resourceSpec.effect<InterruptedObservationSpec>({
         tag: "mobx/resources/interrupted-observation-lease",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<InterruptedObservationSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.succeed({ values: observable.map([["value", "conflict"]]) })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.succeed({ values: observable.map([["value", "conflict"]]) })
+        ),
       });
     }
 
@@ -945,6 +936,7 @@ describe("MobX node projection", () => {
 
   test("invalidation releases a successfully acquired observation lease by id", async () => {
     type InvalidatedObservationSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -952,28 +944,24 @@ describe("MobX node projection", () => {
     }>;
 
     class InvalidatedObservationNode extends NodeBase<InvalidatedObservationSpec> {
-      static readonly spec = resourceSpec<InvalidatedObservationSpec>({
+      static readonly spec = resourceSpec.effect<InvalidatedObservationSpec>({
         tag: "mobx/resources/invalidated-observation-release",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<InvalidatedObservationSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
-          live: Driver.Live({
-            start: () => Effect.succeed("live"),
-            stop: () => Effect.void,
-          }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
+        live: Driver.Live({
+          start: () => Effect.succeed("live"),
+          stop: () => Effect.void,
         }),
       });
     }
 
     class ConflictingInvalidatedObservationNode extends NodeBase<InvalidatedObservationSpec> {
-      static readonly spec = resourceSpec<InvalidatedObservationSpec>({
+      static readonly spec = resourceSpec.effect<InvalidatedObservationSpec>({
         tag: "mobx/resources/invalidated-observation-release",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<InvalidatedObservationSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "conflict" })),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "conflict" })),
       });
     }
 
@@ -1037,12 +1025,12 @@ describe("MobX node projection", () => {
     const staleNode = projection.node;
     await projection.releaseResources("test release");
 
-    await expect(staleNode.actions.updateTimezone({ timezone: "EET" })).rejects.toThrow(
-      FrondNodeClosed
-    );
+    await expect(
+      unwrapEffect(staleNode.actions.updateTimezone({ timezone: "EET" }))
+    ).rejects.toThrow(FrondNodeClosed);
     await projection.ensureReady();
 
-    const result = await projection.node.actions.updateTimezone({ timezone: "EET" });
+    const result = await unwrapEffect(projection.node.actions.updateTimezone({ timezone: "EET" }));
 
     expect(result).toEqual({ timezone: "EET" });
     expect(projection.node.timezone).toBe("EET");
@@ -1054,6 +1042,7 @@ describe("MobX node projection", () => {
     const started = await Effect.runPromise(Deferred.make<void>());
     const gate = await Effect.runPromise(Deferred.make<Profile>());
     type SlowProfileSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1061,18 +1050,16 @@ describe("MobX node projection", () => {
     }>;
 
     class SlowProfileNode extends NodeBase<SlowProfileSpec> {
-      static readonly spec = resourceSpec<SlowProfileSpec>({
+      static readonly spec = resourceSpec.effect<SlowProfileSpec>({
         tag: "mobx/resources/slow-profile",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SlowProfileSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(started, undefined);
-              return yield* Deferred.await(gate);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined);
+            return yield* Deferred.await(gate);
+          })
+        ),
       });
     }
     const runtime = createRuntime();

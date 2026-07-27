@@ -4,6 +4,7 @@ import {
   type RuntimeInstance,
   type RuntimeOptions,
 } from "@frondruntime/core";
+import { effectBridgeRunner, effectHostFromRuntime } from "@frondruntime/core/testing";
 
 export function makeInspectionSnapshotForbiddenRuntime(options: RuntimeOptions = {}): {
   readonly runtime: RuntimeInstance;
@@ -24,7 +25,7 @@ export function makeInspectionSnapshotForbiddenRuntime(options: RuntimeOptions =
   return {
     runtime: {
       ...runtime,
-      client: createRuntimeClient(runtime),
+      client: createRuntimeClient(effectHostFromRuntime(runtime), effectBridgeRunner),
     },
     snapshotCalls: () => snapshotCalls,
   };

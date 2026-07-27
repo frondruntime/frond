@@ -1,5 +1,6 @@
 {
   "lockfileVersion": 1,
+  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "@frondruntime/monorepo",
@@ -24,6 +25,7 @@
       "name": "@frondruntime/core",
       "version": "0.1.0",
       "devDependencies": {
+        "@frondruntime/core": "workspace:*",
         "effect": "4.0.0-beta.90",
         "mobx": "6.15.3",
       },
@@ -48,6 +50,10 @@
         "mobx-react-lite": ">=4 <5",
         "react": ">=18",
       },
+    },
+    "packages/rootstock": {
+      "name": "@frondruntime/rootstock",
+      "version": "0.0.0",
     },
   },
   "packages": {
@@ -104,6 +110,8 @@
     "@frondruntime/core": ["@frondruntime/core@workspace:packages/core"],
 
     "@frondruntime/react": ["@frondruntime/react@workspace:packages/react"],
+
+    "@frondruntime/rootstock": ["@frondruntime/rootstock@workspace:packages/rootstock"],
 
     "@microsoft/api-extractor": ["@microsoft/api-extractor@7.58.9", "", { "dependencies": { "@microsoft/api-extractor-model": "7.33.8", "@microsoft/tsdoc": "~0.16.0", "@microsoft/tsdoc-config": "~0.18.1", "@rushstack/node-core-library": "5.23.1", "@rushstack/rig-package": "0.7.3", "@rushstack/terminal": "0.24.0", "@rushstack/ts-command-line": "5.3.10", "diff": "~8.0.2", "minimatch": "10.2.3", "resolve": "~1.22.1", "semver": "~7.7.4", "source-map": "~0.6.1", "typescript": "5.9.3" }, "bin": { "api-extractor": "bin/api-extractor" } }, "sha512-S2UF4yza5GoxCmf7hJQNxJNZN9ltOVuOQv8Dy+Z21aol5ERoBNMdWcQHm4MJMPPItW4H/4rZD906iaf4mUojJA=="],
 

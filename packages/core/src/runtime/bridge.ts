@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { createRuntimeClient } from "./client";
+import { createRuntimeClient, type RuntimeEffectBridgeRunner } from "./client";
 import { makeRuntimeHost } from "./host";
 import type {
   Runtime,
@@ -9,16 +9,12 @@ import type {
   RuntimeInput,
   RuntimeObserver,
   RuntimeOptions,
+  RuntimePendingOperation,
   RuntimeQuery,
   RuntimeSignal,
   RuntimeSignalSubscriber,
   RuntimeWorkMetadata,
 } from "./types";
-
-export interface RuntimeEffectBridgeRunner {
-  readonly run: <A>(effect: Effect.Effect<A, unknown>) => Promise<A>;
-  readonly runSync: <A>(effect: Effect.Effect<A, unknown>) => A;
-}
 
 const defaultBridgeRunner: RuntimeEffectBridgeRunner = {
   run: (effect) => Effect.runPromise(effect),
@@ -49,6 +45,7 @@ export function bridgeRuntimeHost(
     resolveNodeIdSync: host.resolveNodeIdSync,
     getStatusSync: host.getStatusSync,
     readNodeSnapshotSync: host.readNodeSnapshotSync,
+    readNodeRevisionSync: host.readNodeRevisionSync,
     readNodeSnapshot: (nodeId: Parameters<RuntimeHostService["readNodeSnapshot"]>[0]) =>
       runner.run(host.readNodeSnapshot(nodeId)),
     submit: (command: RuntimeCommand) => runner.run(host.submit(command)),
@@ -70,8 +67,19 @@ export function bridgeRuntimeHost(
     observe: (observer: RuntimeObserver) => runner.runSync(host.observe(observer)),
   };
 
+  // Quiescence READ, not a barrier: the narrow graph scan projects only each
+  // cell's operation state — no event buffer, edges, or full per-node
+  // snapshots. Kept on the Runtime facade only — node handles stay per-node
+  // surfaces.
+  const pendingOperations = (): ReadonlyArray<RuntimePendingOperation> =>
+    host.readPendingOperationsSync();
+
   return {
     ...runtimeHost,
-    client: createRuntimeClient(runtimeHost),
+    pendingOperations,
+    isQuiescent: () => pendingOperations().length === 0,
+    // The client is built over the Effect-native host directly (not the Promise
+    // facade above) and owns its own Effect→Promise bridging via the runner.
+    client: createRuntimeClient(host, runner),
   };
 }

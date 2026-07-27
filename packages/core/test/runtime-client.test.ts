@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test";
+import { Cause } from "effect";
 import type { NodeId } from "../src/graph";
 import { FrondNodeConstructionUnavailable } from "../src/node";
 import { FrondRuntimeClosed, FrondRuntimeInvariantViolation } from "../src/runtime";
 import type { RuntimeSubmission } from "../src/runtime/types";
 import { createUnsafeRuntimeClient } from "../src/runtime/unsafeClient";
 import { Signals } from "../src/signals";
-import { waitForRuntimeNodeRead } from "../src/testing";
+import {
+  effectBridgeRunner as bridgeRunner,
+  effectHostFromRuntime,
+  waitForRuntimeNodeRead,
+} from "../src/testing";
 import {
   AcquireFailed,
   type ActionContract,
@@ -26,12 +31,14 @@ import {
   ProfileNode,
   serviceSpec,
   TransportNode,
+  unwrapEffect,
 } from "./graphTestFixtures";
 
 describe("runtime client", () => {
   test("updateArgs returns canonical args validation failures through its typed result", async () => {
     type Args = { readonly filter: string };
     type ArgsSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Args;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -39,13 +46,11 @@ describe("runtime client", () => {
     }>;
 
     class ArgsNode extends NodeBase<ArgsSpec> {
-      static readonly spec = serviceSpec<ArgsSpec>({
+      static readonly spec = serviceSpec.effect<ArgsSpec>({
         tag: "services/runtime-client-invalid-update-args",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ArgsSpec>({
-          acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.args.filter)),
-        }),
+        acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.args.filter)),
       });
     }
     const runtime = createRuntime();
@@ -72,19 +77,30 @@ describe("runtime client", () => {
       resolveNodeIdSync: () => nodeId,
       getStatusSync: () => "running" as const,
       readNodeSnapshotSync: () => ({ _tag: "Missing", nodeId }) as const,
-      readNodeSnapshot: async () => ({ _tag: "Missing", nodeId }) as const,
-      observe: () => ({ unsubscribe: () => undefined }),
-      submit: async () => ({ _tag: "RuntimeStarted" }) satisfies RuntimeSubmission,
+      readNodeSnapshot: () => Effect.succeed({ _tag: "Missing", nodeId } as const),
+      observe: () => Effect.succeed({ unsubscribe: () => undefined }),
+      submit: () => Effect.succeed({ _tag: "RuntimeStarted" } satisfies RuntimeSubmission),
     };
-    const handle = createRuntimeClient(runtime).node<Record<string, never>, MutableProfile>(
-      ActionProfileNode,
-      {}
-    );
+    const handle = createRuntimeClient(runtime as never, bridgeRunner).node<
+      Record<string, never>,
+      MutableProfile
+    >(ActionProfileNode, {});
 
     await expect(handle.ensureReady()).rejects.toThrow(
       "Expected runtime submission GraphNodeReadyEnsured, received RuntimeStarted."
     );
-    await expect(handle.runAction("updateTimezone", { timezone: "CET" })).rejects.toBeInstanceOf(
+
+    // The invariant violation is an Effect defect, so `unwrapEffect` rejects with
+    // the failure cause rather than surfacing the raw thrown value.
+    const rejection: unknown = await unwrapEffect(
+      handle.action("updateTimezone", { timezone: "CET" })
+    ).then(
+      () => undefined,
+      (cause: unknown) => cause
+    );
+
+    expect(Cause.isCause(rejection)).toBe(true);
+    expect(Cause.squash(rejection as Cause.Cause<unknown>)).toBeInstanceOf(
       FrondRuntimeInvariantViolation
     );
   });
@@ -108,6 +124,30 @@ describe("runtime client", () => {
         result: { name: "transport", timezone: "UTC" },
       },
     });
+  });
+
+  test("runtime client node handle exposes a monotonic read version", async () => {
+    const runtime = createRuntime();
+    const profile = runtime.client.node<Record<string, never>, MutableProfile>(
+      ActionProfileNode,
+      {}
+    );
+
+    // An unwired node has no committed state yet.
+    expect(profile.readVersion()).toBe(0);
+
+    await profile.ensureReady();
+    const readyVersion = profile.readVersion();
+    expect(readyVersion).toBeGreaterThan(0);
+
+    // A passive read schedules no work, so the version is Object.is-stable —
+    // this is what makes it a safe `getSnapshot` for useSyncExternalStore.
+    profile.read();
+    expect(profile.readVersion()).toBe(readyVersion);
+
+    // A committed action advances the version.
+    await unwrapEffect(profile.action("updateTimezone", { timezone: "CET" }));
+    expect(profile.readVersion()).toBeGreaterThan(readyVersion);
   });
 
   test("runtime client boot preserves supplied work metadata", async () => {
@@ -152,16 +192,14 @@ describe("runtime client", () => {
             operation: { _tag: "Idle" },
           },
         }) as const,
-      readNodeSnapshot: async () => ({ _tag: "Missing", nodeId }) as const,
-      observe: () => ({ unsubscribe: () => undefined }),
-      submit: async () => {
-        throw failure;
-      },
+      readNodeSnapshot: () => Effect.succeed({ _tag: "Missing", nodeId } as const),
+      observe: () => Effect.succeed({ unsubscribe: () => undefined }),
+      submit: () => Effect.fail(failure),
     };
-    const handle = createRuntimeClient(runtime).node<Record<string, never>, MutableProfile>(
-      ActionProfileNode,
-      {}
-    );
+    const handle = createRuntimeClient(runtime as never, bridgeRunner).node<
+      Record<string, never>,
+      MutableProfile
+    >(ActionProfileNode, {});
     const booted = handle.boot();
 
     expect(booted._tag).toBe("Pending");
@@ -196,7 +234,7 @@ describe("runtime client", () => {
       {}
     );
 
-    const action = await profile.runAction("updateTimezone", { timezone: "CET" });
+    const action = await unwrapEffect(profile.action("updateTimezone", { timezone: "CET" }));
     const refresh = await profile.refresh();
     const snapshot = await profile.snapshot();
     const events = (await runtime.query({ _tag: "RuntimeEvents" })).events;
@@ -245,6 +283,7 @@ describe("runtime client", () => {
     let constructed = 0;
     let acquired = 0;
     type RewiredSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -252,13 +291,11 @@ describe("runtime client", () => {
     }>;
 
     class RewiredNode extends NodeBase<RewiredSpec> {
-      static readonly spec = serviceSpec<RewiredSpec>({
+      static readonly spec = serviceSpec.effect<RewiredSpec>({
         tag: "services/runtime-evict-rewire",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<RewiredSpec>({
-          acquire: Driver.Acquire(() => Effect.sync(() => `ready:${++acquired}`)),
-        }),
+        acquire: Driver.Acquire(() => Effect.sync(() => `ready:${++acquired}`)),
       });
 
       constructor() {
@@ -330,7 +367,23 @@ describe("runtime client", () => {
     await first.lease.dispose();
     const stillLiveSnapshot = await profile.snapshot();
 
-    expect(stillLiveSnapshot).toEqual(liveSnapshot);
+    if (stillLiveSnapshot._tag !== "Found") {
+      throw new Error("Expected live snapshot to remain found.");
+    }
+
+    // Disposing one of two redundant "manual" leases removes it from the internal
+    // lease registry but leaves the projected read identical, so no demand-changed
+    // event fires (asserted below via the event count). The node revision is a
+    // conservative change signal: it advances on the committed registry write even
+    // though nothing else in the snapshot differs.
+    expect(stillLiveSnapshot.snapshot.revision).toBeGreaterThan(liveSnapshot.snapshot.revision);
+    expect({
+      ...stillLiveSnapshot,
+      snapshot: { ...stillLiveSnapshot.snapshot, revision: 0 },
+    }).toEqual({
+      ...liveSnapshot,
+      snapshot: { ...liveSnapshot.snapshot, revision: 0 },
+    });
 
     await second.lease.dispose();
     await third.lease.dispose();
@@ -425,11 +478,11 @@ describe("runtime client", () => {
       resolveNodeIdSync: () => nodeId,
       getStatusSync: () => "running" as const,
       readNodeSnapshotSync: () => ({ _tag: "Missing", nodeId }) as const,
-      readNodeSnapshot: async () => ({ _tag: "Missing", nodeId }) as const,
-      observe: () => ({ unsubscribe: () => undefined }),
-      submit: async (command: Parameters<ReturnType<typeof createRuntime>["submit"]>[0]) => {
+      readNodeSnapshot: () => Effect.succeed({ _tag: "Missing", nodeId } as const),
+      observe: () => Effect.succeed({ unsubscribe: () => undefined }),
+      submit: (command: Parameters<ReturnType<typeof createRuntime>["submit"]>[0]) => {
         if (command._tag === "GraphAcquireNodeLiveLease") {
-          return {
+          return Effect.succeed({
             _tag: "GraphNodeLiveLeaseAcquired",
             result: {
               _tag: "Held",
@@ -439,17 +492,17 @@ describe("runtime client", () => {
               changed: true,
               failures: [],
             },
-          } satisfies RuntimeSubmission;
+          } satisfies RuntimeSubmission);
         }
 
         if (command._tag === "GraphReleaseNodeLiveLease") {
           releaseCalls += 1;
 
           if (releaseCalls === 1) {
-            throw releaseFailure;
+            return Effect.fail(releaseFailure);
           }
 
-          return {
+          return Effect.succeed({
             _tag: "GraphNodeLiveLeaseReleased",
             result: {
               _tag: "Held",
@@ -459,16 +512,16 @@ describe("runtime client", () => {
               changed: true,
               failures: [],
             },
-          } satisfies RuntimeSubmission;
+          } satisfies RuntimeSubmission);
         }
 
-        throw new Error(`Unexpected command ${command._tag}.`);
+        return Effect.fail(new Error(`Unexpected command ${command._tag}.`));
       },
     };
-    const handle = createRuntimeClient(runtime).node<Record<string, never>, string>(
-      ProfileNode,
-      {}
-    );
+    const handle = createRuntimeClient(runtime as never, bridgeRunner).node<
+      Record<string, never>,
+      string
+    >(ProfileNode, {});
     const result = await handle.acquireLiveLease("manual", { pair: "BTC/USD" });
 
     if (result._tag !== "Held") {
@@ -535,6 +588,7 @@ describe("runtime client", () => {
     const started = await Effect.runPromise(Deferred.make<void>());
     const gate = await Effect.runPromise(Deferred.make<string>());
     type SlowSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -542,18 +596,16 @@ describe("runtime client", () => {
     }>;
 
     class SlowNode extends NodeBase<SlowSpec> {
-      static readonly spec = serviceSpec<SlowSpec>({
+      static readonly spec = serviceSpec.effect<SlowSpec>({
         tag: "services/runtime-client-slow",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SlowSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(started, undefined);
-              return yield* Deferred.await(gate);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined);
+            return yield* Deferred.await(gate);
+          })
+        ),
       });
     }
     const runtime = createRuntime();
@@ -623,9 +675,9 @@ describe("runtime client", () => {
       FrondRuntimeClosed
     );
     await expect(profile.ensureReady()).rejects.toBeInstanceOf(FrondRuntimeClosed);
-    await expect(profile.runAction("updateTimezone", { timezone: "CET" })).rejects.toBeInstanceOf(
-      FrondRuntimeClosed
-    );
+    await expect(
+      unwrapEffect(profile.action("updateTimezone", { timezone: "CET" }))
+    ).rejects.toBeInstanceOf(FrondRuntimeClosed);
     await expect(profile.refresh()).rejects.toBeInstanceOf(FrondRuntimeClosed);
     await expect(profile.acquireLiveLease("manual", { source: "test" })).rejects.toBeInstanceOf(
       FrondRuntimeClosed
@@ -655,6 +707,7 @@ describe("runtime client", () => {
     const started = await Effect.runPromise(Deferred.make<void>());
     const gate = await Effect.runPromise(Deferred.make<string>());
     type SlowSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -662,24 +715,22 @@ describe("runtime client", () => {
     }>;
 
     class SlowNode extends NodeBase<SlowSpec> {
-      static readonly spec = serviceSpec<SlowSpec>({
+      static readonly spec = serviceSpec.effect<SlowSpec>({
         tag: "services/runtime-client-external-pending",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SlowSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(started, undefined);
-              return yield* Deferred.await(gate);
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined);
+            return yield* Deferred.await(gate);
+          })
+        ),
       });
     }
     const runtime = createRuntime();
     const owner = runtime.client.node<Record<string, never>, string>(SlowNode, {});
     const observer = runtime.client.node<Record<string, never>, string>(SlowNode, {});
-    const secondClient = createRuntimeClient(runtime);
+    const secondClient = createRuntimeClient(effectHostFromRuntime(runtime), bridgeRunner);
     const crossClientObserver = secondClient.node<Record<string, never>, string>(SlowNode, {});
     const ready = owner.ensureReady();
 
@@ -710,6 +761,7 @@ describe("runtime client", () => {
     const started = await Effect.runPromise(Deferred.make<void>());
     const gate = await Effect.runPromise(Deferred.make<void>());
     type FailingSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -717,19 +769,17 @@ describe("runtime client", () => {
     }>;
 
     class FailingNode extends NodeBase<FailingSpec> {
-      static readonly spec = serviceSpec<FailingSpec>({
+      static readonly spec = serviceSpec.effect<FailingSpec>({
         tag: "services/runtime-client-failing-attempt",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<FailingSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(started, undefined);
-              yield* Deferred.await(gate);
-              return yield* Effect.fail("rejected");
-            })
-          ),
-        }),
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined);
+            yield* Deferred.await(gate);
+            return yield* Effect.fail("rejected");
+          })
+        ),
       });
     }
     const runtime = createRuntime();
@@ -777,6 +827,7 @@ describe("runtime client", () => {
   test("runtime client boot does not retry error but ensureReady does", async () => {
     let attempts = 0;
     type FailingOnceSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -784,23 +835,21 @@ describe("runtime client", () => {
     }>;
 
     class FailingOnceNode extends NodeBase<FailingOnceSpec> {
-      static readonly spec = serviceSpec<FailingOnceSpec>({
+      static readonly spec = serviceSpec.effect<FailingOnceSpec>({
         tag: "services/runtime-client-failing-once",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<FailingOnceSpec>({
-          acquire: Driver.Acquire(() =>
-            Effect.gen(function* () {
-              attempts += 1;
+        acquire: Driver.Acquire(() =>
+          Effect.gen(function* () {
+            attempts += 1;
 
-              if (attempts === 1) {
-                return yield* Effect.fail(new Error("first attempt failed"));
-              }
+            if (attempts === 1) {
+              return yield* Effect.fail(new Error("first attempt failed"));
+            }
 
-              return "ready";
-            })
-          ),
-        }),
+            return "ready";
+          })
+        ),
       });
     }
     const runtime = createRuntime();
@@ -827,6 +876,7 @@ describe("runtime client", () => {
   test("runtime client pending attempt resolves on acquire defect", async () => {
     const cause = new TypeError("driver typo");
     type DefectSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -834,13 +884,11 @@ describe("runtime client", () => {
     }>;
 
     class DefectNode extends NodeBase<DefectSpec> {
-      static readonly spec = serviceSpec<DefectSpec>({
+      static readonly spec = serviceSpec.effect<DefectSpec>({
         tag: "services/runtime-client-acquire-defect",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<DefectSpec>({
-          acquire: Driver.Acquire(() => Effect.die(cause)),
-        }),
+        acquire: Driver.Acquire(() => Effect.die(cause)),
       });
     }
     const runtime = createRuntime();
@@ -870,6 +918,7 @@ describe("runtime client", () => {
     };
     let revision = 0;
     type ListSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: ListArgs;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -877,28 +926,26 @@ describe("runtime client", () => {
     }>;
 
     class ListNode extends NodeBase<ListSpec> {
-      static readonly spec = serviceSpec<ListSpec>({
+      static readonly spec = serviceSpec.effect<ListSpec>({
         tag: "services/runtime-client-list",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<ListSpec>({
-          acquire: Driver.Acquire((ctx) => {
+        acquire: Driver.Acquire((ctx) => {
+          revision += 1;
+          return Effect.succeed({
+            filter: ctx.args.filter,
+            revision,
+          });
+        }),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
             revision += 1;
-            return Effect.succeed({
+            yield* ctx.setResult({
               filter: ctx.args.filter,
               revision,
             });
-          }),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              revision += 1;
-              yield* ctx.setResult({
-                filter: ctx.args.filter,
-                revision,
-              });
-            })
-          ),
-        }),
+          })
+        ),
       });
     }
     const runtime = createRuntime();
@@ -956,6 +1003,7 @@ describe("runtime client", () => {
     const refreshStarted = await Effect.runPromise(Deferred.make<void>());
     const refreshGate = await Effect.runPromise(Deferred.make<void>());
     type SlowListSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: ListArgs;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -963,22 +1011,20 @@ describe("runtime client", () => {
     }>;
 
     class SlowListNode extends NodeBase<SlowListSpec> {
-      static readonly spec = serviceSpec<SlowListSpec>({
+      static readonly spec = serviceSpec.effect<SlowListSpec>({
         tag: "services/runtime-client-slow-list",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<SlowListSpec>({
-          acquire: Driver.Acquire((ctx) => Effect.succeed({ filter: ctx.args.filter })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(refreshStarted, undefined);
-              yield* Deferred.await(refreshGate);
-              yield* ctx.setResult({
-                filter: ctx.args.filter,
-              });
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) => Effect.succeed({ filter: ctx.args.filter })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(refreshStarted, undefined);
+            yield* Deferred.await(refreshGate);
+            yield* ctx.setResult({
+              filter: ctx.args.filter,
+            });
+          })
+        ),
       });
     }
     const runtime = createRuntime();
@@ -1010,6 +1056,7 @@ describe("runtime client", () => {
     const actionStarted = await Effect.runPromise(Deferred.make<void>());
     const actionGate = await Effect.runPromise(Deferred.make<void>());
     type BusyActionSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1020,21 +1067,19 @@ describe("runtime client", () => {
     }>;
 
     class BusyActionNode extends NodeBase<BusyActionSpec> {
-      static readonly spec = serviceSpec<BusyActionSpec>({
+      static readonly spec = serviceSpec.effect<BusyActionSpec>({
         tag: "services/runtime-client-busy-action",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<BusyActionSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "idle" })),
-          actions: {
-            wait: Driver.Action(() =>
-              Effect.gen(function* () {
-                yield* Deferred.succeed(actionStarted, undefined);
-                yield* Deferred.await(actionGate);
-              })
-            ),
-          },
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "idle" })),
+        actions: {
+          wait: Driver.Action(() =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(actionStarted, undefined);
+              yield* Deferred.await(actionGate);
+            })
+          ),
+        },
       });
     }
     const runtime = createRuntime();
@@ -1045,7 +1090,7 @@ describe("runtime client", () => {
     });
 
     await node.ensureReady();
-    const action = node.runAction("wait");
+    const action = unwrapEffect(node.action("wait"));
     await Effect.runPromise(Deferred.await(actionStarted));
 
     expect(reads.some((read) => read._tag === "Ready" && read.busy)).toBe(true);
@@ -1065,6 +1110,7 @@ describe("runtime client", () => {
       readonly filter: string;
     };
     type RollbackListSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: ListArgs;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1072,14 +1118,12 @@ describe("runtime client", () => {
     }>;
 
     class RollbackListNode extends NodeBase<RollbackListSpec> {
-      static readonly spec = serviceSpec<RollbackListSpec>({
+      static readonly spec = serviceSpec.effect<RollbackListSpec>({
         tag: "services/runtime-client-rollback-list",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<RollbackListSpec>({
-          acquire: Driver.Acquire((ctx) => Effect.succeed({ filter: ctx.args.filter })),
-          refresh: Driver.Refresh(() => Effect.fail({ _tag: "RefreshRejected" })),
-        }),
+        acquire: Driver.Acquire((ctx) => Effect.succeed({ filter: ctx.args.filter })),
+        refresh: Driver.Refresh(() => Effect.fail({ _tag: "RefreshRejected" })),
       });
     }
     const runtime = createRuntime();
@@ -1110,6 +1154,7 @@ describe("runtime client", () => {
       readonly filter: string;
     };
     type RollbackPatchListSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: ListArgs;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1117,21 +1162,19 @@ describe("runtime client", () => {
     }>;
 
     class RollbackPatchListNode extends NodeBase<RollbackPatchListSpec> {
-      static readonly spec = serviceSpec<RollbackPatchListSpec>({
+      static readonly spec = serviceSpec.effect<RollbackPatchListSpec>({
         tag: "services/runtime-client-rollback-patch-list",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<RollbackPatchListSpec>({
-          acquire: Driver.Acquire((ctx) => Effect.succeed({ filter: ctx.args.filter })),
-          refresh: Driver.Refresh((ctx) =>
-            Effect.gen(function* () {
-              yield* ctx.patchResult((current) => {
-                current.filter = "leaked";
-              });
-              return yield* Effect.fail({ _tag: "RefreshRejected" });
-            })
-          ),
-        }),
+        acquire: Driver.Acquire((ctx) => Effect.succeed({ filter: ctx.args.filter })),
+        refresh: Driver.Refresh((ctx) =>
+          Effect.gen(function* () {
+            yield* ctx.patchResult((current) => {
+              current.filter = "leaked";
+            });
+            return yield* Effect.fail({ _tag: "RefreshRejected" });
+          })
+        ),
       });
     }
     const runtime = createRuntime();
@@ -1155,6 +1198,7 @@ describe("runtime client", () => {
       readonly filter: string;
     };
     type KeyedListSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: ListArgs;
       readonly key: Key.Structure<{ readonly id: string }>;
       readonly deps: Record<string, never>;
@@ -1162,13 +1206,11 @@ describe("runtime client", () => {
     }>;
 
     class KeyedListNode extends NodeBase<KeyedListSpec> {
-      static readonly spec = serviceSpec<KeyedListSpec>({
+      static readonly spec = serviceSpec.effect<KeyedListSpec>({
         tag: "services/runtime-client-keyed-list",
         key: (args) => Key.structure({ id: args.id }),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<KeyedListSpec>({
-          acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.args.filter)),
-        }),
+        acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.args.filter)),
       });
     }
     const runtime = createRuntime();
@@ -1193,6 +1235,7 @@ describe("runtime client", () => {
 
   test("__unsafe reads and schedules explicit runtime work by node id", async () => {
     type UnsafeSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1200,13 +1243,11 @@ describe("runtime client", () => {
     }>;
 
     class UnsafeNode extends NodeBase<UnsafeSpec> {
-      static readonly spec = serviceSpec<UnsafeSpec>({
+      static readonly spec = serviceSpec.effect<UnsafeSpec>({
         tag: "services/runtime-client-unsafe",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<UnsafeSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
       });
     }
     const runtime = createRuntime();
@@ -1242,6 +1283,7 @@ describe("runtime client", () => {
 
   test("__unsafe ensureReady schedules an already-wired idle node by node id", async () => {
     type IdleUnsafeSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1249,13 +1291,11 @@ describe("runtime client", () => {
     }>;
 
     class IdleUnsafeNode extends NodeBase<IdleUnsafeSpec> {
-      static readonly spec = serviceSpec<IdleUnsafeSpec>({
+      static readonly spec = serviceSpec.effect<IdleUnsafeSpec>({
         tag: "services/runtime-client-unsafe-idle",
         key: () => Key.singleton(),
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<IdleUnsafeSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
       });
     }
 
@@ -1284,6 +1324,7 @@ describe("runtime client", () => {
 
   test("__unsafe schedule/update reports Invalid when the underlying node is invalid", async () => {
     type InvalidUnsafeSpec = NodeSpec<{
+      readonly mode: "effect";
       readonly args: Record<string, never>;
       readonly key: Key.Singleton;
       readonly deps: Record<string, never>;
@@ -1291,13 +1332,11 @@ describe("runtime client", () => {
     }>;
 
     class InvalidUnsafeNode extends NodeBase<InvalidUnsafeSpec> {
-      static readonly spec = serviceSpec<InvalidUnsafeSpec>({
+      static readonly spec = serviceSpec.effect<InvalidUnsafeSpec>({
         tag: "services/runtime-client-unsafe-invalid",
         key: () => ({ value: Number.NaN }) as never,
         dependencies: dependencies(() => ({})),
-        driver: Driver.Effect<InvalidUnsafeSpec>({
-          acquire: Driver.Acquire(() => Effect.succeed("ready")),
-        }),
+        acquire: Driver.Acquire(() => Effect.succeed("ready")),
       });
     }
 
@@ -1320,30 +1359,108 @@ describe("runtime client", () => {
     const nodeId = 'services/unsafe-submit-failure:v1:"singleton"' as NodeId;
     const failure = new FrondRuntimeClosed({ operation: "GraphRefreshNode" });
     const failures: Array<{ readonly command: string; readonly cause: unknown }> = [];
-    const unsafe = createUnsafeRuntimeClient({
-      getStatusSync: () => "running",
-      readNodeSnapshotSync: () =>
-        ({
-          _tag: "Found",
-          snapshot: {
-            _tag: "Ready",
-            node: {},
-            result: "ready",
-            resultValidity: { _tag: "Current" },
-            operation: { _tag: "Idle" },
-            operationFailure: undefined,
-          },
-        }) as never,
-      submit: () => Promise.reject(failure),
-      recordUnsafeScheduleFailure: (command, cause) => {
-        failures.push({ command: command._tag, cause });
-      },
-    } as never);
+    const unsafe = createUnsafeRuntimeClient(
+      {
+        getStatusSync: () => "running",
+        readNodeSnapshotSync: () =>
+          ({
+            _tag: "Found",
+            snapshot: {
+              _tag: "Ready",
+              node: {},
+              result: "ready",
+              resultValidity: { _tag: "Current" },
+              operation: { _tag: "Idle" },
+              operationFailure: undefined,
+            },
+          }) as never,
+        submit: () => Effect.fail(failure),
+        recordUnsafeScheduleFailure: (command, cause) => {
+          failures.push({ command: command._tag, cause });
+        },
+      } as never,
+      bridgeRunner
+    );
 
     expect(unsafe.refresh(nodeId)).toEqual({ _tag: "Scheduled", nodeId });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(failures).toEqual([{ command: "GraphRefreshNode", cause: failure }]);
+  });
+
+  test("handle created from a bare effect-mode descriptor dispatches effect-mode actions", async () => {
+    type BareSpec = NodeSpec<{
+      readonly mode: "effect";
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: string;
+      readonly actions: { readonly ping: ActionContract<void, string> };
+    }>;
+
+    // A bare descriptor carries the driver at the top level (`{ driver }`), not
+    // under a static `spec`, matching the second shape `NodeSpecMode` recovers.
+    const bareDescriptor = serviceSpec.effect<BareSpec>({
+      tag: "services/runtime-client-bare-effect-descriptor",
+      key: () => Key.singleton(),
+      dependencies: dependencies(() => ({})),
+      acquire: Driver.Acquire(() => Effect.succeed("ready")),
+      actions: {
+        ping: Driver.Action(() => Effect.succeed("pong")),
+      },
+    });
+    const nodeId = 'services/runtime-client-bare-effect-descriptor:{"type":"singleton"}' as NodeId;
+    const runtime = {
+      resolveNodeIdSync: () => nodeId,
+      getStatusSync: () => "running" as const,
+      readNodeSnapshotSync: () => ({ _tag: "Missing", nodeId }) as const,
+      readNodeSnapshot: () => Effect.succeed({ _tag: "Missing", nodeId } as const),
+      observe: () => Effect.succeed({ unsubscribe: () => undefined }),
+      submit: () =>
+        Effect.succeed({
+          _tag: "GraphActionCompleted",
+          result: { _tag: "Success", nodeId, value: "pong" },
+        } satisfies RuntimeSubmission),
+    };
+    const handle = createRuntimeClient(runtime as never, bridgeRunner).node(
+      bareDescriptor as never,
+      {}
+    );
+
+    const dispatched = (handle.actions as { readonly ping: () => unknown }).ping();
+
+    // Effect mode is recovered from the bare descriptor, so the action facade
+    // returns the Effect itself, not its Promise projection.
+    expect(Effect.isEffect(dispatched)).toBe(true);
+    expect(dispatched instanceof Promise).toBe(false);
+    await expect(
+      Effect.runPromise(dispatched as Effect.Effect<unknown, unknown>)
+    ).resolves.toMatchObject({
+      _tag: "Success",
+      value: "pong",
+    });
+  });
+
+  test("readVersion stays monotonic across evict and recreate for the same node id", async () => {
+    const runtime = createRuntime();
+    const profile = runtime.client.node<Record<string, never>, MutableProfile>(
+      ActionProfileNode,
+      {}
+    );
+
+    await profile.ensureReady();
+    await unwrapEffect(profile.action("updateTimezone", { timezone: "CET" }));
+    const beforeEviction = profile.readVersion();
+
+    expect(beforeEviction).toBeGreaterThan(0);
+
+    await profile.evict();
+    await profile.ensureReady();
+    await unwrapEffect(profile.action("updateTimezone", { timezone: "EET" }));
+
+    // The recreated cell seeds its revision past the evicted one, so a
+    // useSyncExternalStore consumer can never observe an ABA'd version.
+    expect(profile.readVersion()).toBeGreaterThan(beforeEviction);
   });
 });

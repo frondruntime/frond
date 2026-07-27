@@ -9,6 +9,7 @@ export {
 export { dep } from "./dependency";
 export type {
   FrondNode,
+  RuntimeActionEffectExecutor,
   RuntimeActionExecutor,
   RuntimeReadyNodeConstruction,
   RuntimeReadyNodeControl,
@@ -27,10 +28,13 @@ export type {
   ActionInput,
   ActionInputArgs,
   ActionOutput,
+  AnyModeSpec,
+  AsyncModeSpec,
   Dep,
   DependenciesRecord,
   Dependency,
   DependencyResolver,
+  EffectModeSpec,
   NodeActions,
   NodeDescriptor,
   NodeKind,
@@ -39,10 +43,10 @@ export type {
   NodeSpecArgs,
   NodeSpecClass,
   NodeSpecDeclaredDeps,
-  NodeSpecInput,
   NodeSpecInstance,
   NodeSpecKey,
   NodeSpecLike,
+  NodeSpecMode,
   NodeSpecResolvedDeps,
   NodeSpecResult,
   NodeTag,
@@ -54,3 +58,9 @@ export {
   FROND_NODE_SPEC_BRAND,
   FrondNodeSpecError,
 } from "./types";
+export type {
+  SpecWithDriverClass,
+  SpecWithDriverReplacement,
+  SpecWithDriverSpec,
+} from "./withDriver";
+export { specWithDriver } from "./withDriver";

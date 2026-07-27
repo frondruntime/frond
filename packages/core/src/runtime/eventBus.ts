@@ -59,10 +59,15 @@ export const makeRuntimeEventBus = (config: RuntimeEventBusConfig): RuntimeEvent
       failures: failures(event),
     };
 
-    events.push(record);
+    // Zero-retention contract: with eventBufferSize 0 a record must never
+    // enter the retained array, not even transiently between a push and a
+    // trim. Observers and sinks still receive every record.
+    if (config.eventBufferSize > 0) {
+      events.push(record);
 
-    if (events.length > config.eventBufferSize) {
-      events.splice(0, events.length - config.eventBufferSize);
+      if (events.length > config.eventBufferSize) {
+        events.splice(0, events.length - config.eventBufferSize);
+      }
     }
 
     return record;
