@@ -2,6 +2,7 @@ import type { Effect as EffectType } from "effect";
 import type { ResultValidityPolicy } from "../graph/types";
 import type { NodeBase } from "../node/runtime";
 import type {
+  AnyModeSpec,
   AsyncModeSpec,
   EffectModeSpec,
   NodeSpec,
@@ -55,8 +56,7 @@ type DriverHookDescriptor<TKind extends string, TRun> = {
 // The node type hooks see, in the driver's authored mode: the mode lives in
 // the spec shape, so effect-mode hooks receive a node whose action facade is
 // Effect-native and async-mode hooks a Promise-native one.
-type SpecNode<TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>> =
-  NodeBase<TSpec>;
+type SpecNode<TSpec extends AnyModeSpec> = NodeBase<TSpec>;
 
 /**
  * Rejects keys in an explicitly supplied action map (`resourceSpec.async<Spec,
@@ -65,10 +65,9 @@ type SpecNode<TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly resul
  * the driver registry. Resolves to `unknown` when every key is declared,
  * leaving inline authoring and the generic default unaffected.
  */
-type DeclaredActionKeysOnly<
-  TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
-  TActions,
-> = [Exclude<keyof TActions, keyof NodeSpecActions<TSpec>>] extends [never]
+type DeclaredActionKeysOnly<TSpec extends AnyModeSpec, TActions> = [
+  Exclude<keyof TActions, keyof NodeSpecActions<TSpec>>,
+] extends [never]
   ? unknown
   : Record<Exclude<keyof TActions, keyof NodeSpecActions<TSpec>>, never>;
 
