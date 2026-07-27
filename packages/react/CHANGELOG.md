@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.0](https://github.com/frondruntime/frond/compare/react-v0.1.0...react-v0.2.0) (2026-07-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* node authoring moves to serviceSpec.async/.effect(...) with flattened driver hooks; Driver.Async and Driver.Effect are removed from the public Driver namespace. Node and handle action calls are mode-native (the .async/.effect channels and handle.runAction are removed); use unwrapEffect/wrapPromise to cross the Promise/Effect boundary.
+
+### Features
+
+* mode-declared spec shapes, mode-native actions, lifecycle hardening (0.2.0) ([#13](https://github.com/frondruntime/frond/issues/13)) ([2b98dfb](https://github.com/frondruntime/frond/commit/2b98dfb256712a8fa86573f18ac0c08746bf7a28))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @frondruntime/core bumped to 0.2.0
+  * peerDependencies
+    * @frondruntime/core bumped from 0.1.0 to 0.2.0
+
 ## [0.1.0](https://github.com/frondruntime/frond/compare/react-v0.0.3...react-v0.1.0) (2026-07-15)
 
 
