@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -237,6 +237,41 @@ function assertPackedFiles(
   );
 }
 
+// The smoke is only evidence about the tarballs if the tarballs are the only
+// copies installed. `overrides` in the smoke package.json pins every request,
+// but a resolver that ignores or mis-applies them would quietly reintroduce a
+// registry copy nested under a dependent — and then the typecheck reports
+// cross-package type-identity errors that look like artifact defects. Fail
+// loudly on the layout instead of letting the diagnosis start from tsc output.
+function assertSingleCopies(
+  smokeDir: string,
+  packages: readonly PublishPackage[]
+): Effect.Effect<void, PublishFailure> {
+  return Effect.forEach(
+    packages,
+    (input) =>
+      Effect.gen(function* () {
+        const nested = join(smokeDir, "node_modules", input.packageJson.name, "node_modules");
+        const entries = yield* Effect.tryPromise({
+          try: () => readdir(nested).catch(() => [] as string[]),
+          catch: (cause) => fail("check installed copies", `Could not inspect ${nested}.`, cause),
+        });
+
+        if (entries.includes("@frondruntime")) {
+          return yield* Effect.fail(
+            fail(
+              "check installed copies",
+              `${input.packageJson.name} has a nested @frondruntime copy at ${nested}. ` +
+                "The smoke must resolve a single copy of each workspace package, from the packed " +
+                "tarball. Check the smoke package.json overrides."
+            )
+          );
+        }
+      }),
+    { discard: true }
+  );
+}
+
 function command(
   label: string,
   cmd: readonly string[],
@@ -371,41 +406,59 @@ function smokePackageJson(
   context: PublishContext
 ): Effect.Effect<unknown, PublishFailure> {
   return Effect.try({
-    try: () => ({
-      name: "frond-publish-smoke",
-      private: true,
-      type: "module",
-      scripts: {
-        typecheck: "tsc -p tsconfig.json --noEmit",
-        smoke: "node ./src/runtime-smoke.mjs",
-      },
-      dependencies: {
-        "@frondruntime/core": fileDependency(smokeDir, requireTarball(tarballs, context.core)),
-        "@frondruntime/react": fileDependency(smokeDir, requireTarball(tarballs, context.react)),
-        effect: requireDependency(context.rootPackageJson, "devDependencies", "effect"),
-        mobx: requireDependency(context.core.packageJson, "devDependencies", "mobx"),
-        "mobx-react-lite": requireDependency(
-          context.rootPackageJson,
-          "devDependencies",
-          "mobx-react-lite"
-        ),
-        react: requireDependency(context.rootPackageJson, "devDependencies", "react"),
-        "react-dom": requireDependency(context.rootPackageJson, "devDependencies", "react-dom"),
-      },
-      devDependencies: {
-        "@types/react": requireDependency(
-          context.rootPackageJson,
-          "devDependencies",
-          "@types/react"
-        ),
-        "@types/react-dom": requireDependency(
-          context.rootPackageJson,
-          "devDependencies",
-          "@types/react-dom"
-        ),
-        typescript: requireDependency(context.rootPackageJson, "devDependencies", "typescript"),
-      },
-    }),
+    try: () => {
+      const corePath = fileDependency(smokeDir, requireTarball(tarballs, context.core));
+      const reactPath = fileDependency(smokeDir, requireTarball(tarballs, context.react));
+
+      return {
+        name: "frond-publish-smoke",
+        private: true,
+        type: "module",
+        // The smoke must resolve BOTH workspace packages to the tarballs under
+        // test and nothing else. Without this, react's exact `@frondruntime/core`
+        // peer range is satisfiable from the registry, so the installer is free
+        // to nest a published copy under react — react's declarations then get
+        // checked against a *released* core while the consumer sources use the
+        // packed one. That yields "two different types with this name exist"
+        // errors that indict the artifacts for a resolution accident, and worse,
+        // it can silently pass by testing a version we did not just build.
+        // Overrides pin every transitive request to the tarball.
+        overrides: {
+          "@frondruntime/core": corePath,
+          "@frondruntime/react": reactPath,
+        },
+        scripts: {
+          typecheck: "tsc -p tsconfig.json --noEmit",
+          smoke: "node ./src/runtime-smoke.mjs",
+        },
+        dependencies: {
+          "@frondruntime/core": corePath,
+          "@frondruntime/react": reactPath,
+          effect: requireDependency(context.rootPackageJson, "devDependencies", "effect"),
+          mobx: requireDependency(context.core.packageJson, "devDependencies", "mobx"),
+          "mobx-react-lite": requireDependency(
+            context.rootPackageJson,
+            "devDependencies",
+            "mobx-react-lite"
+          ),
+          react: requireDependency(context.rootPackageJson, "devDependencies", "react"),
+          "react-dom": requireDependency(context.rootPackageJson, "devDependencies", "react-dom"),
+        },
+        devDependencies: {
+          "@types/react": requireDependency(
+            context.rootPackageJson,
+            "devDependencies",
+            "@types/react"
+          ),
+          "@types/react-dom": requireDependency(
+            context.rootPackageJson,
+            "devDependencies",
+            "@types/react-dom"
+          ),
+          typescript: requireDependency(context.rootPackageJson, "devDependencies", "typescript"),
+        },
+      };
+    },
     catch: (cause) => fail("prepare smoke package", "Could not prepare smoke package.json.", cause),
   });
 }
@@ -730,6 +783,7 @@ function packAndSmoke(context: PublishContext): Effect.Effect<void, PublishFailu
       yield* writeSmokeProject(smokeDir, tarballs, context);
       yield* command("smoke install", ["bun", "install"], { cwd: smokeDir });
       yield* assertPackedFiles(smokeDir, context.publishPackages);
+      yield* assertSingleCopies(smokeDir, context.publishPackages);
       yield* command("smoke typecheck", ["bun", "run", "typecheck"], { cwd: smokeDir });
       yield* command("smoke runtime import", ["bun", "run", "smoke"], { cwd: smokeDir });
       yield* log("\nSmoke project passed.");
