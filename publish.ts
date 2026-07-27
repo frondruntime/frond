@@ -428,9 +428,15 @@ function writeSmokeProject(
           join(smokeDir, "src/index.tsx"),
           `import * as Frond from "@frondruntime/core";
 import {
+  createDeferred,
   createFrondTestHarness,
+  effectBridgeRunner,
+  effectHostFromRuntime,
   type FrondTestHarness,
+  mockSpec,
+  readySpec,
 } from "@frondruntime/core/testing";
+import { FrondProvider } from "@frondruntime/react";
 import { TestFrondProvider } from "@frondruntime/react/testing";
 
 interface Profile {
@@ -438,33 +444,143 @@ interface Profile {
   readonly name: string;
 }
 
+type TransportSpec = Frond.NodeSpec<{
+  readonly mode: "async";
+  readonly args: Frond.Args.None;
+  readonly key: Frond.Key.Singleton;
+  readonly result: { readonly token: string };
+}>;
+
+class TransportNode extends Frond.NodeBase<TransportSpec> {
+  static readonly spec = Frond.serviceSpec.async<TransportSpec>({
+    tag: Frond.tag("publish-smoke/transport"),
+    key: () => Frond.Key.singleton(),
+    acquire: Frond.Driver.Acquire(() => ({ token: "token" })),
+  });
+
+  get token(): string {
+    return this.result.token;
+  }
+}
+
 type ProfileSpec = Frond.NodeSpec<{
+  readonly mode: "async";
   readonly args: { readonly id: string };
   readonly key: Frond.Key.Structure<{ readonly id: string }>;
+  readonly deps: { readonly transport: Frond.Dep<typeof TransportNode> };
   readonly result: Profile;
 }>;
 
 class ProfileNode extends Frond.NodeBase<ProfileSpec> {
-  static readonly spec = Frond.resourceSpec<ProfileSpec>({
+  static readonly spec = Frond.resourceSpec.async<ProfileSpec>({
     tag: Frond.tag("publish-smoke/profile"),
     key: (args) => Frond.Key.structure({ id: args.id }),
-    driver: Frond.Driver.Async<ProfileSpec>({
-      acquire: Frond.Driver.Acquire(async (ctx) => ({
-        id: ctx.args.id,
-        name: "Ada",
-      })),
-    }),
+    dependencies: Frond.dependencies(() => ({
+      transport: Frond.dep(TransportNode, Frond.Args.none),
+    })),
+    acquire: Frond.Driver.Acquire(async (ctx) => ({
+      id: ctx.args.id,
+      name: ctx.deps.transport.token,
+    })),
   });
 }
 
+// Mode-generic helpers accept the packed spec shape through AnyModeSpec.
+type AssertAnyModeSpec<TSpec extends Frond.AnyModeSpec> = TSpec;
+export type ProfileSpecIsAnyModeSpec = AssertAnyModeSpec<ProfileSpec>;
+
 const runtime = Frond.createRuntime();
 const handle = runtime.client.node(ProfileNode, { id: "1" });
+
+// 0.2 handle surface: sync ready-or-throw projection plus the awaited variant.
+const readReadyFromHandle: () => ProfileNode = handle.readReady;
+const ensureReadyNodeFromHandle: (
+  metadata?: Frond.Runtime.RuntimeWorkMetadata | undefined
+) => Promise<ProfileNode> = handle.ensureReadyNode;
+void readReadyFromHandle;
+void ensureReadyNodeFromHandle;
+
+// FrondNodeNotReady is the typed error non-ready projections throw.
+declare const notReady: InstanceType<typeof Frond.Runtime.FrondNodeNotReady>;
+notReady satisfies Error;
+
+// specWithDriver swaps only the driver; the override stays assignable where
+// the original class is expected.
+const replacementDriver = Frond.Driver.Async<TransportSpec>({
+  acquire: Frond.Driver.Acquire(() => ({ token: "injected" })),
+});
+const OverriddenTransport = Frond.specWithDriver(TransportNode, replacementDriver);
+const overriddenSlot: typeof TransportNode = OverriddenTransport;
+void overriddenSlot;
+
+// Result envelope: withInternal / internalOf / carryInternal.
+const envelopedProfile = Frond.withInternal(
+  { id: "1", name: "Ada" },
+  { socket: "publish-smoke" }
+);
+Frond.internalOf(envelopedProfile).socket satisfies string;
+const carriedProfile = Frond.carryInternal(envelopedProfile, { id: "1", name: "Beatrice" });
+Frond.internalOf(carriedProfile).socket satisfies string;
+
+// Ordered transitions.
+const transitionRunner: () => Promise<Frond.TransitionOutcome> = Frond.createTransition(
+  [{ label: "noop", run: () => Promise.resolve() }],
+  { onStepFailure: "continue" }
+);
+void transitionRunner;
+const transitionOutcome: Promise<Frond.TransitionOutcome> = Frond.runTransition(
+  [],
+  { onStepFailure: "abort" }
+);
+void transitionOutcome;
+
+// Serialized runtime replacement.
+const coordinator = Frond.createRuntimeCoordinator<Frond.Runtime.Runtime>();
+const coordinatorStart: (
+  createLease: () => Promise<Frond.RuntimeLease<Frond.Runtime.Runtime>>
+) => Promise<Frond.Runtime.Runtime> = coordinator.start;
+void coordinatorStart;
+
+// Harness runtime must unify with the package Runtime type (the 0.1 packaging
+// regression: core's testing rollup duplicated core's types instead of
+// importing them, so this assignment failed against the packed tarballs).
 const harness: FrondTestHarness = createFrondTestHarness();
 const harnessRuntime: Frond.Runtime.Runtime = harness.runtime;
+void harnessRuntime;
+
+// Rebuild a runtime client over the harness facade: testing's host/runner
+// types must be the same declarations core's createRuntimeClient consumes.
+const rebuiltClient: Frond.Runtime.RuntimeClient = Frond.createRuntimeClient(
+  effectHostFromRuntime(harness.runtime),
+  effectBridgeRunner
+);
+void rebuiltClient;
+
+// Deferred test values.
+const deferredProfile = createDeferred<Profile>();
+const deferredPromise: Promise<Profile> = deferredProfile.promise;
+void deferredPromise;
+
+// Item 7 - readySpec: a test-provided result envelope flows through without
+// casts, and the override of a spec WITH declared deps still typechecks.
+const ReadyProfile = readySpec(ProfileNode, envelopedProfile);
+const readyHandle = harness.node(ReadyProfile, { id: "1" });
+void readyHandle;
+
+// Item 7 - mockSpec: overrides against a spec with declared deps; the derived
+// dependency shape (rewired or severed) is usable without casts.
+const RewiredProfile = mockSpec(ProfileNode, {
+  dependencies: () => ({ transport: Frond.dep(OverriddenTransport, Frond.Args.none) }),
+});
+harness.node(RewiredProfile, { id: "2" });
+
+const SeveredProfile = mockSpec(ProfileNode, { dependencies: () => ({}) });
+harness.node(SeveredProfile, { id: "3" });
 
 void handle;
-void harnessRuntime;
+void FrondProvider({ runtime, children: null });
 void TestFrondProvider({ runtime, children: null });
+void TestFrondProvider({ harness, children: null });
 `
         ),
         writeText(
@@ -474,12 +590,35 @@ const coreTesting = await import("@frondruntime/core/testing");
 const react = await import("@frondruntime/react");
 const reactTesting = await import("@frondruntime/react/testing");
 
-if (typeof core.createRuntime !== "function") {
-  throw new Error("Missing @frondruntime/core createRuntime export");
+for (const name of [
+  "createRuntime",
+  "specWithDriver",
+  "withInternal",
+  "internalOf",
+  "carryInternal",
+  "runTransition",
+  "createTransition",
+  "createRuntimeCoordinator",
+]) {
+  if (typeof core[name] !== "function") {
+    throw new Error(\`Missing @frondruntime/core \${name} export\`);
+  }
 }
 
-if (typeof coreTesting.createFrondTestHarness !== "function") {
-  throw new Error("Missing @frondruntime/core/testing createFrondTestHarness export");
+for (const name of [
+  "createFrondTestHarness",
+  "effectHostFromRuntime",
+  "readySpec",
+  "mockSpec",
+  "createDeferred",
+]) {
+  if (typeof coreTesting[name] !== "function") {
+    throw new Error(\`Missing @frondruntime/core/testing \${name} export\`);
+  }
+}
+
+if (typeof coreTesting.effectBridgeRunner?.run !== "function") {
+  throw new Error("Missing @frondruntime/core/testing effectBridgeRunner export");
 }
 
 if (typeof react.FrondProvider !== "function") {

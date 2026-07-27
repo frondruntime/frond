@@ -1,11 +1,14 @@
+// Public core types are imported from the package name so the emitted testing
+// declaration rollup references `@frondruntime/core` instead of duplicating
+// the main entry's types. Values keep their relative imports; type-only
+// imports are erased at runtime.
+import type * as Frond from "@frondruntime/core";
 import type {
   AsyncAcquireDriverContext,
   AsyncDisposeContext,
   AsyncDriver,
-  AsyncDriverActionMap,
   AsyncDriverContext,
-  Driver,
-} from "../driver";
+} from "@frondruntime/core";
 import { Action } from "../driver";
 import { createAsyncDriver } from "../driver/asyncDefinition";
 import { createDeferred, type DeferredTestValue } from "./deferred";
@@ -34,7 +37,7 @@ export interface DeferredDriverActions<TNode extends object, TArgs, TDeps extend
 }
 
 export interface DeferredDriver<TNode extends object, TArgs, TDeps extends object, TResult> {
-  readonly driver: Driver<TNode, TArgs, TDeps, TResult, object>;
+  readonly driver: Frond.Driver.Driver<TNode, TArgs, TDeps, TResult, object>;
   readonly acquire: DeferredOperationGate<
     AsyncAcquireDriverContext<TArgs, TDeps, TResult>,
     TResult
@@ -82,7 +85,7 @@ type DeferredDriverSpec<
   TArgs,
   TDeps extends object,
   TResult,
-  TActions extends AsyncDriverActionMap<TNode, TArgs, TDeps, TResult>,
+  TActions extends Frond.Driver.AsyncDriverActionMap<TNode, TArgs, TDeps, TResult>,
 > = {
   acquire: AsyncDriver<TNode, TArgs, TDeps, TResult>["acquire"];
   refresh?: NonNullable<AsyncDriver<TNode, TArgs, TDeps, TResult>["refresh"]>;
