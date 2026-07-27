@@ -39,7 +39,7 @@ export function runReadyDriverOperation<TValue, TResult extends BackgroundOperat
   readonly readyData: ReadyData;
   readonly operation: string;
   readonly boundary: EffectBoundary;
-  readonly timeout: DriverOperationTimeoutMs;
+  readonly timeout: DriverOperationTimeoutMs | "unbounded";
   readonly disposerReason: OperationDisposerSettleReason;
   readonly spanName: string;
   readonly spanAttributes: Record<string, unknown>;

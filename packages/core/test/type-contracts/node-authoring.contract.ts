@@ -392,6 +392,44 @@ Driver.Action(
   }
 );
 
+// --- action timeout contracts -----------------------------------------------
+
+// timeout is accepted on the default (queue/reject) admission branch...
+Driver.Action((_ctx: SessionActionContext) => "expired", { timeout: 5_000 });
+Driver.Action((_ctx: SessionActionContext) => "expired", { timeout: "unbounded" });
+Driver.Action((_ctx: SessionActionContext) => "expired", { admission: "reject", timeout: 250 });
+
+// ...and on the join admission branch, for both void and input-bearing actions.
+Driver.Action<SessionActionContext, void, string>((_ctx) => "expired", {
+  admission: "join",
+  timeout: 250,
+});
+Driver.Action(
+  (_ctx: ProfileNodeContext, input: { readonly name: string }) => ({ ok: true as const, input }),
+  {
+    admission: "join",
+    admissionKey: (input) => input.name,
+    timeout: "unbounded",
+  }
+);
+
+// A number-typed variable stays accepted; runtime validation backs it.
+declare const configuredActionTimeoutMs: number;
+Driver.Action((_ctx: SessionActionContext) => "expired", { timeout: configuredActionTimeoutMs });
+
+// Only the literal "unbounded" is accepted among strings: omit timeout to
+// inherit the runtime driverTimeouts.action deadline.
+Driver.Action((_ctx: SessionActionContext) => "expired", {
+  // @ts-expect-error "inherit" is not a valid per-action timeout
+  timeout: "inherit",
+});
+
+// The zero literal never authors a deadline.
+Driver.Action((_ctx: SessionActionContext) => "expired", {
+  // @ts-expect-error a zero timeout is rejected at authoring time
+  timeout: 0,
+});
+
 type EffectSpec = import("../../src").NodeSpec<{
   readonly mode: "effect";
   readonly args: Args.None;

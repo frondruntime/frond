@@ -130,4 +130,67 @@ describe("action interruption", () => {
     release();
     await harness.teardown();
   });
+
+  test("an unbounded action outlives the runtime action deadline and is still interrupted by RuntimeStop", async () => {
+    const probe = makeAbortProbe();
+
+    type UnboundedSpec = NodeSpec<{
+      readonly mode: "effect";
+      readonly key: Key.Singleton;
+      readonly result: { readonly ready: true };
+      readonly actions: { readonly hang: Driver.ActionContract<void, string> };
+    }>;
+
+    class UnboundedNode extends NodeBase<UnboundedSpec> {
+      static readonly spec = serviceSpec.effect<UnboundedSpec>({
+        tag: tag("interruption/unbounded-timeout"),
+        key: () => Key.singleton(),
+        acquire: Driver.Acquire(() => Effect.succeed({ ready: true as const })),
+        actions: {
+          hang: Driver.Action(
+            (ctx) =>
+              Effect.gen(function* () {
+                probe.onAbort(ctx.signal);
+                yield* Effect.sync(() => probe.markStarted());
+                yield* Effect.never;
+                return "done";
+              }),
+            { timeout: "unbounded" }
+          ),
+        },
+      });
+    }
+
+    // 20ms runtime action deadline: an inheriting action would time out almost
+    // immediately, so surviving well past it pins the unbounded escape.
+    const harness = createFrondTestHarness({ driverTimeouts: { action: 20 } });
+    await harness.start();
+    const handle = harness.node(UnboundedNode, {});
+    await handle.ensureReady();
+
+    const fiber = Effect.runFork(handle.action("hang"));
+    let settled = false;
+    const awaited = Effect.runPromise(Fiber.await(fiber)).then((exit) => {
+      settled = true;
+      return exit;
+    });
+
+    await probe.started;
+    // Let several multiples of the 20ms deadline elapse: the unbounded action
+    // must be neither timed out nor aborted by the deadline machinery.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(settled).toBe(false);
+    expect(probe.aborted).toBe(false);
+
+    // Runtime stop flows through fiber interruption/close paths, not the
+    // deadline, so it must still interrupt the in-flight unbounded action and
+    // settle the operation.
+    await harness.stop();
+    await awaited;
+
+    expect(settled).toBe(true);
+    expect(probe.aborted).toBe(true);
+
+    await harness.teardown();
+  });
 });

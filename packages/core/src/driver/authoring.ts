@@ -24,6 +24,8 @@ import type {
   ActionInput,
   ActionOptions,
   ActionOutput,
+  ActionTimeout,
+  ActionTimeoutInput,
   AsyncAcquireDriverContext,
   AsyncDisposeContext,
   AsyncDriver,
@@ -330,11 +332,32 @@ export function Live(resource: object): DriverHookDescriptor<"live", object> {
  * equal inputs should share one in-flight operation. Void-input actions omit
  * `admissionKey` and join on a constant per-node/action key: every concurrent
  * invocation shares the one in-flight run.
+ *
+ * Actions inherit the runtime `driverTimeouts.action` deadline. `timeout`
+ * overrides it per action: a positive finite number of milliseconds replaces
+ * the deadline, and the literal `"unbounded"` skips only the deadline —
+ * runtime stop, eviction, and caller interruption still interrupt the action.
  */
-export function Action<TContext, TInput, TOutput>(
-  run: { bivarianceHack(ctx: TContext, input: TInput): TOutput }["bivarianceHack"],
-  options?: ActionOptions<TInput>
+export function Action<TContext, TInput, TOutput, TTimeout extends ActionTimeout = ActionTimeout>(
+  run: {
+    bivarianceHack(ctx: TContext, input: TInput): TOutput;
+  }["bivarianceHack"],
+  options?: ActionOptions<TInput> & {
+    readonly timeout?: ActionTimeoutInput<TTimeout> | undefined;
+  }
 ): DriverActionDescriptor<typeof run> {
+  const timeout: ActionTimeout | undefined = options?.timeout;
+
+  if (
+    timeout !== undefined &&
+    timeout !== "unbounded" &&
+    !(typeof timeout === "number" && Number.isFinite(timeout) && timeout > 0)
+  ) {
+    throw new TypeError(
+      'Frond.Driver.Action timeout must be a positive finite number of milliseconds or "unbounded".'
+    );
+  }
+
   const joinAdmissionKey =
     options?.admission === "join"
       ? (options as { readonly admissionKey?: unknown }).admissionKey
@@ -363,6 +386,7 @@ export function Action<TContext, TInput, TOutput>(
     [ACTION_BRAND]: true,
     run,
     admission,
+    timeout,
   } satisfies DriverActionDescriptor<typeof run>;
 }
 

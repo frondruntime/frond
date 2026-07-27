@@ -51,9 +51,27 @@ export type ActionAdmission =
       readonly admissionKey?: ((input: unknown) => unknown) | undefined;
     };
 
+/**
+ * Per-action deadline policy. A positive finite number of milliseconds replaces
+ * the runtime `driverTimeouts.action` deadline for that action; the literal
+ * `"unbounded"` skips the deadline entirely while leaving runtime stop,
+ * eviction, and caller interruption in force. Omitted means inherit
+ * `driverTimeouts.action`.
+ */
+export type ActionTimeout = number | "unbounded";
+
+/**
+ * Compile-time refinement for `Driver.Action` timeout literals: the literal `0`
+ * is rejected at the type level, while `number`-typed variables stay accepted
+ * and fall through to runtime validation.
+ */
+export type ActionTimeoutInput<TTimeout extends ActionTimeout> = TTimeout &
+  (TTimeout extends 0 ? never : unknown);
+
 export type ActionOptions<TInput> =
   | {
       readonly admission?: "queue" | "reject" | undefined;
+      readonly timeout?: ActionTimeout | undefined;
     }
   | (TInput extends void
       ? {
@@ -62,10 +80,12 @@ export type ActionOptions<TInput> =
           // explicit admissionKey.
           readonly admission: "join";
           readonly admissionKey?: never;
+          readonly timeout?: ActionTimeout | undefined;
         }
       : {
           readonly admission: "join";
           readonly admissionKey: (input: TInput) => unknown;
+          readonly timeout?: ActionTimeout | undefined;
         });
 
 export const FROND_DRIVER_ACTION_BRAND: unique symbol = Symbol.for("frond.driver.action") as never;
@@ -74,6 +94,8 @@ export interface DriverActionDescriptor<TRun> {
   readonly [FROND_DRIVER_ACTION_BRAND]: true;
   readonly run: TRun;
   readonly admission: ActionAdmission;
+  /** Absent means inherit the runtime `driverTimeouts.action` deadline. */
+  readonly timeout?: ActionTimeout | undefined;
 }
 
 export type ResultPatchNonPlainClone = "share" | ((value: unknown) => unknown);
@@ -341,6 +363,8 @@ export type DriverActionLookup<TNode extends object, TArgs, TDeps extends object
       readonly _tag: "Found";
       readonly run: DriverActionRun<TNode, TArgs, TDeps, TResult>;
       readonly admission: ActionAdmission;
+      /** Absent means inherit the runtime `driverTimeouts.action` deadline. */
+      readonly timeout: ActionTimeout | undefined;
     }
   | {
       readonly _tag: "Missing";

@@ -24,6 +24,8 @@ export type {
   ActionContract,
   ActionContracts,
   ActionOptions,
+  ActionTimeout,
+  ActionTimeoutInput,
   AsyncAcquireDriverContext,
   AsyncDisposeContext,
   AsyncDriver,

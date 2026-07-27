@@ -16,34 +16,47 @@ export function runTimedDriverOperation<TValue>(input: {
   readonly cell: GraphNodeCell;
   readonly operation: string;
   readonly boundary: EffectBoundary;
-  readonly timeout: DriverOperationTimeoutMs;
+  readonly timeout: DriverOperationTimeoutMs | "unbounded";
   readonly abortController: AbortController;
   readonly spanName: string;
   readonly spanAttributes: Record<string, unknown>;
   readonly run: () => Effect.Effect<TValue | ResultCommit<TValue>, unknown> | undefined;
 }): Effect.Effect<TValue | ResultCommit<TValue>, unknown> {
-  return runRawDriverOperation(input.cell, input.operation, input.run).pipe(
+  const timeout = input.timeout;
+  const operation = runRawDriverOperation(input.cell, input.operation, input.run).pipe(
     Effect.onInterrupt(() =>
       Effect.sync(() => {
         input.abortController.abort(interruptedCancellation());
       })
-    ),
-    Effect.timeoutOrElse({
-      duration: input.timeout,
-      orElse: () =>
-        Effect.sync(() => {
-          const failure = new DriverOperationTimedOut({
-            nodeId: input.cell.nodeId,
-            tag: input.cell.tag,
-            operation: input.operation,
-            timeout: input.timeout,
-            cancellation: timedOutCancellation(input.timeout),
-          });
+    )
+  );
 
-          input.abortController.abort(failure);
-          return failure;
-        }).pipe(Effect.flatMap((failure) => Effect.fail(failure))),
-    }),
+  // "unbounded" skips only the deadline. Interruption (runtime stop, eviction,
+  // caller interrupt) still aborts through Effect.onInterrupt above, and the
+  // boundary normalization below is identical.
+  const timed =
+    timeout === "unbounded"
+      ? operation
+      : operation.pipe(
+          Effect.timeoutOrElse({
+            duration: timeout,
+            orElse: () =>
+              Effect.sync(() => {
+                const failure = new DriverOperationTimedOut({
+                  nodeId: input.cell.nodeId,
+                  tag: input.cell.tag,
+                  operation: input.operation,
+                  timeout,
+                  cancellation: timedOutCancellation(timeout),
+                });
+
+                input.abortController.abort(failure);
+                return failure;
+              }).pipe(Effect.flatMap((failure) => Effect.fail(failure))),
+          })
+        );
+
+  return timed.pipe(
     Effect.withSpan(input.spanName, { attributes: input.spanAttributes }),
     Effect.catchCause((cause) => Effect.fail(normalizeEffectBoundaryCause(input.boundary, cause)))
   );
