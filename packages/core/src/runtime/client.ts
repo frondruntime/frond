@@ -207,13 +207,20 @@ function createRuntimeNodeHandle<TArgs, TResult, TNode extends object = object>(
     // bare effect-mode descriptor dispatches Effect-native actions instead of
     // silently degrading to the Promise projection.
     actions: makeHandleActions(host, runner, request, recoverDriverMode(spec)),
-    action: (action, input, metadata) =>
-      submitEffect(
+    action: (action, input, metadata) => {
+      // Same synchronous fail-fast as `boot`: invalid metadata (including a
+      // non-AbortSignal `signal`) throws before any Effect is constructed.
+      validateRuntimeWorkMetadata(metadata);
+
+      const effect = submitEffect(
         host,
         runActionCommand(request(), action, input, metadata),
         "GraphActionCompleted",
         ({ result }) => result
-      ),
+      );
+
+      return metadata?.signal === undefined ? effect : interruptOnSignal(effect, metadata.signal);
+    },
     refresh: (metadata) =>
       submit(
         {
@@ -476,6 +483,49 @@ function runActionCommand(
     },
     metadata,
   };
+}
+
+const signalAborted = Symbol("frond.runtime/action-signal-aborted");
+
+/**
+ * Ties `metadata.signal` to Effect interruption for a caller-cancellable action
+ * submission.
+ *
+ * An already-aborted signal settles as interruption without submitting at all.
+ * Otherwise the submission races an abort waiter: when the signal fires,
+ * `raceFirst` interrupts the losing submission fiber and awaits that
+ * interruption before resuming, so the abort takes exactly the
+ * caller-fiber-interruption path the graph already pins — the cell actor claims
+ * the reply and interrupts the worker (`cellActor.ts` awaiter propagation), a
+ * queued worker never invokes the driver, an active single-owner operation
+ * aborts its `ctx.signal` (`driverOperationRunner.ts` onInterrupt), and a joined
+ * operation keeps running for its other awaiters. The overall effect then
+ * settles as interruption, which `unwrapEffect` rejects with the interrupted
+ * `Cause`.
+ */
+function interruptOnSignal<A, E>(
+  effect: Effect.Effect<A, E>,
+  signal: AbortSignal
+): Effect.Effect<A, E> {
+  return Effect.suspend(() => {
+    if (signal.aborted) {
+      return Effect.interrupt;
+    }
+
+    return Effect.raceFirst(effect, awaitAbort(signal)).pipe(
+      Effect.flatMap((value) =>
+        value === signalAborted ? Effect.interrupt : Effect.succeed(value as A)
+      )
+    );
+  });
+}
+
+function awaitAbort(signal: AbortSignal): Effect.Effect<typeof signalAborted> {
+  return Effect.callback<typeof signalAborted>((resume) => {
+    const onAbort = () => resume(Effect.succeed(signalAborted));
+    signal.addEventListener("abort", onAbort, { once: true });
+    return Effect.sync(() => signal.removeEventListener("abort", onAbort));
+  });
 }
 
 /**

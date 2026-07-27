@@ -147,6 +147,19 @@ export type FrondNodeNotReadyReadiness = Expect<
   >
 >;
 
+// Caller cancellation rides work metadata: `signal` is an optional
+// AbortSignal, honored by `handle.action`.
+export type WorkMetadataSignalIsAbortSignal = Expect<
+  Equal<Frond.Runtime.RuntimeWorkMetadata["signal"], AbortSignal | undefined>
+>;
+({
+  source: "manual",
+  reason: "action",
+  signal: new AbortController().signal,
+}) satisfies Frond.Runtime.RuntimeWorkMetadata;
+// @ts-expect-error metadata.signal must be an AbortSignal, not a string.
+({ signal: "abort" }) satisfies Frond.Runtime.RuntimeWorkMetadata;
+
 // Quiescence reads live on the Runtime facade only, and pendingOperations
 // projects exclusively Running operations.
 export type RuntimeFacadeIsQuiescentIsBoolean = Expect<

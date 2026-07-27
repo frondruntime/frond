@@ -205,6 +205,18 @@ export interface RuntimeNodeHandle<
   readonly actions: HandleActions<TActions, TMode>;
   // Untyped Effect primitive for dynamic action names and metadata-bearing calls
   // (adapters, devtools). Always Effect-native; `unwrapEffect` for a Promise.
+  //
+  // Caller cancellation: `metadata.signal` (an `AbortSignal`) interrupts the
+  // submission exactly as if the caller's Effect fiber were interrupted —
+  // queued work settles without invoking the driver, active single-owner work
+  // aborts its operation `ctx.signal`, join-admission work keeps running for
+  // its other awaiters, and an already-aborted signal settles as interruption
+  // without submitting. The call settles with Effect interruption; through
+  // `unwrapEffect` that is a rejection carrying the interrupted `Cause`
+  // (distinguishable from typed failures, same as any interruption). The typed
+  // `handle.actions.*` facades intentionally take no signal parameter in 0.2 —
+  // metadata-bearing cancellation goes through `handle.action` (or an Effect
+  // caller interrupting its own fiber); typed sugar can come later.
   readonly action: (
     action: string,
     input?: unknown,

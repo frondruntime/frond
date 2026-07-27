@@ -37,6 +37,23 @@ export type RuntimeWorkMetadata = {
   readonly source?: RuntimeWorkSource | undefined;
   readonly reason?: RuntimeWorkReason | undefined;
   readonly priority?: RuntimeWorkPriority | undefined;
+  /**
+   * Caller-cancellation `AbortSignal` (unrelated to the `"signal"` work
+   * source/reason, which name runtime pub/sub signals).
+   *
+   * Honored today by `handle.action` only; other metadata-bearing surfaces
+   * ignore it. When the signal fires, the submission is interrupted exactly as
+   * if the caller's Effect fiber were interrupted: queued work settles without
+   * invoking the driver, active single-owner work aborts its operation
+   * `ctx.signal`, and join-admission work keeps running for its other awaiters
+   * (the leaving caller just stops waiting). An already-aborted signal settles
+   * as interruption without submitting at all.
+   *
+   * The cancelled call settles with Effect interruption, so a Promise caller
+   * going through `unwrapEffect` sees a rejection carrying the interrupted
+   * `Cause` — the same convention as any other interruption.
+   */
+  readonly signal?: AbortSignal | undefined;
 };
 
 export type RuntimeWorkContext = {
@@ -118,7 +135,16 @@ export function validateRuntimeWorkMetadata(
   validateWorkSource(metadata.source);
   validateWorkReason(metadata.reason);
   validateWorkPriority(metadata.priority);
+  validateWorkSignal(metadata.signal);
   return metadata;
+}
+
+function validateWorkSignal(signal: RuntimeWorkMetadata["signal"]): AbortSignal | undefined {
+  if (signal === undefined || signal instanceof AbortSignal) {
+    return signal;
+  }
+
+  throw invalidMetadata("signal", signal);
 }
 
 function validateWorkSource(source: RuntimeWorkMetadata["source"]): RuntimeWorkSource | undefined {
