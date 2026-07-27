@@ -303,6 +303,25 @@ export type EffectDriver<
 
 export type DriverMode = "async" | "effect";
 
+/**
+ * Recovers the authored driver mode from a spec-shaped carrier: a node class
+ * (`{ spec: { driver } }`) first, then a bare descriptor (`{ driver }`) — so a
+ * bare effect-mode descriptor dispatches Effect-native actions instead of
+ * silently degrading to the Promise projection. Anything unrecognizable
+ * degrades to "async" (the Promise representation) rather than throwing.
+ */
+export function recoverDriverMode(carrier: unknown): DriverMode {
+  const shaped = carrier as
+    | {
+        readonly spec?: { readonly driver?: { readonly mode?: DriverMode } };
+        readonly driver?: { readonly mode?: DriverMode };
+      }
+    | undefined;
+  const mode = shaped?.spec?.driver?.mode ?? shaped?.driver?.mode;
+
+  return mode === "effect" ? "effect" : "async";
+}
+
 export type DriverHook<TRun> =
   | {
       readonly _tag: "Available";

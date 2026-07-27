@@ -1,4 +1,4 @@
-import { Clock, Effect, Fiber } from "effect";
+import { Clock, Effect } from "effect";
 import type { GraphNodeCellLookup } from "../cell/cellLookup";
 import type { GraphNodeCell, GraphPlanState } from "../cell/cellModel";
 import {
@@ -420,16 +420,14 @@ function startLiveResource(
     const ctx = makeLiveContext({ node, abortController });
 
     // Interrupt atomicity: any resource returned from start must reach stop.
-    // Three escapes feed one dedupe gate: (1) the value crossed into the
-    // runtime but the fiber was interrupted before the state commit
-    // (`produced`); (2) a promise-based start settles after the operation was
-    // abandoned and reports through onAbandonedResource; (3) an effect-mode
-    // start completes an uninterruptible region after the lease operation was
-    // abandoned and reports through the routing fiber's recording tap. Either
-    // way the resource is routed into a detached driver stop instead of being
-    // dropped.
+    // Two escapes feed one dedupe gate: (1) the value crossed into the runtime
+    // but the fiber was interrupted before the state commit (`produced`);
+    // (2) the normalized start's underlying work settles with a resource after
+    // the lease operation was abandoned — a retained promise in async mode, a
+    // masked routing fiber in effect mode — and reports it through the
+    // onAbandonedResource contract both normalizations implement. Either way
+    // the resource is routed into a detached driver stop instead of dropped.
     let produced: { readonly resource: unknown } | undefined;
-    let abandoned = false;
     let settled = false;
     const stopAbandonedResource = (resource: unknown): void => {
       if (settled) {
@@ -438,13 +436,6 @@ function startLiveResource(
 
       settled = true;
       runDetachedAbandonedLiveStop(cell, node, resource, liveTimeout);
-    };
-    const recordProduced = (resource: unknown): void => {
-      produced = { resource };
-
-      if (abandoned) {
-        stopAbandonedResource(resource);
-      }
     };
 
     const runStart = runTimedDriverOperation({
@@ -456,23 +447,13 @@ function startLiveResource(
       spanName: "frond.graph.live.start",
       spanAttributes: liveSpanAttributes(cell, "start"),
       run: () =>
-        cell.descriptor.driver.mode === "effect"
-          ? runRoutedEffectLiveStart({
-              start: live.run.start(ctx, demand, {
-                onAbandonedResource: stopAbandonedResource,
-              }),
-              onProduced: recordProduced,
-              onAbandoned: () => {
-                abandoned = true;
-              },
+        live.run.start(ctx, demand, { onAbandonedResource: stopAbandonedResource }).pipe(
+          Effect.tap((resource) =>
+            Effect.sync(() => {
+              produced = { resource };
             })
-          : live.run.start(ctx, demand, { onAbandonedResource: stopAbandonedResource }).pipe(
-              Effect.tap((resource) =>
-                Effect.sync(() => {
-                  recordProduced(resource);
-                })
-              )
-            ),
+          )
+        ),
     });
 
     return yield* trackLiveInterrupt(liveInterrupt, abortController, runStart).pipe(
@@ -518,45 +499,6 @@ function startLiveResource(
       )
     );
   });
-}
-
-// Interrupt atomicity, effect mode: a start effect like
-// `Effect.uninterruptible(acquire)` that completes while an interrupt is
-// pending discards its value at the region boundary — the runtime never sees
-// the resource, so nothing routes it to stop. The only place a produced value
-// is guaranteed observable is a continuation inside the same uninterruptible
-// region as the start completion, so the start runs fully masked on a
-// detached routing fiber with the recording tap fused into that region
-// (mirroring acquireRelease's acquire contract). The lease fiber awaits the
-// routing fiber interruptibly, so stop, eviction, and driver timeouts abandon
-// the operation promptly; abandonment marks the operation and sends the
-// routing fiber an interrupt that can only land inside driver-authored
-// `Effect.interruptible` regions — where no resource exists yet. A resource
-// produced after abandonment is routed to the abandoned-stop gate by the
-// recording tap (the async-mode late-settling-promise mirror).
-function runRoutedEffectLiveStart(input: {
-  readonly start: Effect.Effect<unknown, unknown>;
-  readonly onProduced: (resource: unknown) => void;
-  readonly onAbandoned: () => void;
-}): Effect.Effect<unknown, unknown> {
-  return Effect.uninterruptibleMask((restore) =>
-    Effect.gen(function* () {
-      const routing = yield* Effect.forkDetach(
-        Effect.uninterruptibleMask(() =>
-          input.start.pipe(Effect.tap((resource) => Effect.sync(() => input.onProduced(resource))))
-        )
-      );
-
-      return yield* restore(Fiber.join(routing)).pipe(
-        Effect.onInterrupt(() =>
-          Effect.gen(function* () {
-            input.onAbandoned();
-            yield* Effect.forkDetach(Fiber.interrupt(routing));
-          })
-        )
-      );
-    })
-  );
 }
 
 // Detached by design: the operation that owned this start was already

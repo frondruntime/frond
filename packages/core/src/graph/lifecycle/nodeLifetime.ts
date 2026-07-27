@@ -1,4 +1,4 @@
-import type { RuntimeCancellationReason } from "../../cancellation";
+import { interruptedCancellation, type RuntimeCancellationReason } from "../../cancellation";
 import type { LiveResourceStopReason } from "../types";
 
 // Owner: the node-lifetime AbortController — one per ready-node incarnation.
@@ -36,10 +36,7 @@ export function makeAcquireNodeLifetime(): AcquireNodeLifetime {
     },
     abortIfUnowned: () => {
       if (!ownedByReady && !controller.signal.aborted) {
-        controller.abort({
-          _tag: "Interrupted",
-          detail: "acquire settled without a ready node",
-        } satisfies RuntimeCancellationReason);
+        controller.abort(interruptedCancellation("acquire settled without a ready node"));
       }
     },
   };

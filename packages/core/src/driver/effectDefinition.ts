@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Fiber } from "effect";
 import type { EffectLiveResourceDescriptor } from "./liveDescriptor";
 import { buildNormalizedDriver } from "./normalize";
 import type {
@@ -7,6 +7,7 @@ import type {
   EffectDriverActionContracts,
   EffectDriverActionMap,
   NormalizedLiveResource,
+  NormalizedLiveStartOptions,
   ResultCommit,
 } from "./types";
 
@@ -95,8 +96,11 @@ function normalizeEffectLiveResource<TNode extends object>(
   live: EffectLiveResourceDescriptor<TNode, unknown, unknown>
 ): NormalizedLiveResource<TNode> {
   const resource = {
-    start: (ctx, demand) =>
-      Effect.suspend(() => live.start(ctx.effect, demand) as Effect.Effect<unknown, unknown>),
+    start: (ctx, demand, options) =>
+      runRoutedEffectLiveStart(
+        Effect.suspend(() => live.start(ctx.effect, demand) as Effect.Effect<unknown, unknown>),
+        options
+      ),
     stop: (ctx, resource) =>
       Effect.suspend(() => live.stop(ctx.effect, resource) as Effect.Effect<void, unknown>),
   } satisfies NormalizedLiveResource<TNode>;
@@ -110,4 +114,66 @@ function normalizeEffectLiveResource<TNode extends object>(
             () => live.update?.(ctx.effect, liveResource, demand) as Effect.Effect<void, unknown>
           ),
       };
+}
+
+// Interrupt atomicity, effect mode (the mirror of the async normalization's
+// retained-promise escape): a start effect like `Effect.uninterruptible(acquire)`
+// that completes while an interrupt is pending discards its value at the region
+// boundary — the caller never sees the resource, so nothing routes it to stop.
+// The only place a produced value is guaranteed observable is a continuation
+// inside the same uninterruptible region as the start completion, so the start
+// runs fully masked on a detached routing fiber with a recording tap fused into
+// that region (mirroring acquireRelease's acquire contract). The caller's fiber
+// awaits the routing fiber interruptibly, so stop, eviction, and driver
+// timeouts abandon the operation promptly; abandonment sends the routing fiber
+// an interrupt that can only land inside driver-authored `Effect.interruptible`
+// regions — where no resource exists yet. A resource produced before or after
+// abandonment is reported through `onAbandonedResource` instead of dropped.
+function runRoutedEffectLiveStart(
+  start: Effect.Effect<unknown, unknown>,
+  options: NormalizedLiveStartOptions | undefined
+): Effect.Effect<unknown, unknown> {
+  const onAbandonedResource = options?.onAbandonedResource;
+
+  if (onAbandonedResource === undefined) {
+    return start;
+  }
+
+  return Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      let produced: { readonly resource: unknown } | undefined;
+      let abandoned = false;
+      const routing = yield* Effect.forkDetach(
+        Effect.uninterruptibleMask(() =>
+          start.pipe(
+            Effect.tap((resource) =>
+              Effect.sync(() => {
+                produced = { resource };
+
+                if (abandoned) {
+                  onAbandonedResource(resource);
+                }
+              })
+            )
+          )
+        )
+      );
+
+      return yield* restore(Fiber.join(routing)).pipe(
+        Effect.onInterrupt(() =>
+          Effect.gen(function* () {
+            abandoned = true;
+
+            // The routing tap already recorded a resource: report it here —
+            // the tap's own abandoned check ran before this interrupt landed.
+            if (produced !== undefined) {
+              onAbandonedResource(produced.resource);
+            }
+
+            yield* Effect.forkDetach(Fiber.interrupt(routing));
+          })
+        )
+      );
+    })
+  );
 }

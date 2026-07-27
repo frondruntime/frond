@@ -20,38 +20,65 @@ export function makeInvokedDisposers(): InvokedDisposers {
   return new WeakSet<Disposer>();
 }
 
-// Incarnation lookup: the live collected array is the ownership token that
-// travels from the acquire operation bag into ready data, so drains that only
-// see the array (ready teardown) recover the incarnation's invoked set from
-// it. Bags register their array here at creation; sibling populations of the
-// same incarnation (release-hook bag, refresh/action bags) adopt the same set.
-const invokedDisposersByRegistry = new WeakMap<ReadonlyArray<Disposer>, InvokedDisposers>();
-
-export function adoptInvokedDisposers(
-  registry: ReadonlyArray<Disposer>,
-  invoked: InvokedDisposers
-): InvokedDisposers {
-  invokedDisposersByRegistry.set(registry, invoked);
-  return invoked;
+// First-class incarnation registry: one object owns the collected disposer
+// list, the incarnation's invoked set, and the settled flag — the ownership
+// token that travels from the acquire operation bag into ready data. Sibling
+// populations of the same incarnation (release-hook registry, refresh/action
+// bags) share the same invoked set so once-only bookkeeping spans them all.
+export interface DisposerRegistry {
+  /** The incarnation's once-only bookkeeping (see the guarantee above). */
+  readonly invoked: InvokedDisposers;
+  /** Collects a disposer into the registry; ownership stays with the registry. */
+  readonly add: (disposer: Disposer) => void;
+  /** Collects a batch of disposers (an operation bag committing its adds). */
+  readonly append: (disposers: ReadonlyArray<Disposer>) => void;
+  /**
+   * True once a teardown drain settled the registry. The owning operation bag
+   * consults this so a disposer added after teardown runs immediately
+   * (detached, bounded) instead of landing in a list nobody reads again.
+   */
+  readonly isSettled: () => boolean;
+  /**
+   * Teardown drain: loops until the list is empty so cleanup registered during
+   * the drain (by a disposer or by orphaned async driver work) still runs and
+   * is awaited (bounded), then settles the registry.
+   */
+  readonly drain: (
+    cell: GraphNodeCell,
+    timeout: DriverOperationTimeoutMs
+  ) => Effect.Effect<ReadonlyArray<DisposerFailed>>;
 }
 
-export function invokedDisposersOf(registry: ReadonlyArray<Disposer>): InvokedDisposers {
-  const invoked = invokedDisposersByRegistry.get(registry);
+export function makeDisposerRegistry(
+  invoked: InvokedDisposers = makeInvokedDisposers()
+): DisposerRegistry {
+  const list: Array<Disposer> = [];
+  let settled = false;
 
-  if (invoked !== undefined) {
-    return invoked;
-  }
+  return {
+    invoked,
+    add: (disposer) => {
+      list.push(disposer);
+    },
+    append: (disposers) => {
+      if (disposers.length > 0) {
+        list.push(...disposers);
+      }
+    },
+    isSettled: () => settled,
+    drain: (cell, timeout) =>
+      Effect.gen(function* () {
+        const failures: Array<DisposerFailed> = [];
 
-  return adoptInvokedDisposers(registry, makeInvokedDisposers());
-}
+        while (list.length > 0) {
+          const batch = list.splice(0, list.length);
+          failures.push(...(yield* runDisposers(cell, batch, timeout, invoked)));
+        }
 
-// Teardown settles the ready-owned live disposer array. The owning operation
-// bag consults this so a disposer added after teardown runs immediately
-// (detached, bounded) instead of landing in an array nobody reads again.
-const settledDisposerArrays = new WeakSet<ReadonlyArray<Disposer>>();
-
-export function disposersSettled(disposers: ReadonlyArray<Disposer>): boolean {
-  return settledDisposerArrays.has(disposers);
+        settled = true;
+        return failures;
+      }),
+  };
 }
 
 // Owner: single bounded runner for a disposer batch. Reverse registration
@@ -72,34 +99,6 @@ export function runDisposers(
       concurrency: 1,
     }
   ).pipe(Effect.map((failures) => failures.filter((failure) => failure !== undefined)));
-}
-
-// Owner: teardown drain for the ready-owned live disposer array. Loops until
-// the array is empty so cleanup registered during the drain (by a disposer or
-// by orphaned async driver work) is still run and awaited (bounded), then
-// settles the array so post-teardown adds run immediately instead of leaking.
-export function drainLiveDisposers(
-  cell: GraphNodeCell,
-  disposers: ReadonlyArray<Disposer>,
-  timeout: DriverOperationTimeoutMs
-): Effect.Effect<ReadonlyArray<DisposerFailed>> {
-  return Effect.gen(function* () {
-    // Ownership: ready data holds the live collected array handed off by the
-    // acquire operation bag; draining mutates it in place on purpose. The
-    // incarnation's invoked set travels with that array, so this drain shares
-    // once-only bookkeeping with every bag of the same incarnation.
-    const live = disposers as Array<Disposer>;
-    const invoked = invokedDisposersOf(disposers);
-    const failures: Array<DisposerFailed> = [];
-
-    while (live.length > 0) {
-      const batch = live.splice(0, live.length);
-      failures.push(...(yield* runDisposers(cell, batch, timeout, invoked)));
-    }
-
-    settledDisposerArrays.add(live);
-    return failures;
-  });
 }
 
 // Owner: detached single-disposer run for late adds after settlement. The

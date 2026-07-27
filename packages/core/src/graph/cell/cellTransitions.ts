@@ -1,4 +1,5 @@
 import type { Disposer } from "../../driver";
+import type { DisposerRegistry } from "../lifecycle/disposers";
 import type { ResultState } from "../resultValidity";
 import type {
   GraphFailure,
@@ -65,7 +66,7 @@ export function completeAcquireState(input: {
     readonly deps: Record<string, object>;
     readonly resultState: ResultState;
     readonly resultValidityPolicy: NormalizedResultValidityPolicy;
-    readonly disposers: ReadonlyArray<Disposer>;
+    readonly disposers: DisposerRegistry;
     readonly nodeLifetime: AbortController;
   };
 }):
@@ -178,18 +179,14 @@ export function appendReadyDisposersState(input: {
   };
 }
 
-// Ownership: ready disposers are the live collected array handed off by the
-// acquire operation bag. Append in place and keep the identity so late adds
-// through the bag and the teardown drain loop share one registry — a fresh
-// concatenated array would orphan adds from orphaned async driver work.
+// Ownership: ready disposers live in the incarnation registry handed off by
+// the acquire operation bag. Append into it and keep the identity so late adds
+// through the bag and the teardown drain loop share one registry.
 function appendReadyDisposers(
-  current: ReadonlyArray<Disposer>,
+  current: DisposerRegistry,
   appended: ReadonlyArray<Disposer>
-): ReadonlyArray<Disposer> {
-  if (appended.length > 0) {
-    (current as Array<Disposer>).push(...appended);
-  }
-
+): DisposerRegistry {
+  current.append(appended);
   return current;
 }
 

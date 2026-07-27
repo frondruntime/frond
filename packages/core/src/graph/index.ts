@@ -18,6 +18,7 @@ export type {
   NodeSnapshotLookup,
   NodeStatus,
   OperationAdmissionPolicy,
+  PendingNodeOperation,
   RefreshResult,
   ResultCommit,
   ResultValidity,

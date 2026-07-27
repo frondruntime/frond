@@ -7,7 +7,7 @@ import {
   runInAction,
   untracked,
 } from "mobx";
-import type { Disposer, DriverMode } from "../driver/types";
+import { type Disposer, type DriverMode, recoverDriverMode } from "../driver/types";
 import type { ActionResult } from "../graph/types";
 import type { KeyInput } from "../keys";
 import type {
@@ -91,8 +91,11 @@ export class NodeBase<
     this._addDisposer = construction.addDisposer;
     // One facade per node, in the driver's authored representation: effect nodes
     // hand back Effects, async nodes hand back Promises. The runtime executes
-    // every action as an Effect internally either way.
-    const runsAsEffect = driverModeOf(new.target) === "effect";
+    // every action as an Effect internally either way. Runtime construction
+    // always goes through a validated node spec class, so the shared mode
+    // recovery finds the authored mode; exotic subclassing degrades to "async"
+    // rather than throwing during construction.
+    const runsAsEffect = recoverDriverMode(new.target) === "effect";
     this.actions = makeActionFacade<NodeActions<NodeSpecActions<TSpec>, NodeSpecMode<TSpec>>>(
       declaredActionPredicate(new.target),
       (name, input) =>
@@ -387,7 +390,9 @@ export function asRuntimeReadyNodeControl<TArgs, TDeps extends object, TResult>(
 // Protocol trap names the JavaScript runtime probes on arbitrary objects.
 // Returning a callable for "then" makes the facade a thenable, so awaiting it
 // never settles and dispatches a phantom action; "toJSON" fires on stringify.
-const PROTOCOL_PROPERTY_NAMES: ReadonlySet<string> = new Set([
+// Shared with the runtime client's handle-action proxy — one authoritative set
+// of trap names, even though the two proxies' dispatch policies differ.
+export const PROTOCOL_PROPERTY_NAMES: ReadonlySet<string> = new Set([
   "then",
   "catch",
   "finally",
@@ -421,17 +426,6 @@ function declaredActionPredicate(target: unknown): (name: string) => boolean {
   }
 
   return (name) => read(name)._tag === "Found";
-}
-
-function driverModeOf(target: unknown): DriverMode {
-  const mode = (
-    target as { readonly spec?: { readonly driver?: { readonly mode?: DriverMode } } } | undefined
-  )?.spec?.driver?.mode;
-
-  // Runtime construction always goes through a validated node spec class, so the
-  // driver mode is reachable. Degrade to "async" (the Promise representation) for
-  // exotic subclassing rather than throwing during construction.
-  return mode === "effect" ? "effect" : "async";
 }
 
 function makeActionFacade<TFacade extends object>(

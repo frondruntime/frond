@@ -53,6 +53,13 @@ export interface Runtime {
   readonly resolveNodeIdSync: (request: NodeRequest) => NodeRead["nodeId"];
   readonly getStatusSync: () => RuntimeStatus;
   readonly readNodeSnapshotSync: (nodeId: NodeRead["nodeId"]) => RuntimeNodeSnapshotLookup<unknown>;
+  /**
+   * Narrow monotonic-revision read: the node's committed-write counter without
+   * projecting a snapshot. Backs `handle.readVersion` (which additionally
+   * reports `0` on a stopped runtime); an unknown node reports `0`. Like the
+   * other sync reads, it stays answerable after stop.
+   */
+  readonly readNodeRevisionSync: (nodeId: NodeRead["nodeId"]) => number;
   readonly readNodeSnapshot: (
     nodeId: NodeRead["nodeId"]
   ) => Promise<RuntimeNodeSnapshotLookup<unknown>>;

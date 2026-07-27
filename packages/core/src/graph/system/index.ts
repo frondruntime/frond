@@ -3,6 +3,7 @@ import { makeGraphCellActorRegistry } from "../cell/actorRegistry";
 import { lookupGraphNodeCell } from "../cell/cellLookup";
 import type { GraphPlanState } from "../cell/cellModel";
 import { ensureReadyOperation, refreshOperation } from "../cell/cellOperations";
+import { projectCellPhase } from "../cell/cellPhase";
 import { submitToCellActor } from "../cell/cellSubmission";
 import { type NormalizedGraphSystemConfig, normalizeGraphSystemOptions } from "../config";
 import { releaseCell } from "../lifecycle/cleanup";
@@ -19,6 +20,7 @@ import {
   type NodeId,
   type NodeRead,
   type NodeSnapshotLookup,
+  type PendingNodeOperation,
   type SystemStatus,
 } from "../types";
 import { makeRefreshAdmissionController } from "./refreshAdmission";
@@ -226,6 +228,29 @@ export function makeInMemoryGraphSystemFromConfig(
         ),
         Match.exhaustive
       );
+    },
+    // Narrow revision read: no clock, no projection — just the cell's
+    // committed-write counter. Missing cells report 0 (pre-materialization).
+    readNodeRevisionSync: (nodeId) => {
+      const lookup = lookupGraphNodeCell(state, nodeId);
+
+      return lookup._tag === "Missing" ? 0 : lookup.cell.state.getRevisionSync();
+    },
+    // Narrow pending-operation scan: only each cell's phase-projected operation,
+    // never the event buffer, edges, or a full per-node snapshot. Answers on a
+    // not-yet-started or stopped graph exactly like the full snapshot does.
+    readPendingOperationsSync: () => {
+      const pending: Array<PendingNodeOperation> = [];
+
+      for (const cell of state.nodes.values()) {
+        const projection = projectCellPhase(cell.state.getSync().phase);
+
+        if (projection._tag !== "Removed" && projection.operation._tag === "Running") {
+          pending.push({ nodeId: cell.nodeId, tag: cell.tag, operation: projection.operation });
+        }
+      }
+
+      return pending;
     },
     readNodeSnapshot: (nodeId, context) =>
       Match.value(lookupGraphNodeCell(state, nodeId)).pipe(

@@ -45,6 +45,7 @@ export function bridgeRuntimeHost(
     resolveNodeIdSync: host.resolveNodeIdSync,
     getStatusSync: host.getStatusSync,
     readNodeSnapshotSync: host.readNodeSnapshotSync,
+    readNodeRevisionSync: host.readNodeRevisionSync,
     readNodeSnapshot: (nodeId: Parameters<RuntimeHostService["readNodeSnapshot"]>[0]) =>
       runner.run(host.readNodeSnapshot(nodeId)),
     submit: (command: RuntimeCommand) => runner.run(host.submit(command)),
@@ -66,20 +67,12 @@ export function bridgeRuntimeHost(
     observe: (observer: RuntimeObserver) => runner.runSync(host.observe(observer)),
   };
 
-  // Quiescence READ, not a barrier: a pure projection over the operation state
-  // `getSnapshotSync` already carries. Kept on the Runtime facade only — node
-  // handles stay per-node surfaces.
-  const pendingOperations = (): ReadonlyArray<RuntimePendingOperation> => {
-    const pending: Array<RuntimePendingOperation> = [];
-
-    for (const node of runtimeHost.getSnapshotSync().graph.nodes) {
-      if (node.operation._tag === "Running") {
-        pending.push({ nodeId: node.nodeId, tag: node.tag, operation: node.operation });
-      }
-    }
-
-    return pending;
-  };
+  // Quiescence READ, not a barrier: the narrow graph scan projects only each
+  // cell's operation state — no event buffer, edges, or full per-node
+  // snapshots. Kept on the Runtime facade only — node handles stay per-node
+  // surfaces.
+  const pendingOperations = (): ReadonlyArray<RuntimePendingOperation> =>
+    host.readPendingOperationsSync();
 
   return {
     ...runtimeHost,

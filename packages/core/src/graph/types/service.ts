@@ -13,6 +13,7 @@ import type {
   EvictSubgraphRequest,
   GraphNodeCleanupResult,
   NodeRequest,
+  PendingNodeOperation,
   RefreshRequest,
   RefreshResult,
   RefreshSubmission,
@@ -81,6 +82,18 @@ export interface GraphSystemService {
     request: ReleaseNodeLiveLeaseRequest
   ) => Effect.Effect<NodeLiveLeaseResult>;
   readonly readNodeSnapshotSync: (nodeId: NodeId, context: ProjectionContext) => NodeSnapshotLookup;
+  /**
+   * Narrow monotonic-revision read: the cell's committed-write counter without
+   * projecting a snapshot. Backs `handle.readVersion` (a hot
+   * `useSyncExternalStore` getSnapshot); an unknown node reports `0`.
+   */
+  readonly readNodeRevisionSync: (nodeId: NodeId) => number;
+  /**
+   * Narrow pending-operation scan: reads only each cell's phase-projected
+   * operation and keeps the `Running` ones. No events, edges, or per-node
+   * snapshot projection — this backs `runtime.pendingOperations()`.
+   */
+  readonly readPendingOperationsSync: () => ReadonlyArray<PendingNodeOperation>;
   readonly readNodeSnapshot: (
     nodeId: NodeId,
     context?: ProjectionContext | undefined

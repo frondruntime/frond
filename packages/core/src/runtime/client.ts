@@ -1,11 +1,12 @@
 import { Effect } from "effect";
-import type { ActionContracts, DriverMode } from "../driver/types";
+import { type ActionContracts, type DriverMode, recoverDriverMode } from "../driver/types";
 import { GraphInvariantViolation, UpdateNodeArgsFailed } from "../graph";
 import type { NodeId } from "../graph/types/ids";
 import type { NodeLiveSource } from "../graph/types/liveness";
 import type { ActionResult, EvictResult, RefreshResult } from "../graph/types/operations";
 import type { NodeRead } from "../graph/types/reads";
 import { isKeyError } from "../keys";
+import { PROTOCOL_PROPERTY_NAMES } from "../node/runtime";
 import type {
   NodeSpecActions,
   NodeSpecArgs,
@@ -63,6 +64,7 @@ export type RuntimeClientHost = Pick<
   | "resolveNodeIdSync"
   | "getStatusSync"
   | "readNodeSnapshotSync"
+  | "readNodeRevisionSync"
   | "readNodeSnapshot"
   | "submit"
   | "observe"
@@ -137,9 +139,11 @@ function createRuntimeNodeHandle<TArgs, TResult, TNode extends object = object>(
       case "Unwired":
       case "Idle":
       case "Pending":
+        // The tag rides on the same read that decided to throw, so the error
+        // is atomic with that read — no second snapshot lookup.
         throw new FrondNodeNotReady({
           nodeId,
-          tag: nodeTagOf(host, nodeId),
+          tag: read.tag,
           readiness: notReadyReadiness(read._tag),
         });
       default: {
@@ -165,7 +169,8 @@ function createRuntimeNodeHandle<TArgs, TResult, TNode extends object = object>(
       if (read._tag === "Unwired" || read._tag === "Idle") {
         return bootingRuntimeNodeRead<TResult, TNode>(
           nodeId,
-          settleBootAttempt(nodeId, ensureReady(metadata))
+          settleBootAttempt(nodeId, ensureReady(metadata)),
+          read.tag
         );
       }
 
@@ -198,7 +203,10 @@ function createRuntimeNodeHandle<TArgs, TResult, TNode extends object = object>(
       await ensureReady(metadata);
       return readReady();
     },
-    actions: makeHandleActions(host, runner, request, driverModeOfSpec(spec)),
+    // Mirror the type-level `NodeSpecMode` via the shared mode recovery, so a
+    // bare effect-mode descriptor dispatches Effect-native actions instead of
+    // silently degrading to the Promise projection.
+    actions: makeHandleActions(host, runner, request, recoverDriverMode(spec)),
     action: (action, input, metadata) =>
       submitEffect(
         host,
@@ -405,19 +413,6 @@ function notReadyReadiness(tag: "Unwired" | "Idle" | "Pending"): FrondNodeReadin
   }
 }
 
-function nodeTagOf(
-  host: Pick<RuntimeClientHost, "getStatusSync" | "readNodeSnapshotSync">,
-  nodeId: NodeId
-): string | undefined {
-  if (host.getStatusSync() === "stopped") {
-    return undefined;
-  }
-
-  const lookup = host.readNodeSnapshotSync(nodeId);
-
-  return lookup._tag === "Found" ? lookup.snapshot.tag : undefined;
-}
-
 function settleBootAttempt(nodeId: NodeId, attempt: Promise<NodeRead>): Promise<NodeRead> {
   return attempt.catch(
     (cause) =>
@@ -430,32 +425,6 @@ function settleBootAttempt(nodeId: NodeId, attempt: Promise<NodeRead>): Promise<
   );
 }
 
-const HANDLE_ACTION_PROTOCOL_NAMES: ReadonlySet<string> = new Set([
-  "then",
-  "catch",
-  "finally",
-  "toJSON",
-  "constructor",
-  "toString",
-  "valueOf",
-]);
-
-function driverModeOfSpec(spec: unknown): DriverMode {
-  // Mirror the type-level `NodeSpecMode`: recover the mode from a node class
-  // (`{ spec: { driver } }`) first, then from a bare descriptor (`{ driver }`),
-  // so a bare effect-mode descriptor dispatches Effect-native actions instead of
-  // silently degrading to the Promise projection.
-  const carrier = spec as
-    | {
-        readonly spec?: { readonly driver?: { readonly mode?: DriverMode } };
-        readonly driver?: { readonly mode?: DriverMode };
-      }
-    | undefined;
-  const mode = carrier?.spec?.driver?.mode ?? carrier?.driver?.mode;
-
-  return mode === "effect" ? "effect" : "async";
-}
-
 function makeHandleActions(
   host: RuntimeClientHost,
   runner: RuntimeEffectBridgeRunner,
@@ -465,10 +434,13 @@ function makeHandleActions(
   // Dispatch the same runtime action as the untyped primitive, but present it in
   // the node's authored mode: effect nodes get the Effect, async nodes get its
   // Promise projection. Protocol trap names read as undefined so the facade is
-  // never mistaken for a thenable.
+  // never mistaken for a thenable. The trap-name set is shared with the node
+  // facade proxy, but the dispatch policies intentionally differ: this handle
+  // proxy dispatches ANY non-protocol name, while the node facade dispatches
+  // declared action names only.
   return new Proxy(Object.create(null), {
     get(_target, property) {
-      if (typeof property !== "string" || HANDLE_ACTION_PROTOCOL_NAMES.has(property)) {
+      if (typeof property !== "string" || PROTOCOL_PROPERTY_NAMES.has(property)) {
         return undefined;
       }
 

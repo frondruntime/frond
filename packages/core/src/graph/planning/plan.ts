@@ -68,7 +68,13 @@ function materializeCellIfFresh(
       : baseForInvalidPlan(request.args);
   // Seed the revision past any evicted predecessor for this node id so
   // `readVersion` stays monotonic across evict + recreate instead of ABA-ing.
+  // Consume the entry: the recreated cell starts past the recorded value and a
+  // later eviction re-records it, so keeping it would only leak one map entry
+  // per distinct evicted node id.
   const evictedRevision = state.evictedRevisionByNodeId.get(nodeId);
+  if (evictedRevision !== undefined) {
+    state.evictedRevisionByNodeId.delete(nodeId);
+  }
   const nodeState = makeGraphCellState(
     {
       phase:

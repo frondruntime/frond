@@ -1,5 +1,8 @@
 import { Effect } from "effect";
-import type { RuntimeCancellationReason } from "../../cancellation";
+import {
+  interruptedCancellation as makeInterruptedCancellation,
+  type RuntimeCancellationReason,
+} from "../../cancellation";
 import type { Disposer, DisposerBag } from "../../driver";
 import type { GraphNodeCell } from "../cell/cellModel";
 import type {
@@ -9,10 +12,8 @@ import type {
 } from "../types";
 import { reportDetachedCleanupFailure } from "./cleanupFailureBridge";
 import {
-  adoptInvokedDisposers,
-  disposersSettled,
-  type InvokedDisposers,
-  makeInvokedDisposers,
+  type DisposerRegistry,
+  makeDisposerRegistry,
   runDetachedDisposer,
   runDisposers,
 } from "./disposers";
@@ -22,16 +23,17 @@ import {
 // operation settles on a failure or interrupt path the collected disposers are
 // drained (or handed off to ready-data ownership), and any late add from
 // orphaned async driver work runs immediately — bounded by the node's
-// `driverTimeouts.release` — and reports its failure instead of landing in an
-// array nobody reads.
+// `driverTimeouts.release` — and reports its failure instead of landing in a
+// list nobody reads.
 export interface OperationDisposers extends DisposerBag {
   /**
-   * Hand off ownership: returns the live collected array for ready-data
-   * ownership. Adds keep accumulating into the array, and a later interrupt
-   * drain is a no-op — the committed node owns its disposers until teardown.
-   * After teardown settles the array, late adds run immediately (bounded).
+   * Hand off ownership: commits the collected disposers into the incarnation
+   * registry and returns it for ready-data ownership. Adds keep accumulating
+   * into the registry, and a later interrupt drain is a no-op — the committed
+   * node owns its disposers until teardown. After teardown settles the
+   * registry, late adds run immediately (bounded).
    */
-  readonly handOff: () => Array<Disposer>;
+  readonly handOff: () => DisposerRegistry;
   /**
    * Drain and settle: runs collected disposers now (bounded per disposer) and
    * returns failures. Late adds after this run immediately. No-op after a
@@ -56,20 +58,25 @@ export function makeOperationDisposers(
   cell: GraphNodeCell,
   notifyCleanupFailures: GraphCleanupFailureObserver,
   releaseTimeout: DriverOperationTimeoutMs,
-  sharedInvoked?: InvokedDisposers
+  sharedRegistry?: DisposerRegistry
 ): OperationDisposers {
-  const disposers: Array<Disposer> = [];
-  // Incarnation scope: an acquire bag mints a fresh invoked set; refresh and
-  // action bags pass the set of the ready data they commit into, so every
-  // population of one incarnation dedupes against a single registry. The set
-  // is keyed on the live array so the ready teardown drain recovers it after
-  // the hand-off.
-  const invoked = adoptInvokedDisposers(disposers, sharedInvoked ?? makeInvokedDisposers());
+  // Disposers collected by THIS operation while it runs. An acquire bag
+  // commits them into the incarnation registry at the ready hand-off; refresh
+  // and action bags hand them over through `take` at their result commit.
+  const pending: Array<Disposer> = [];
+  // Incarnation scope: an acquire bag mints a fresh registry (whose invoked
+  // set is new); refresh and action bags receive the registry of the ready
+  // data they commit into, so every population of one incarnation dedupes
+  // against a single once-only set. Registering a stable function object again
+  // in a later incarnation (after evict + re-acquire) runs it again at that
+  // incarnation's teardown, because the registry — and its invoked set — is
+  // per incarnation, never module scope.
+  const registry = sharedRegistry ?? makeDisposerRegistry();
   let settledReason: OperationDisposerSettleReason | undefined;
   let handedOff = false;
 
   const runSettled = (disposer: Disposer, reason: OperationDisposerSettleReason): void => {
-    runDetachedDisposer(cell, disposer, releaseTimeout, invoked, (failure) => {
+    runDetachedDisposer(cell, disposer, releaseTimeout, registry.invoked, (failure) => {
       reportDetachedCleanupFailure(notifyCleanupFailures, cell.nodeId, reason, [failure]);
     });
   };
@@ -81,34 +88,45 @@ export function makeOperationDisposers(
         return;
       }
 
-      // Hazard: after a ready hand-off the committed node owns this array, and
-      // teardown settles it. A disposer added past that point must still run
-      // (detached, bounded) instead of accumulating into a dead array.
-      if (handedOff && disposersSettled(disposers)) {
-        runSettled(disposer, "teardown");
+      if (handedOff) {
+        // Hazard: after a ready hand-off the committed node owns the registry,
+        // and teardown settles it. A disposer added past that point must still
+        // run (detached, bounded) instead of accumulating into a dead list.
+        if (registry.isSettled()) {
+          runSettled(disposer, "teardown");
+          return;
+        }
+
+        registry.add(disposer);
         return;
       }
 
-      disposers.push(disposer);
+      pending.push(disposer);
     },
     handOff: () => {
       handedOff = true;
-      return disposers;
+      registry.append(pending.splice(0, pending.length));
+      return registry;
     },
     drain: (reason) =>
       Effect.suspend(() => {
-        // Hazard: after a ready hand-off the committed node owns this array; a
-        // post-commit interrupt must not run or remove the node's disposers.
+        // Hazard: after a ready hand-off the committed node owns the registry;
+        // a post-commit interrupt must not run or remove the node's disposers.
         if (handedOff) {
           return Effect.succeed<ReadonlyArray<DisposerFailed>>([]);
         }
 
         settledReason = reason;
-        return runDisposers(cell, disposers.splice(0, disposers.length), releaseTimeout, invoked);
+        return runDisposers(
+          cell,
+          pending.splice(0, pending.length),
+          releaseTimeout,
+          registry.invoked
+        );
       }),
     take: (reason) => {
       settledReason = reason;
-      return disposers.splice(0, disposers.length);
+      return pending.splice(0, pending.length);
     },
   };
 }
@@ -134,8 +152,5 @@ export function interruptDriverOperation(input: {
 }
 
 export function interruptedCancellation(): RuntimeCancellationReason {
-  return {
-    _tag: "Interrupted",
-    detail: "graph cell operation interrupted",
-  };
+  return makeInterruptedCancellation("graph cell operation interrupted");
 }

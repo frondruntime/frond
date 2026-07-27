@@ -1,5 +1,4 @@
 import { Effect } from "effect";
-import type { Disposer } from "../../driver";
 import type { GraphNodeCell, GraphNodeState } from "../cell/cellModel";
 import { phaseReadyData, type ReadyData } from "../cell/cellPhase";
 import { completeReleaseState } from "../cell/cellTransitions";
@@ -16,12 +15,7 @@ import {
   type LiveResourceStopReason,
   ReleaseFailed,
 } from "../types";
-import {
-  adoptInvokedDisposers,
-  drainLiveDisposers,
-  type InvokedDisposers,
-  invokedDisposersOf,
-} from "./disposers";
+import { type InvokedDisposers, makeDisposerRegistry } from "./disposers";
 import { nodeCloseCancellation } from "./nodeLifetime";
 
 export interface ReadyTeardownTimeouts {
@@ -50,16 +44,16 @@ export function teardownReadyData(
       timeouts.live,
       liveStopReason
     );
-    // Same incarnation, same once-only registry: the release hook's own bag
+    // Same incarnation, same once-only set: the release hook's own registry
     // dedupes against the disposers this ready data collected, so a function
     // reachable from both paths still runs exactly once per incarnation.
     const releaseFailures = yield* runRelease(
       cell,
       ready.node,
       timeouts.release,
-      invokedDisposersOf(ready.disposers)
+      ready.disposers.invoked
     );
-    const disposerFailures = yield* drainLiveDisposers(cell, ready.disposers, timeouts.release);
+    const disposerFailures = yield* ready.disposers.drain(cell, timeouts.release);
     closeReadyNode(ready.node);
     return [...liveFailures, ...releaseFailures, ...disposerFailures];
   });
@@ -108,14 +102,15 @@ function runRelease(
   }
 
   const abortController = new AbortController();
-  const releaseDisposers: Array<Disposer> = [];
-  adoptInvokedDisposers(releaseDisposers, invoked);
+  // Sibling registry of the same incarnation: fresh list, shared invoked set,
+  // so release-hook disposers dedupe against everything the ready data ran.
+  const releaseDisposers = makeDisposerRegistry(invoked);
   const ctx = makeDisposeContext({
     node,
     abortController,
     disposers: {
       add: (disposer) => {
-        releaseDisposers.push(disposer);
+        releaseDisposers.add(disposer);
       },
     },
   });
@@ -142,7 +137,7 @@ function runRelease(
     // Release-hook disposers get the same drain semantics as ready-data
     // disposers: bounded per disposer, and one registered during the drain
     // still runs and is awaited.
-    const disposerFailures = yield* drainLiveDisposers(cell, releaseDisposers, timeout);
+    const disposerFailures = yield* releaseDisposers.drain(cell, timeout);
 
     return [...releaseFailures, ...disposerFailures];
   });

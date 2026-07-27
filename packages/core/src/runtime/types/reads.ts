@@ -50,6 +50,14 @@ export type RuntimeNodeSnapshotLookup<TResult = unknown, TNode extends object = 
       readonly nodeId: NodeRead["nodeId"];
     };
 
+type RuntimeNodeReadBase = {
+  readonly nodeId: NodeRead["nodeId"];
+  // Node tag carried by the snapshot this read projected. Sentinel reads with
+  // no reachable snapshot — an unwired node that was never materialized, or a
+  // stopped runtime — report `undefined`.
+  readonly tag?: string | undefined;
+};
+
 type RuntimeNodeReadOperationFields = {
   readonly operation: NodeOperation;
   readonly busy: boolean;
@@ -59,69 +67,67 @@ type RuntimeNodeReadOperationFields = {
 export type DisplayableResultValidity = Exclude<ResultValidity, { readonly _tag: "Expired" }>;
 
 export type RuntimeNodeRead<TResult, TNode extends object = object> =
-  | {
+  | ({
       readonly _tag: "Unwired";
-      readonly nodeId: NodeRead["nodeId"];
-    }
+    } & RuntimeNodeReadBase)
   | ({
       readonly _tag: "Idle";
-      readonly nodeId: NodeRead["nodeId"];
-    } & RuntimeNodeReadOperationFields)
+    } & RuntimeNodeReadBase &
+      RuntimeNodeReadOperationFields)
   | ({
       readonly _tag: "Pending";
-      readonly nodeId: NodeRead["nodeId"];
       readonly attempt: Promise<NodeRead>;
-    } & RuntimeNodeReadOperationFields)
+    } & RuntimeNodeReadBase &
+      RuntimeNodeReadOperationFields)
   | ({
       readonly _tag: "Ready";
-      readonly nodeId: NodeRead["nodeId"];
       readonly node: TNode;
       // Always the committed result; `undefined` only when `undefined` is a
       // valid member of TResult. See the module doc comment above.
       readonly result: TResult;
       readonly resultValidity: DisplayableResultValidity;
-    } & RuntimeNodeReadOperationFields)
+    } & RuntimeNodeReadBase &
+      RuntimeNodeReadOperationFields)
   | ({
       readonly _tag: "Error";
-      readonly nodeId: NodeRead["nodeId"];
       readonly kind: "readiness" | "invalid" | "runtime";
       readonly error: unknown;
-    } & RuntimeNodeReadOperationFields);
+    } & RuntimeNodeReadBase &
+      RuntimeNodeReadOperationFields);
 
 export type RawRuntimeNodeRead<TResult, TNode extends object = object> =
   | RuntimeNodeRead<TResult, TNode>
-  | {
+  | ({
       readonly _tag: "Booting";
-      readonly nodeId: NodeRead["nodeId"];
       readonly attempt: Promise<NodeRead>;
       readonly operation: NodeOperation;
       readonly busy: boolean;
       readonly operationFailure?: NodeOperationFailure | undefined;
-    }
+    } & RuntimeNodeReadBase)
   | ({
       readonly _tag: "Ready";
-      readonly nodeId: NodeRead["nodeId"];
       readonly node: TNode;
       readonly result: TResult;
       readonly resultValidity: ResultValidity;
-    } & RuntimeNodeReadOperationFields)
+    } & RuntimeNodeReadBase &
+      RuntimeNodeReadOperationFields)
   | ({
       readonly _tag: "Expired";
-      readonly nodeId: NodeRead["nodeId"];
       readonly resultValidity: Extract<ResultValidity, { readonly _tag: "Expired" }>;
-    } & RuntimeNodeReadOperationFields)
+    } & RuntimeNodeReadBase &
+      RuntimeNodeReadOperationFields)
   | ({
       readonly _tag: "Error";
-      readonly nodeId: NodeRead["nodeId"];
       readonly error: unknown;
-    } & RuntimeNodeReadOperationFields)
+    } & RuntimeNodeReadBase &
+      RuntimeNodeReadOperationFields)
   | ({
       readonly _tag: "Unavailable";
-      readonly nodeId: NodeRead["nodeId"];
       readonly error: unknown;
-    } & RuntimeNodeReadOperationFields)
+    } & RuntimeNodeReadBase &
+      RuntimeNodeReadOperationFields)
   | ({
       readonly _tag: "Invalid";
-      readonly nodeId: NodeRead["nodeId"];
       readonly error: unknown;
-    } & RuntimeNodeReadOperationFields);
+    } & RuntimeNodeReadBase &
+      RuntimeNodeReadOperationFields);

@@ -1,16 +1,6 @@
 import { Deferred, Effect, Exit, Fiber, Ref, Scope, Semaphore } from "effect";
 import type { RuntimeCancellationReason } from "../../cancellation";
 
-export interface GraphCellSubmitOptions {
-  // When true, interrupting the fiber that awaits this task interrupts the worker
-  // running the operation, which triggers the operation's own interruption
-  // handling (e.g. an action's onInterrupt -> abortController.abort()). Only safe
-  // for single-owner operations: a task shared by multiple awaiters (join
-  // admission, deduped readiness) must NOT be interruptible, or one awaiter
-  // leaving would abort work the others still need.
-  readonly interruptible?: boolean | undefined;
-}
-
 export interface GraphCellActor {
   readonly submit: <A>(
     operation: GraphCellOperation<A>,
@@ -47,10 +37,11 @@ export interface GraphCellSubmitOptions {
   /**
    * Propagates awaiter interruption to the submission: interrupting the fiber
    * that awaits the task claims the reply and interrupts the worker, so the
-   * operation's own interruption handling runs (an action aborts its
-   * AbortSignal). Only single-owner operations may set this; shared tasks
-   * (joined actions, deduped readiness, refreshes) keep running for their
-   * other awaiters.
+   * operation's own interruption handling runs (e.g. an action's onInterrupt
+   * aborts its AbortSignal). Only single-owner operations may set this; a task
+   * shared by multiple awaiters (joined actions, deduped readiness, refreshes)
+   * must NOT be interruptible, or one awaiter leaving would abort work the
+   * others still need.
    */
   readonly interruptible?: boolean | undefined;
 }

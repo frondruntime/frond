@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import type { RuntimeCancellationReason } from "../../cancellation";
+import { timedOutCancellation } from "../../cancellation";
 import { AsyncDriverHookFailed } from "../../driver/asyncDefinition";
 import type { GraphNodeCell } from "../cell/cellModel";
 import { interruptedCancellation } from "../lifecycle/operationDisposers";
@@ -37,7 +37,7 @@ export function runTimedDriverOperation<TValue>(input: {
             tag: input.cell.tag,
             operation: input.operation,
             timeout: input.timeout,
-            cancellation: timeoutCancellation(input.timeout),
+            cancellation: timedOutCancellation(input.timeout),
           });
 
           input.abortController.abort(failure);
@@ -105,11 +105,4 @@ function runRawDriverOperation<TValue>(
       );
     })
   );
-}
-
-function timeoutCancellation(timeout: number): RuntimeCancellationReason {
-  return {
-    _tag: "TimedOut",
-    detail: `${timeout}ms`,
-  };
 }

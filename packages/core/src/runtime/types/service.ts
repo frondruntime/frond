@@ -1,5 +1,5 @@
 import { Context, type Effect } from "effect";
-import type { NodeRead, NodeRequest } from "../../graph";
+import type { NodeRead, NodeRequest, PendingNodeOperation } from "../../graph";
 import type {
   RuntimeSignal,
   RuntimeSignalSubscriber,
@@ -24,6 +24,18 @@ export interface RuntimeHostService {
   readonly resolveNodeIdSync: (request: NodeRequest) => NodeRead["nodeId"];
   readonly getStatusSync: () => RuntimeStatus;
   readonly readNodeSnapshotSync: (nodeId: NodeRead["nodeId"]) => RuntimeNodeSnapshotLookup<unknown>;
+  /**
+   * Narrow monotonic-revision read backing `handle.readVersion` — the hot
+   * `useSyncExternalStore` getSnapshot path. Reads only the cell's
+   * committed-write counter; never projects a snapshot.
+   */
+  readonly readNodeRevisionSync: (nodeId: NodeRead["nodeId"]) => number;
+  /**
+   * Narrow pending-operation scan backing `runtime.pendingOperations()`: reads
+   * only each cell's phase-projected operation, never the full runtime
+   * snapshot (event buffer, edges, per-node projection).
+   */
+  readonly readPendingOperationsSync: () => ReadonlyArray<PendingNodeOperation>;
   readonly readNodeSnapshot: (
     nodeId: NodeRead["nodeId"]
   ) => Effect.Effect<RuntimeNodeSnapshotLookup<unknown>>;

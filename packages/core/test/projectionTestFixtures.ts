@@ -28,6 +28,7 @@ export function makeInspectionSnapshotForbiddenRuntime(options: RuntimeOptions =
     resolveNodeIdSync: runtime.resolveNodeIdSync,
     getStatusSync: runtime.getStatusSync,
     readNodeSnapshotSync: runtime.readNodeSnapshotSync,
+    readNodeRevisionSync: runtime.readNodeRevisionSync,
     readNodeSnapshot: (nodeId: Parameters<Runtime["readNodeSnapshot"]>[0]) =>
       Effect.tryPromise({ try: () => runtime.readNodeSnapshot(nodeId), catch: (error) => error }),
     submit: (command: Parameters<Runtime["submit"]>[0]) =>

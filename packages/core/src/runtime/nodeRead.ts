@@ -10,7 +10,10 @@ import type {
   RuntimeNodeSnapshotLookup,
 } from "./types";
 
-export type RuntimeReadHost = Pick<Runtime, "getStatusSync" | "readNodeSnapshotSync">;
+export type RuntimeReadHost = Pick<
+  Runtime,
+  "getStatusSync" | "readNodeSnapshotSync" | "readNodeRevisionSync"
+>;
 
 export function readNode<TResult, TNode extends object = object>(
   runtime: RuntimeReadHost,
@@ -32,9 +35,7 @@ export function readNodeRevision(runtime: RuntimeReadHost, nodeId: NodeId): numb
     return 0;
   }
 
-  const lookup = runtime.readNodeSnapshotSync(nodeId);
-
-  return lookup._tag === "Missing" ? 0 : lookup.snapshot.revision;
+  return runtime.readNodeRevisionSync(nodeId);
 }
 
 export function readRawNode<TResult, TNode extends object = object>(
@@ -61,7 +62,11 @@ export function readRawNode<TResult, TNode extends object = object>(
   return Match.value(nodeSnapshot).pipe(
     Match.tag(
       "Unwired",
-      () => ({ _tag: "Unwired", nodeId }) satisfies RawRuntimeNodeRead<TResult, TNode>
+      (snapshot) =>
+        ({ _tag: "Unwired", nodeId, tag: snapshot.tag }) satisfies RawRuntimeNodeRead<
+          TResult,
+          TNode
+        >
     ),
     Match.tag("Idle", (snapshot) => idleRuntimeNodeRead<TResult, TNode>(nodeId, snapshot)),
     Match.tag("Pending", (snapshot) => pendingRuntimeNodeRead<TResult, TNode>(nodeId, snapshot)),
@@ -79,9 +84,10 @@ export function readRawNode<TResult, TNode extends object = object>(
 
 export function bootingRuntimeNodeRead<TResult, TNode extends object = object>(
   nodeId: NodeId,
-  attempt: Promise<NodeRead>
+  attempt: Promise<NodeRead>,
+  tag?: string | undefined
 ): RuntimeNodeRead<TResult, TNode> {
-  return { _tag: "Pending", nodeId, attempt, operation: idleOperation, busy: false };
+  return { _tag: "Pending", nodeId, tag, attempt, operation: idleOperation, busy: false };
 }
 
 function publicRuntimeNodeRead<TResult, TNode extends object>(
@@ -93,10 +99,11 @@ function publicRuntimeNodeRead<TResult, TNode extends object>(
     Match.tag("Pending", (pending) => pending),
     Match.tag(
       "Booting",
-      ({ nodeId, attempt, operation, busy, operationFailure }) =>
+      ({ nodeId, tag, attempt, operation, busy, operationFailure }) =>
         ({
           _tag: "Pending",
           nodeId,
+          tag,
           attempt,
           operation,
           busy,
@@ -108,6 +115,7 @@ function publicRuntimeNodeRead<TResult, TNode extends object>(
         return {
           _tag: "Idle",
           nodeId: ready.nodeId,
+          tag: ready.tag,
           operation: ready.operation,
           busy: ready.busy,
           operationFailure: ready.operationFailure,
@@ -121,10 +129,11 @@ function publicRuntimeNodeRead<TResult, TNode extends object>(
     }),
     Match.tag(
       "Expired",
-      ({ nodeId, operation, busy, operationFailure }) =>
+      ({ nodeId, tag, operation, busy, operationFailure }) =>
         ({
           _tag: "Idle",
           nodeId,
+          tag,
           operation,
           busy,
           operationFailure,
@@ -133,10 +142,11 @@ function publicRuntimeNodeRead<TResult, TNode extends object>(
     Match.tag("Error", (error) => ({ ...error, kind: "readiness" as const })),
     Match.tag(
       "Invalid",
-      ({ nodeId, error, operation, busy, operationFailure }) =>
+      ({ nodeId, tag, error, operation, busy, operationFailure }) =>
         ({
           _tag: "Error",
           nodeId,
+          tag,
           kind: "invalid" as const,
           error,
           operation,
@@ -146,10 +156,11 @@ function publicRuntimeNodeRead<TResult, TNode extends object>(
     ),
     Match.tag(
       "Unavailable",
-      ({ nodeId, error, operation, busy, operationFailure }) =>
+      ({ nodeId, tag, error, operation, busy, operationFailure }) =>
         ({
           _tag: "Error",
           nodeId,
+          tag,
           kind: "runtime" as const,
           error,
           operation,
@@ -161,8 +172,9 @@ function publicRuntimeNodeRead<TResult, TNode extends object>(
   );
 }
 
-function operationReadFields(snapshot: RuntimeNodeSnapshot<unknown>) {
+function snapshotReadFields(snapshot: RuntimeNodeSnapshot<unknown>) {
   return {
+    tag: snapshot.tag,
     operation: snapshot.operation,
     busy: snapshot.operation._tag === "Running",
     operationFailure: snapshot.operationFailure,
@@ -180,7 +192,7 @@ function readyRuntimeNodeRead<TResult, TNode extends object>(
       _tag: "Expired",
       nodeId,
       resultValidity: nodeSnapshot.resultValidity,
-      ...operationReadFields(nodeSnapshot),
+      ...snapshotReadFields(nodeSnapshot),
     } satisfies RawRuntimeNodeRead<TResult, TNode>;
   }
 
@@ -190,7 +202,7 @@ function readyRuntimeNodeRead<TResult, TNode extends object>(
     node: currentNode,
     result: nodeSnapshot.result,
     resultValidity: nodeSnapshot.resultValidity ?? { _tag: "Current" },
-    ...operationReadFields(nodeSnapshot),
+    ...snapshotReadFields(nodeSnapshot),
   } satisfies RawRuntimeNodeRead<TResult, TNode>;
 }
 
@@ -201,7 +213,7 @@ function idleRuntimeNodeRead<TResult, TNode extends object>(
   return {
     _tag: "Idle",
     nodeId,
-    ...operationReadFields(nodeSnapshot),
+    ...snapshotReadFields(nodeSnapshot),
   } satisfies RawRuntimeNodeRead<TResult, TNode>;
 }
 
@@ -214,7 +226,7 @@ function errorRuntimeNodeRead<TResult, TNode extends object>(
     _tag: "Error",
     nodeId,
     error,
-    ...operationReadFields(nodeSnapshot),
+    ...snapshotReadFields(nodeSnapshot),
   } satisfies RawRuntimeNodeRead<TResult, TNode>;
 }
 
@@ -227,7 +239,7 @@ function invalidRuntimeNodeRead<TResult, TNode extends object>(
     _tag: "Invalid",
     nodeId,
     error,
-    ...operationReadFields(nodeSnapshot),
+    ...snapshotReadFields(nodeSnapshot),
   } satisfies RawRuntimeNodeRead<TResult, TNode>;
 }
 
@@ -239,7 +251,7 @@ function pendingRuntimeNodeRead<TResult, TNode extends object>(
     _tag: "Pending",
     nodeId,
     attempt: nodeSnapshot.attempt,
-    ...operationReadFields(nodeSnapshot),
+    ...snapshotReadFields(nodeSnapshot),
   } satisfies RawRuntimeNodeRead<TResult, TNode>;
 }
 
