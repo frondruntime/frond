@@ -54,10 +54,12 @@ Runs the release publish pipeline:
 
 Flags:
   --dry-run    Run steps 1-5 and stop before npm publish.
-  --smoke-only CI-safe subset: package metadata validation, build, npm pack and
-               the packed-tarball consumer smoke (steps 2, 4 and 5). Skips the
-               workspace checks CI already runs as separate steps, the npm
+  --smoke-only Just the packed-tarball consumer smoke: package metadata
+               validation, build, npm pack and the smoke (steps 2, 4 and 5).
+               Skips the workspace checks CI runs as separate steps, the npm
                publish dry-run and npm publish, so it needs no registry auth.
+               For iterating on the smoke itself; the release flow above always
+               runs it anyway.
 
 Every mode except --smoke-only is for local manual release work only. Do not
 run them in CI.
