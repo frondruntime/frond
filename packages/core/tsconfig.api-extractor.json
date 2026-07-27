@@ -1,6 +1,14 @@
 {
   "extends": "./tsconfig.build.json",
   "compilerOptions": {
-    "customConditions": []
+    "customConditions": [],
+    // Route the package self-import through node_modules (the bun-managed
+    // self-link from the @frondruntime/core workspace devDependency) so API
+    // Extractor sees @frondruntime/core as an external package and keeps
+    // `import` statements in the testing rollup instead of duplicating the
+    // main entry's types.
+    "paths": {
+      "@frondruntime/core": ["./node_modules/@frondruntime/core/dist/index.d.ts"]
+    }
   }
 }

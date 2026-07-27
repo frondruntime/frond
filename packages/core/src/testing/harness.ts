@@ -1,4 +1,8 @@
-import { projectError } from "../diagnostics";
+// Public core types are imported from the package name (not relative source
+// paths) so the emitted testing declaration rollup references
+// `@frondruntime/core` instead of duplicating the main entry's types. See
+// tsconfig.api-extractor.json for the resolution side of this contract.
+import type * as Frond from "@frondruntime/core";
 import type {
   DependenciesRecord,
   FrondNode,
@@ -10,15 +14,8 @@ import type {
   NodeSpecMode,
   NodeSpecResult,
   ResolvedDeps,
-} from "../node";
-import type {
-  Runtime,
-  RuntimeClient,
-  RuntimeEventRecord,
-  RuntimeNodeHandle,
-  RuntimeNodeRead,
-  RuntimeWorkMetadata,
-} from "../runtime";
+} from "@frondruntime/core";
+import { projectError } from "../diagnostics";
 import { type CapturingRuntimeSink, createTestRuntime, type TestRuntimeOptions } from "./runtime";
 
 export interface FrondTestHarnessOptions extends TestRuntimeOptions {
@@ -33,7 +30,7 @@ export interface FrondTestHarnessOptions extends TestRuntimeOptions {
 declare const FROND_TEST_SPEC: unique symbol;
 
 export interface FrondTestNodeHandle<TSpec extends NodeSpecLike>
-  extends RuntimeNodeHandle<
+  extends Frond.Runtime.RuntimeNodeHandle<
     NodeSpecArgs<TSpec>,
     NodeSpecResult<TSpec>,
     NodeSpecActions<TSpec>,
@@ -44,10 +41,10 @@ export interface FrondTestNodeHandle<TSpec extends NodeSpecLike>
 }
 
 export interface FrondTestHarness {
-  readonly runtime: Runtime;
-  readonly client: RuntimeClient;
+  readonly runtime: Frond.Runtime.Runtime;
+  readonly client: Frond.Runtime.RuntimeClient;
   readonly sink: CapturingRuntimeSink;
-  readonly events: ReadonlyArray<RuntimeEventRecord>;
+  readonly events: ReadonlyArray<Frond.Runtime.RuntimeEventRecord>;
   readonly start: () => Promise<void>;
   readonly stop: () => Promise<void>;
   readonly teardown: () => Promise<void>;
@@ -91,16 +88,16 @@ export interface FrondTestHarness {
   >;
   readonly readError: <TSpec extends NodeSpecLike>(
     handle: FrondTestNodeHandle<TSpec>
-  ) => Extract<RuntimeNodeRead<NodeSpecResult<TSpec>>, { readonly _tag: "Error" }>;
+  ) => Extract<Frond.Runtime.RuntimeNodeRead<NodeSpecResult<TSpec>>, { readonly _tag: "Error" }>;
   readonly waitForEvent: (
-    predicate: (record: RuntimeEventRecord) => boolean,
+    predicate: (record: Frond.Runtime.RuntimeEventRecord) => boolean,
     options?: FrondTestWaitOptions | undefined
-  ) => Promise<RuntimeEventRecord>;
+  ) => Promise<Frond.Runtime.RuntimeEventRecord>;
   readonly waitForNodeRead: <TArgs, TResult>(
-    handle: RuntimeNodeHandle<TArgs, TResult>,
-    predicate: (read: RuntimeNodeRead<TResult>) => boolean,
+    handle: Frond.Runtime.RuntimeNodeHandle<TArgs, TResult>,
+    predicate: (read: Frond.Runtime.RuntimeNodeRead<TResult>) => boolean,
     options?: FrondTestWaitOptions | undefined
-  ) => Promise<RuntimeNodeRead<TResult>>;
+  ) => Promise<Frond.Runtime.RuntimeNodeRead<TResult>>;
   readonly waitForIdle: (options?: FrondTestWaitOptions | undefined) => Promise<void>;
 }
 
@@ -135,7 +132,7 @@ export type FrondTestReadyRead<
   TDeps extends DependenciesRecord,
   TResult,
   TNode extends object,
-> = Omit<Extract<RuntimeNodeRead<TResult>, { readonly _tag: "Ready" }>, "node"> & {
+> = Omit<Extract<Frond.Runtime.RuntimeNodeRead<TResult>, { readonly _tag: "Ready" }>, "node"> & {
   readonly node: TNode & FrondNode<TArgs, ResolvedDeps<TDeps>, TResult>;
 };
 
@@ -146,11 +143,13 @@ type NodeSpecNode<TSpec> = NodeSpecInstance<TSpec>;
 const defaultWaitTimeoutMs = 1000;
 const defaultWaitIntervalMs = 1;
 
-export type FrondTestRuntimeEventSource = Runtime | ReadonlyArray<RuntimeEventRecord>;
+export type FrondTestRuntimeEventSource =
+  | Frond.Runtime.Runtime
+  | ReadonlyArray<Frond.Runtime.RuntimeEventRecord>;
 
 export type FrondTestRuntimeEventPredicate =
-  | RuntimeEventRecord["event"]["_tag"]
-  | ((record: RuntimeEventRecord) => boolean);
+  | Frond.Runtime.RuntimeEventRecord["event"]["_tag"]
+  | ((record: Frond.Runtime.RuntimeEventRecord) => boolean);
 
 export function createFrondTestHarness(options: FrondTestHarnessOptions = {}): FrondTestHarness {
   const { waitTimeoutMs, waitIntervalMs, ...runtimeOptions } = options;
@@ -238,7 +237,10 @@ export function createFrondTestHarness(options: FrondTestHarnessOptions = {}): F
         throw new Error(`Expected Frond test node read Error, received ${read._tag}.`);
       }
 
-      return read as Extract<RuntimeNodeRead<NodeSpecResult<TSpec>>, { readonly _tag: "Error" }>;
+      return read as Extract<
+        Frond.Runtime.RuntimeNodeRead<NodeSpecResult<TSpec>>,
+        { readonly _tag: "Error" }
+      >;
     },
     waitForEvent: (predicate, waitOptions) =>
       waitForRuntimeEvent(
@@ -256,9 +258,9 @@ export function createFrondTestHarness(options: FrondTestHarnessOptions = {}): F
 }
 
 function testWork(
-  reason: RuntimeWorkMetadata["reason"],
-  priority: RuntimeWorkMetadata["priority"]
-): RuntimeWorkMetadata {
+  reason: Frond.Runtime.RuntimeWorkMetadata["reason"],
+  priority: Frond.Runtime.RuntimeWorkMetadata["priority"]
+): Frond.Runtime.RuntimeWorkMetadata {
   return {
     source: "test",
     reason,
@@ -297,7 +299,7 @@ export async function waitForRuntimeEvent(
   source: FrondTestRuntimeEventSource,
   predicate: FrondTestRuntimeEventPredicate,
   options: FrondTestWaitOptions = {}
-): Promise<RuntimeEventRecord> {
+): Promise<Frond.Runtime.RuntimeEventRecord> {
   const matches = await waitForRuntimeEventCount(source, predicate, 1, options);
   const record = matches[0];
 
@@ -313,7 +315,7 @@ export async function waitForRuntimeEventCount(
   predicate: FrondTestRuntimeEventPredicate,
   count: number,
   options: FrondTestWaitOptions = {}
-): Promise<ReadonlyArray<RuntimeEventRecord>> {
+): Promise<ReadonlyArray<Frond.Runtime.RuntimeEventRecord>> {
   if (!Number.isInteger(count) || count < 0) {
     throw new Error("Frond test runtime event count must be a non-negative integer.");
   }
@@ -327,7 +329,7 @@ export async function waitForRuntimeEventCount(
   );
   const isMatch = runtimeEventPredicate(predicate);
   const startedAt = performance.now();
-  const matches: Array<RuntimeEventRecord> = [];
+  const matches: Array<Frond.Runtime.RuntimeEventRecord> = [];
   // Track the highest sequence already scanned so each poll only inspects newly
   // appended events. Keyed by sequence (not index) to stay correct when the
   // bounded event buffer trims older records between polls.
@@ -363,10 +365,10 @@ export async function waitForRuntimeEventCount(
 }
 
 export function waitForRuntimeNodeRead<TArgs, TResult>(
-  handle: RuntimeNodeHandle<TArgs, TResult>,
-  predicate: (read: RuntimeNodeRead<TResult>) => boolean,
+  handle: Frond.Runtime.RuntimeNodeHandle<TArgs, TResult>,
+  predicate: (read: Frond.Runtime.RuntimeNodeRead<TResult>) => boolean,
   options: FrondTestWaitOptions = {}
-): Promise<RuntimeNodeRead<TResult>> {
+): Promise<Frond.Runtime.RuntimeNodeRead<TResult>> {
   const normalizedOptions = normalizeWaitOptions(
     {
       timeoutMs: defaultWaitTimeoutMs,
@@ -391,7 +393,7 @@ export function waitForRuntimeNodeRead<TArgs, TResult>(
       unsubscribe?.();
       unsubscribe = undefined;
     };
-    const finish = (read: RuntimeNodeRead<TResult>) => {
+    const finish = (read: Frond.Runtime.RuntimeNodeRead<TResult>) => {
       if (settled) {
         return;
       }
@@ -432,7 +434,7 @@ export function waitForRuntimeNodeRead<TArgs, TResult>(
 
 async function readRuntimeEvents(
   source: FrondTestRuntimeEventSource
-): Promise<ReadonlyArray<RuntimeEventRecord>> {
+): Promise<ReadonlyArray<Frond.Runtime.RuntimeEventRecord>> {
   if (isRuntimeEventRecordArray(source)) {
     return source;
   }
@@ -448,19 +450,19 @@ async function readRuntimeEvents(
 
 function isRuntimeEventRecordArray(
   source: FrondTestRuntimeEventSource
-): source is ReadonlyArray<RuntimeEventRecord> {
+): source is ReadonlyArray<Frond.Runtime.RuntimeEventRecord> {
   return Array.isArray(source);
 }
 
 function runtimeEventPredicate(
   predicate: FrondTestRuntimeEventPredicate
-): (record: RuntimeEventRecord) => boolean {
+): (record: Frond.Runtime.RuntimeEventRecord) => boolean {
   return typeof predicate === "string" ? (record) => record.event._tag === predicate : predicate;
 }
 
 async function waitForIdle(
-  runtime: Runtime,
-  events: ReadonlyArray<RuntimeEventRecord>,
+  runtime: Frond.Runtime.Runtime,
+  events: ReadonlyArray<Frond.Runtime.RuntimeEventRecord>,
   options: NormalizedWaitOptions
 ): Promise<void> {
   const startedAt = performance.now();
@@ -492,7 +494,7 @@ function waitDescription(options: Pick<FrondTestWaitOptions, "description">): st
   return options.description === undefined ? "" : ` (${options.description})`;
 }
 
-function recentEvents(events: ReadonlyArray<RuntimeEventRecord>): string {
+function recentEvents(events: ReadonlyArray<Frond.Runtime.RuntimeEventRecord>): string {
   const recent = events.slice(-10).map((record) => `#${record.sequence}:${record.event._tag}`);
   return recent.length === 0 ? "none" : recent.join(", ");
 }

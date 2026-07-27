@@ -1,5 +1,9 @@
 export { createRuntime } from "./bridge";
-export type { RuntimeHandleResult } from "./client";
+export type {
+  RuntimeClientHost,
+  RuntimeEffectBridgeRunner,
+  RuntimeHandleResult,
+} from "./client";
 export { createRuntimeClient } from "./client";
 export type { FrondNodeReadiness, RuntimeReadFailureKind } from "./errors";
 export {

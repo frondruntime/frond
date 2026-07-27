@@ -1,21 +1,18 @@
+// Public core types are imported from the package name so the emitted testing
+// declaration rollup references `@frondruntime/core` instead of duplicating
+// the main entry's types.
+import type * as Frond from "@frondruntime/core";
 import { Effect } from "effect";
-import {
-  createRuntime,
-  type Runtime,
-  type RuntimeClient,
-  type RuntimeEventRecord,
-  type RuntimeOptions,
-  type RuntimeSink,
-} from "../runtime";
+import { createRuntime } from "../runtime";
 
-export interface CapturingRuntimeSink extends RuntimeSink {
+export interface CapturingRuntimeSink extends Frond.Runtime.RuntimeSink {
   readonly name: "capturing-test-sink";
-  readonly events: ReadonlyArray<RuntimeEventRecord>;
+  readonly events: ReadonlyArray<Frond.Runtime.RuntimeEventRecord>;
 }
 
 export interface TestRuntimeOptions
   extends Pick<
-    RuntimeOptions,
+    Frond.Runtime.RuntimeOptions,
     | "runtimeId"
     | "driverTimeouts"
     | "eventBufferSize"
@@ -27,19 +24,19 @@ export interface TestRuntimeOptions
   > {}
 
 export interface TestRuntime {
-  readonly runtime: Runtime;
-  readonly client: RuntimeClient;
+  readonly runtime: Frond.Runtime.Runtime;
+  readonly client: Frond.Runtime.RuntimeClient;
   readonly sink: CapturingRuntimeSink;
-  readonly events: ReadonlyArray<RuntimeEventRecord>;
+  readonly events: ReadonlyArray<Frond.Runtime.RuntimeEventRecord>;
 }
 
 export function createTestRuntime(options: TestRuntimeOptions = {}): TestRuntime {
-  const events: Array<RuntimeEventRecord> = [];
+  const events: Array<Frond.Runtime.RuntimeEventRecord> = [];
   const providedSinks = options.sinks ?? [];
   const sink = {
     name: "capturing-test-sink" as const,
     events,
-    handle: (event: RuntimeEventRecord) =>
+    handle: (event: Frond.Runtime.RuntimeEventRecord) =>
       Effect.sync(() => {
         events.push(event);
       }),

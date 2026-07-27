@@ -1,23 +1,26 @@
+// Public core types are imported from the package name so the emitted testing
+// declaration rollup references `@frondruntime/core` instead of duplicating
+// the main entry's types. Values keep their relative imports; type-only
+// imports are erased at runtime.
+import type * as Frond from "@frondruntime/core";
+import type {
+  DependenciesRecord,
+  FrondNode,
+  NodeDescriptor,
+  NodeSpec,
+  NodeSpecActions,
+  NodeSpecArgs,
+  NodeSpecClass,
+  NodeSpecDeclaredDeps,
+  NodeSpecInstance,
+  NodeSpecLike,
+  NodeSpecMode,
+  NodeSpecResult,
+  ResolvedDeps,
+} from "@frondruntime/core";
 import { Effect } from "effect";
-import type { Driver } from "../driver";
 import { createEffectDriver } from "../driver/effectDefinition";
-import {
-  type DependenciesRecord,
-  dependencies,
-  type FrondNode,
-  FrondNodeSpecError,
-  type NodeDescriptor,
-  type NodeSpec,
-  type NodeSpecActions,
-  type NodeSpecArgs,
-  type NodeSpecClass,
-  type NodeSpecDeclaredDeps,
-  type NodeSpecInstance,
-  type NodeSpecLike,
-  type NodeSpecMode,
-  type NodeSpecResult,
-  type ResolvedDeps,
-} from "../node";
+import { dependencies, FrondNodeSpecError } from "../node";
 import { makeSpecOverrideClass } from "../node/specOverride";
 
 export interface MockSpecOverrides<
@@ -25,7 +28,7 @@ export interface MockSpecOverrides<
   TDerivedDeps extends DependenciesRecord = NodeSpecDeclaredDeps<TSpec>,
 > {
   readonly driver?:
-    | Driver<
+    | Frond.Driver.Driver<
         FrondNode<
           NodeSpecArgs<TSpec>,
           ResolvedDeps<TDerivedDeps>,
@@ -97,7 +100,7 @@ export function readySpec<TSpec extends NodeSpecLike>(
       Record<string, never>
     >({
       acquire: () => Effect.succeed(result),
-    }) as unknown as Driver<
+    }) as unknown as Frond.Driver.Driver<
       FrondNode<
         NodeSpecArgs<TSpec>,
         ResolvedDeps<Record<string, never>>,
