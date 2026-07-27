@@ -68,6 +68,7 @@ function normalizeActions<TNode extends object, TArgs, TDeps extends object, TRe
     {
       readonly run: DriverActionRun<TNode, TArgs, TDeps, TResult>;
       readonly admission: import("./types").ActionAdmission;
+      readonly timeout: import("./types").ActionTimeout | undefined;
     }
   > = {};
   const actionMap = actions as Readonly<Record<string, TAction | undefined>> | undefined;
@@ -80,6 +81,7 @@ function normalizeActions<TNode extends object, TArgs, TDeps extends object, TRe
       normalized[key] = {
         run: normalize(action),
         admission: descriptor.admission,
+        timeout: descriptor.timeout,
       };
     }
   }
@@ -89,6 +91,7 @@ function normalizeActions<TNode extends object, TArgs, TDeps extends object, TRe
 
 function readActionDescriptor(action: unknown): {
   readonly admission: import("./types").ActionAdmission;
+  readonly timeout: import("./types").ActionTimeout | undefined;
 } {
   if (
     typeof action !== "object" ||
@@ -96,8 +99,13 @@ function readActionDescriptor(action: unknown): {
     (action as { readonly [FROND_DRIVER_ACTION_BRAND]?: unknown })[FROND_DRIVER_ACTION_BRAND] !==
       true
   ) {
-    return { admission: { policy: "queue" } };
+    return { admission: { policy: "queue" }, timeout: undefined };
   }
 
-  return action as { readonly admission: import("./types").ActionAdmission };
+  const descriptor = action as {
+    readonly admission: import("./types").ActionAdmission;
+    readonly timeout?: import("./types").ActionTimeout | undefined;
+  };
+
+  return { admission: descriptor.admission, timeout: descriptor.timeout };
 }

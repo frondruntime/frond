@@ -388,7 +388,10 @@ describe("graph actions", () => {
     const snapshot = await Effect.runPromise(graph.snapshot());
     const profile = snapshot.nodes.find((node) => node.tag === "resources/slow-action-profile");
 
-    expect(result).toMatchObject({ _tag: "Success", value: { timezone: "CET" } });
+    expect(result).toMatchObject({
+      _tag: "Success",
+      value: { timezone: "CET" },
+    });
     expect(profile?.result).toEqual({ name: "Ada", timezone: "CET" });
   });
 
@@ -641,7 +644,10 @@ describe("graph actions", () => {
 
     await Effect.runPromise(
       Effect.gen(function* () {
-        yield* graph.ensureReadyNode({ spec: JoinActionAdmissionNode, args: {} });
+        yield* graph.ensureReadyNode({
+          spec: JoinActionAdmissionNode,
+          args: {},
+        });
         const first = yield* graph.runAction(request).pipe(Effect.forkDetach);
 
         yield* Deferred.await(actionStarted);
@@ -933,5 +939,171 @@ describe("graph actions", () => {
       kind: "action",
       error: { _tag: "ActionFailed", action: "hang" },
     });
+  });
+
+  test("per-action timeout shorter than the runtime default wins", async () => {
+    type OverrideSpec = NodeSpec<{
+      readonly mode: "effect";
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: { readonly value: string };
+      readonly actions: {
+        readonly hang: ActionContract<void, never>;
+      };
+    }>;
+
+    class OverrideNode extends NodeBase<OverrideSpec> {
+      static readonly spec = resourceSpec.effect<OverrideSpec>({
+        tag: "resources/action-timeout-override-short",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        actions: {
+          hang: Driver.Action(() => Effect.never, { timeout: 20 }),
+        },
+      });
+    }
+
+    // The normalized registry must carry the per-action policy through
+    // driver normalization to the executor lookup.
+    expect(OverrideNode.spec.driver.actions.read("hang")).toMatchObject({
+      _tag: "Found",
+      timeout: 20,
+    });
+
+    // Runtime default stays at 15_000ms; the 20ms per-action deadline must win.
+    const graph = makeInMemoryGraphSystem();
+
+    await Effect.runPromise(graph.ensureReadyNode({ spec: OverrideNode, args: {} }));
+    const result = await Effect.runPromise(
+      graph
+        .runAction({
+          target: {
+            _tag: "NodeRequest",
+            request: { spec: OverrideNode, args: {} },
+          },
+          action: "hang",
+          input: undefined,
+        })
+        .pipe(Effect.timeout("500 millis"))
+    );
+    const error = result._tag === "Failure" ? result.error : undefined;
+
+    expect(result._tag).toBe("Failure");
+    expect(error).toBeInstanceOf(ActionFailed);
+    expect(error?.cause).toBeInstanceOf(DriverOperationTimedOut);
+    expect(error?.cause).toMatchObject({
+      cancellation: { _tag: "TimedOut", detail: "20ms" },
+    });
+  });
+
+  test("per-action timeout longer than the runtime default lets a slow action finish", async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let markStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+
+    type SlowSpec = NodeSpec<{
+      readonly mode: "effect";
+      readonly args: Record<string, never>;
+      readonly key: Key.Singleton;
+      readonly deps: Record<string, never>;
+      readonly result: { readonly value: string };
+      readonly actions: {
+        readonly slow: ActionContract<void, string>;
+      };
+    }>;
+
+    class SlowNode extends NodeBase<SlowSpec> {
+      static readonly spec = resourceSpec.effect<SlowSpec>({
+        tag: "resources/action-timeout-override-long",
+        key: () => Key.singleton(),
+        dependencies: dependencies(() => ({})),
+        acquire: Driver.Acquire(() => Effect.succeed({ value: "stable" })),
+        actions: {
+          slow: Driver.Action(
+            () =>
+              Effect.gen(function* () {
+                yield* Effect.sync(() => markStarted());
+                yield* Effect.promise(() => gate);
+                return "done";
+              }),
+            { timeout: 5_000 }
+          ),
+        },
+      });
+    }
+
+    const graph = makeInMemoryGraphSystem({
+      driverTimeouts: { action: 20 },
+    });
+
+    await Effect.runPromise(graph.ensureReadyNode({ spec: SlowNode, args: {} }));
+    const fiber = Effect.runFork(
+      graph.runAction({
+        target: {
+          _tag: "NodeRequest",
+          request: { spec: SlowNode, args: {} },
+        },
+        action: "slow",
+        input: undefined,
+      })
+    );
+
+    await started;
+    // Let several multiples of the 20ms runtime deadline elapse before opening
+    // the gate: if the per-action override did not apply, the action would
+    // already have timed out and the joined result would be a timeout failure.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    release();
+    const result = await Effect.runPromise(Fiber.join(fiber));
+
+    expect(result).toMatchObject({ _tag: "Success", value: "done" });
+  });
+
+  test("Driver.Action rejects invalid timeout values at construction", () => {
+    const invalidTimeouts: ReadonlyArray<unknown> = [
+      0,
+      -1,
+      -0.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      null,
+      "inherit",
+      "5000",
+      "",
+      true,
+      {},
+      [],
+      () => 0,
+    ];
+
+    for (const timeout of invalidTimeouts) {
+      expect(() =>
+        Driver.Action(() => Effect.succeed("noop"), {
+          timeout: timeout as never,
+        })
+      ).toThrow(TypeError);
+      expect(() =>
+        Driver.Action(() => Effect.succeed("noop"), {
+          timeout: timeout as never,
+        })
+      ).toThrow(
+        'Frond.Driver.Action timeout must be a positive finite number of milliseconds or "unbounded".'
+      );
+    }
+
+    // Valid policies construct and land on the descriptor.
+    expect(Driver.Action(() => Effect.succeed("noop"), { timeout: 5_000 }).timeout).toBe(5_000);
+    expect(Driver.Action(() => Effect.succeed("noop"), { timeout: "unbounded" }).timeout).toBe(
+      "unbounded"
+    );
+    expect(Driver.Action(() => Effect.succeed("noop")).timeout).toBeUndefined();
   });
 });

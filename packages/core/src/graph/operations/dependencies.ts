@@ -187,7 +187,12 @@ export function refreshDependencyValue(
   return Effect.gen(function* () {
     const dependencyNodeId = cell.dependencies[dependencyName];
 
-    if (dependencyNodeId === undefined || !Object.hasOwn(cell.dependencies, dependencyName)) {
+    // Object.prototype.hasOwnProperty.call instead of Object.hasOwn: consumer
+    // Hermes/React Native targets do not ship Object.hasOwn.
+    if (
+      dependencyNodeId === undefined ||
+      !Object.prototype.hasOwnProperty.call(cell.dependencies, dependencyName)
+    ) {
       return yield* new GraphInvariantViolation({
         nodeId: cell.nodeId,
         tag: cell.tag,

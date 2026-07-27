@@ -34,6 +34,9 @@
       "nursery": {
         "noFloatingPromises": "error"
       },
+      "suspicious": {
+        "noPrototypeBuiltins": "off"
+      },
       "style": {
         "noRestrictedImports": {
           "level": "error",
@@ -109,6 +112,7 @@
     "./.biome/plugins/no-effect-v3-service-map.grit",
     "./.biome/plugins/no-effect-v3-service-map-import.grit",
     "./.biome/plugins/no-conditional-object-spread.grit",
+    "./.biome/plugins/no-object-hasown.grit",
     "./.biome/plugins/no-runtime-readiness-private-calls.grit",
     "./.biome/plugins/no-null-return-in-effect-gen.grit",
     "./.biome/plugins/no-raw-clock-in-effect-driver.grit",
