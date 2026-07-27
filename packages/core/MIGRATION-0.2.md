@@ -28,7 +28,19 @@ static readonly spec = Frond.serviceSpec.async<SessionSpec>({
 });
 ```
 
-Effect-native nodes use `.effect` the same way. `Driver.Async` / `Driver.Effect` remain public for pre-built or shared drivers; pass the result through `nodeSpec.fromDriver` (or `specWithDriver`, below). Both builders and `.fromDriver` carry the same shape-mode constraint as the factories: the driver's mode literal must agree with the shape-declared mode, and a shape whose `mode` is still the full `"async" | "effect"` union is rejected by all three - `fromDriver` names the failure explicitly (`fromDriver requires a spec shape declaring a single mode: "async" or "effect"`).
+Effect-native nodes use `.effect` the same way. `Driver.Async` / `Driver.Effect` remain public for pre-built or shared drivers; pass the result through `nodeSpec.fromDriver` (or `specWithDriver`, below). Both builders and `.fromDriver` carry the same shape-mode constraint as the factories: the driver's mode literal must agree with the shape-declared mode, and a shape whose `mode` is still the full `"async" | "effect"` union is rejected by all three - `fromDriver` names the failure explicitly (`fromDriver requires a spec shape declaring a single mode: "async" or "effect"`). Mode-generic override helpers hit that rejection and must route through `specWithDriver` instead; see §11.
+
+This applies to the four spec factories only. The testing entrypoint is unchanged: `mockSpec` and `readySpec` from `@frondruntime/core/testing` still take `{ driver?, dependencies? }` overrides, and an inline `Driver.Async<Spec>({ ... })` / `Driver.Effect<Spec>({ ... })` body is still the correct spelling there. Existing test call sites need no migration - do not "flatten" them.
+
+```ts
+// 0.2.0 - unchanged from 0.1.0
+const MockSession = mockSpec(SessionNode, {
+  dependencies: () => ({}),
+  driver: Frond.Driver.Async<SessionSpec>({
+    acquire: Frond.Driver.Acquire(async () => ({ userId: "u1" })),
+  }),
+});
+```
 
 ### 2. Spec shapes must declare `mode`
 
@@ -67,7 +79,7 @@ class RefreshNode extends Frond.NodeBase<RefreshSpec> { ... }
 
 ### 4. The effect factories' requirements generic is removed
 
-`Driver.Effect` (and the `.effect` factory flavor) no longer take an `R` requirements parameter - 0.1.0 already pinned it to `never`, and 0.2.0 deletes the position entirely. Effect hooks must be self-contained (`Effect.Effect<A, E>` with no remaining requirements). If you spelled out an explicit action map, it shifts up one position:
+`Driver.Effect` (and the `.effect` factory flavor) no longer take an `R` requirements parameter - 0.1.0 already pinned it to `never`, and 0.2.0 removes it from every authoring position. Effect hooks must be self-contained (`Effect.Effect<A, E>` with no remaining requirements). If you spelled out an explicit action map, it shifts up one position:
 
 ```ts
 // 0.1.0
@@ -81,6 +93,8 @@ serviceSpec.effect<RefreshSpec, typeof refreshActions>({ ..., actions: refreshAc
 ```
 
 The same shift applies to `Driver.Effect<Spec, typeof actions>` when building a shared driver.
+
+The position is gone from authoring, not from the type system: the internal `EffectDriver` type still carries a trailing `R extends never = never` slot. That retention is deliberate - it is the reserved expansion point for the deferred requirements channel (see "Deferred surface"), not a parameter you can pass today. Nothing public accepts an `R` argument in 0.2.0.
 
 ### 5. Actions are mode-native
 
@@ -100,7 +114,22 @@ await Frond.unwrapEffect(session.actions.refreshToken({ force: true }));
 yield* session.actions.refreshToken({ force: true });
 ```
 
-`unwrapEffect` rejects with the original typed error value (so `catch` sees what the Effect failed with); defects and interruption reject with the failure `Cause` so crashes never masquerade as typed failures. The MobX and React adapters bridge internally - hooks like `useNode` and the MobX helpers need no changes at call sites that only render or read nodes.
+`unwrapEffect` rejects with the original typed error value (so `catch` sees what the Effect failed with); defects and interruption reject with the failure `Cause` so crashes never masquerade as typed failures.
+
+The MobX and React adapters bridge internally, so `useNode`, `useNodeRead`, and the MobX helpers need no changes - but only where a call site renders or reads. Every React call site that invokes an effect-mode action does need changing, and in an effect-mode codebase that is the bulk of the migration by line count. An action call now builds an `Effect` and runs nothing:
+
+```tsx
+// 0.1.0 - the call ran the action
+// 0.2.0 - effect-mode: still typechecks, builds an Effect, and silently never runs
+<button onClick={() => void session.actions.refreshToken({ force: true })} />
+
+// 0.2.0 - run it at the React boundary
+<button
+  onClick={() => void Frond.unwrapEffect(session.actions.refreshToken({ force: true }))}
+/>
+```
+
+This one is silent: the stale spelling still compiles, so the compiler will not find these for you. Sweep every `onClick`/`onSubmit`/effect-hook body that touches an effect-mode node's `actions`. Async-mode nodes are unaffected.
 
 ### 6. MobX observable results are classified non-plain for `patchResult` staging
 
@@ -155,16 +184,91 @@ const node = read.node; // already SessionNode
 
 The same typing flows through `handle.snapshot()` lookups and the new `RuntimeHandleNode<TSpec>` alias (see below).
 
-### 9. Handle and read types gained type parameters
+This only lands once the surrounding handle annotation is gone. An explicit `RuntimeNodeHandle<TArgs, TResult>` pins `TNode` to its `object` default, so `read.node` stays `object` however the node was authored and deleting the cast fails (`Type 'object' is not assignable to type 'SessionNode'`). Drop the annotation first - see §9.
 
-Only affects code that spells out all type arguments; inference and partially-applied forms are unchanged.
+### 9. Handle, read, and descriptor types gained type parameters
 
 - `RuntimeNodeHandle<TArgs, TResult>` is now `RuntimeNodeHandle<TArgs, TResult, TActions = Record<string, never>, TMode = "async", TNode = object>`.
+- `NodeDescriptor<TSpec>` is now `NodeDescriptor<TSpec, TMode extends DriverMode = DriverMode>`.
 - `RuntimeNodeRead<TResult>`, `RuntimeNodeSnapshot<TResult>`, and `RuntimeNodeSnapshotLookup<TResult>` gained a trailing `TNode extends object = object` parameter.
 
-If you aliased these with explicit arguments, append the new parameters (or drop the explicit spelling and let `client.node(Spec, args)` infer everything from the spec).
+Partially-applied spellings are not safe. The new defaults are concrete, not inferred, so an annotation that omits them actively conflicts with what `client.node` returns: `TActions` is pinned to `Record<string, never>`, `TMode` to `"async"`, `TNode` to `object`. The assignment is rejected as soon as the node declares actions (or is effect-mode); an action-less async node happens to still line up, which makes this fail unevenly across a codebase.
 
-### 10. Inherited 0.1.0 breaking changes
+```ts
+// 0.1.0 partially-applied annotation - rejected in 0.2.0 with
+// error TS2322 ... Types of property 'actions' are incompatible.
+const counter: Frond.Runtime.RuntimeNodeHandle<Frond.Args.None, CounterResult> =
+  runtime.client.node(CounterNode, {});
+
+// 0.2.0 - delete the annotation; the spec drives every parameter
+const counter = runtime.client.node(CounterNode, {});
+```
+
+Prefer deleting the explicit spelling over appending arguments to it: `client.node(Spec, args)` infers args, result, actions, mode, and node instance from the spec, so there is nothing left to keep in sync.
+
+`NodeDescriptor` needs the opposite treatment, because the common consumer idiom is a driver type alias and there is nothing to infer from:
+
+```ts
+// 0.1.0
+type SessionDriver = Frond.NodeDescriptor<SessionSpec>["driver"];
+
+// 0.2.0 - one argument leaves `TMode` at the full `DriverMode` union
+type SessionDriver = Frond.NodeDescriptor<SessionSpec, "async">["driver"];
+```
+
+Pin the mode. Left unpinned, the alias no longer satisfies a mode-flavored factory (`Type 'DriverMode' is not assignable to type '"async"'`) - and the error lands on the call site that consumes the driver, never on the alias, so it is otherwise undiscoverable.
+
+### 10. `client.node` takes one type parameter
+
+0.1.0's `client.node<TArgs, TResult>(spec, args)` is now `client.node<TSpec extends NodeSpecLike>(spec, args)`. Call sites that spelled the old pair out fail with `error TS2558: Expected 1 type arguments, but got 2.`
+
+```ts
+// 0.1.0
+const session = runtime.client.node<Frond.Args.None, SessionResult>(SessionNode, {});
+
+// 0.2.0 - delete the type arguments
+const session = runtime.client.node(SessionNode, {});
+```
+
+Note the direction, because it is the reverse of §9: the types there gained parameters, so explicit aliases may need more arguments; `client.node` lost parameters, so its call sites need fewer. Do not answer a TS2558 here by appending a third argument.
+
+### 11. Mode-generic spec overrides go through `specWithDriver`
+
+`nodeSpec.fromDriver` (§1) requires a spec shape whose `mode` has already narrowed to a single literal. A helper that derives an override generically over an unknown original spec cannot satisfy that: its shape's `mode` is still `NodeSpecMode<TOriginal>`, a type parameter, so the declared-mode guard rejects the input (`... is not assignable to type 'RequireDeclaredMode<DerivedNodeSpec<TOriginal>>'`).
+
+```ts
+type DerivedNodeSpec<TOriginal extends Frond.NodeSpecLike> = Frond.NodeSpec<{
+  readonly mode: Frond.NodeSpecMode<TOriginal>;
+  readonly args: Frond.NodeSpecArgs<TOriginal>;
+  readonly key: Frond.NodeSpecKey<TOriginal>;
+  readonly deps: Frond.NodeSpecDeclaredDeps<TOriginal>;
+  readonly result: Frond.NodeSpecResult<TOriginal>;
+  readonly actions: Frond.NodeSpecActions<TOriginal>;
+}>;
+
+// 0.2.0 - rejected: the shape's mode is still a type parameter
+export function deriveDriverSpec<TOriginal extends Frond.NodeSpecLike>(
+  tag: Frond.NodeTag,
+  key: (args: Frond.NodeSpecArgs<TOriginal>) => Frond.NodeSpecKey<TOriginal>,
+  driver: Frond.NodeDescriptor<DerivedNodeSpec<TOriginal>, Frond.NodeSpecMode<TOriginal>>["driver"]
+) {
+  return Frond.nodeSpec.fromDriver<DerivedNodeSpec<TOriginal>>({ tag, key, driver });
+}
+
+// 0.2.0 - specWithDriver carries no declared-mode guard
+export function deriveDriverSpec<TOriginal extends Frond.NodeSpecLike>(
+  original: TOriginal,
+  driver: Frond.SpecWithDriverReplacement<TOriginal>
+): Frond.SpecWithDriverClass<TOriginal> {
+  return Frond.specWithDriver(original, driver);
+}
+```
+
+`specWithDriver` also preserves tag, key, kind, dependencies, and class identity, so the derived override stays interchangeable with the original. For this pattern it is a required migration path, not an optional adoption.
+
+Related: the 0.1.0 type-level idiom `Parameters<typeof Frond.nodeSpec<T>>[0]` no longer resolves. `nodeSpec` is a const object (a `NodeSpecFactory`), not a generic function, so instantiating it fails with `error TS2635: Type 'NodeSpecFactory' has no signatures for which the type argument list is applicable.` The flavored input types are not public; derive the driver from `NodeDescriptor<TSpec, TMode>["driver"]` and call the factory directly instead.
+
+### 12. Inherited 0.1.0 breaking changes
 
 The snapshot API and event constructor changes (plus canonical args and result staging) shipped in 0.1.0 and are unchanged in 0.2.0. If you are jumping from 0.0.x, read the [0.1.0 release notes](./CHANGELOG.md#010-2026-07-15) first.
 
@@ -174,9 +278,9 @@ The requirements channel is deferred, not dead: the effect factories' requiremen
 
 ## Additive 0.2.0 surface
 
-Nothing here requires migration; adopt as needed.
+Adopt as needed - with one exception, called out first below.
 
-- **`specWithDriver(Original, driver)`** - production spec override that swaps only the driver, preserving tag, key, kind, dependencies, and class identity (`instanceof Original` keeps working). Pair with `createRuntime({ specOverrides })`.
+- **`specWithDriver(Original, driver)`** - production spec override that swaps only the driver, preserving tag, key, kind, dependencies, and class identity (`instanceof Original` keeps working). Pair with `createRuntime({ specOverrides })`. Not always optional: it is the required path for mode-generic override helpers (§11) and for host-boundary injection (see "Deferred surface").
 - **Result envelope: `withInternal` / `internalOf` / `carryInternal`** - a Frond-owned non-enumerable slot for imperative per-node internals (SDK handles, sockets) that never leaks into serialization, spreads, or projections.
 - **`createRuntimeCoordinator`** - serialized runtime replacement for dev HMR and test isolation; boot/dispose of runtime generations never overlap. Pairs with `RuntimeLease` and `FrondRuntimeBootSuperseded`.
 - **`ctx.nodeSignal`** - node-lifetime `AbortSignal` on driver contexts, one per ready-node incarnation, for subscriptions and long-lived callbacks; `ctx.signal` stays operation-scoped.
