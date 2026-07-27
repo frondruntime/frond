@@ -4,7 +4,6 @@ import { createEffectDriver } from "../driver/effectDefinition";
 import {
   type DependenciesRecord,
   dependencies,
-  FROND_NODE_SPEC_BRAND,
   type FrondNode,
   FrondNodeSpecError,
   type NodeDescriptor,
@@ -19,8 +18,7 @@ import {
   type NodeSpecResult,
   type ResolvedDeps,
 } from "../node";
-
-type AbstractConstructor = abstract new (...args: ReadonlyArray<never>) => object;
+import { makeSpecOverrideClass } from "../node/specOverride";
 
 export interface MockSpecOverrides<
   TSpec extends NodeSpecLike,
@@ -151,18 +149,8 @@ function specWithOverrides<
         : dependencies(overrides.dependencies),
     driver: overrides.driver ?? descriptor.driver,
   };
-  Object.defineProperty(overrideDescriptor, FROND_NODE_SPEC_BRAND, {
-    configurable: false,
-    enumerable: false,
-    value: true,
-    writable: false,
-  });
 
-  abstract class SpecOverride extends (original as unknown as AbstractConstructor) {
-    static readonly spec = overrideDescriptor;
-  }
-
-  return SpecOverride as unknown as NodeSpecClass<
+  return makeSpecOverrideClass(original, overrideDescriptor) as unknown as NodeSpecClass<
     NodeSpec<{
       readonly mode: NodeSpecMode<TOriginal>;
       readonly args: NodeSpecArgs<TOriginal>;

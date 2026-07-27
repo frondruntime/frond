@@ -18,6 +18,7 @@ import {
   type RuntimeInstance,
   resourceSpec,
 } from "@frondruntime/core";
+import { effectBridgeRunner, effectHostFromRuntime } from "@frondruntime/core/testing";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { Deferred, Effect } from "effect";
 import { createElement, StrictMode, useState } from "react";
@@ -86,23 +87,8 @@ function makeSubscriptionCountingRuntime(): {
   const runtime: RuntimeInstance = {
     ...base,
     client: createRuntimeClient(
-      {
-        resolveNodeIdSync: base.resolveNodeIdSync,
-        getStatusSync: base.getStatusSync,
-        readNodeSnapshotSync: base.readNodeSnapshotSync,
-        readNodeSnapshot: (nodeId) =>
-          Effect.tryPromise({
-            try: () => base.readNodeSnapshot(nodeId),
-            catch: (error) => error,
-          }),
-        observe: (observer) => Effect.sync(() => countingObserve(observer)),
-        submit: (command) =>
-          Effect.tryPromise({ try: () => base.submit(command), catch: (error) => error }),
-      } as never,
-      {
-        run: (effect) => Effect.runPromise(effect),
-        runSync: (effect) => Effect.runSync(effect),
-      }
+      effectHostFromRuntime({ ...base, observe: countingObserve }),
+      effectBridgeRunner
     ),
     observe: countingObserve,
   };

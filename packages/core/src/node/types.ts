@@ -73,6 +73,15 @@ export type AsyncModeSpec = NodeSpec<{ readonly mode: "async"; readonly result?:
  */
 export type EffectModeSpec = NodeSpec<{ readonly mode: "effect"; readonly result?: unknown }>;
 
+/**
+ * The union-mode spec constraint: any spec shape that declares a `mode`
+ * (possibly still the full `DriverMode` union). Mode-agnostic machinery
+ * (`NodeDescriptor`, `fromDriver`, descriptor plumbing) constrains on this;
+ * the flavored entry points narrow further via `AsyncModeSpec` /
+ * `EffectModeSpec`.
+ */
+export type AnyModeSpec = NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>;
+
 export type NodeSpecClass<
   TSpec extends NodeSpec<{
     readonly mode: DriverMode;
@@ -158,26 +167,24 @@ export type NodeSpecActions<TSpec> =
     : never;
 
 export type NodeSpecInstance<TSpec> = TSpec extends { readonly prototype: infer TNode }
-  ? TNode extends object
-    ? TNode extends {
-        readonly actions: NodeActions<NodeSpecActions<TSpec>, NodeSpecMode<TSpec>>;
-      }
-      ? // The class already carries the authored mode (`NodeBase` derives it
-        // from the spec shape), so keep the nominal class type: private
-        // members and `instanceof` narrowing survive.
+  ? TNode extends {
+      readonly actions: NodeActions<NodeSpecActions<TSpec>, NodeSpecMode<TSpec>>;
+    }
+    ? // The class already carries the authored mode (`NodeBase` derives it
+      // from the spec shape), so keep the nominal class type: private
+      // members and `instanceof` narrowing survive.
+      TNode
+    : TNode extends { readonly actions: unknown }
+      ? Omit<TNode, "actions"> & {
+          // The node's own type parameter is the spec shape, which carries no
+          // driver, so `NodeBase.actions` can't know the mode. Inject it here,
+          // where the class (`typeof Foo`) — and thus its authored mode — is known.
+          readonly actions: NodeActions<NodeSpecActions<TSpec>, NodeSpecMode<TSpec>>;
+        }
+      : // A hand-written class that merely carries a spec has no runtime
+        // action facade (only the `NodeBase` constructor wires one), so no
+        // typed `actions` surface is fabricated for it.
         TNode
-      : TNode extends { readonly actions: unknown }
-        ? Omit<TNode, "actions"> & {
-            // The node's own type parameter is the spec shape, which carries no
-            // driver, so `NodeBase.actions` can't know the mode. Inject it here,
-            // where the class (`typeof Foo`) — and thus its authored mode — is known.
-            readonly actions: NodeActions<NodeSpecActions<TSpec>, NodeSpecMode<TSpec>>;
-          }
-        : // A hand-written class that merely carries a spec has no runtime
-          // action facade (only the `NodeBase` constructor wires one), so no
-          // typed `actions` surface is fabricated for it.
-          TNode
-    : TNode
   : never;
 
 // The driver a node was authored with, recovered from either a node class
@@ -227,10 +234,7 @@ export class FrondNodeSpecError extends TypeError {
   }
 }
 
-export type NodeDescriptor<
-  TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
-  TMode extends DriverMode = DriverMode,
-> = {
+export type NodeDescriptor<TSpec extends AnyModeSpec, TMode extends DriverMode = DriverMode> = {
   readonly kind: NodeKind;
   readonly tag: NodeTag;
   readonly key: (args: NodeSpecArgs<TSpec>) => NodeSpecKey<TSpec>;
@@ -238,25 +242,6 @@ export type NodeDescriptor<
   // resolver is accepted back by the public factories directly — no
   // re-wrapping closure required.
   readonly dependencies: DependencyResolver<NodeSpecArgs<TSpec>, NodeSpecDeclaredDeps<TSpec>>;
-  readonly driver: Driver<
-    NodeBase<TSpec>,
-    NodeSpecArgs<TSpec>,
-    NodeSpecResolvedDeps<TSpec>,
-    NodeSpecResult<TSpec>,
-    NodeSpecActions<TSpec>,
-    TMode
-  >;
-};
-
-export type NodeSpecInput<
-  TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
-  TMode extends DriverMode = DriverMode,
-> = {
-  readonly tag: NodeTag;
-  readonly key: (args: NodeSpecArgs<TSpec>) => NodeSpecKey<TSpec>;
-  readonly dependencies?:
-    | DependencyResolver<NodeSpecArgs<TSpec>, NodeSpecDeclaredDeps<TSpec>>
-    | undefined;
   readonly driver: Driver<
     NodeBase<TSpec>,
     NodeSpecArgs<TSpec>,

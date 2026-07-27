@@ -6,7 +6,11 @@ import { FrondRuntimeClosed, FrondRuntimeInvariantViolation } from "../src/runti
 import type { RuntimeSubmission } from "../src/runtime/types";
 import { createUnsafeRuntimeClient } from "../src/runtime/unsafeClient";
 import { Signals } from "../src/signals";
-import { waitForRuntimeNodeRead } from "../src/testing";
+import {
+  effectBridgeRunner as bridgeRunner,
+  effectHostFromRuntime,
+  waitForRuntimeNodeRead,
+} from "../src/testing";
 import {
   AcquireFailed,
   type ActionContract,
@@ -29,27 +33,6 @@ import {
   TransportNode,
   unwrapEffect,
 } from "./graphTestFixtures";
-
-const bridgeRunner = {
-  run: <A>(effect: Effect.Effect<A, unknown>) => Effect.runPromise(effect),
-  runSync: <A>(effect: Effect.Effect<A, unknown>) => Effect.runSync(effect),
-};
-
-// Bridge the Promise runtime facade back into the Effect-native host shape that
-// createRuntimeClient now expects.
-function effectHost(runtime: ReturnType<typeof createRuntime>) {
-  return {
-    resolveNodeIdSync: runtime.resolveNodeIdSync,
-    getStatusSync: runtime.getStatusSync,
-    readNodeSnapshotSync: runtime.readNodeSnapshotSync,
-    readNodeSnapshot: (nodeId: Parameters<typeof runtime.readNodeSnapshot>[0]) =>
-      Effect.tryPromise({ try: () => runtime.readNodeSnapshot(nodeId), catch: (error) => error }),
-    submit: (command: Parameters<typeof runtime.submit>[0]) =>
-      Effect.tryPromise({ try: () => runtime.submit(command), catch: (error) => error }),
-    observe: (observer: Parameters<typeof runtime.observe>[0]) =>
-      Effect.sync(() => runtime.observe(observer)),
-  } as never;
-}
 
 describe("runtime client", () => {
   test("updateArgs returns canonical args validation failures through its typed result", async () => {
@@ -747,7 +730,7 @@ describe("runtime client", () => {
     const runtime = createRuntime();
     const owner = runtime.client.node<Record<string, never>, string>(SlowNode, {});
     const observer = runtime.client.node<Record<string, never>, string>(SlowNode, {});
-    const secondClient = createRuntimeClient(effectHost(runtime), bridgeRunner);
+    const secondClient = createRuntimeClient(effectHostFromRuntime(runtime), bridgeRunner);
     const crossClientObserver = secondClient.node<Record<string, never>, string>(SlowNode, {});
     const ready = owner.ensureReady();
 

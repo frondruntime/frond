@@ -10,6 +10,7 @@ import {
   type RuntimeInstance,
   resourceSpec,
 } from "@frondruntime/core";
+import { effectBridgeRunner, effectHostFromRuntime } from "@frondruntime/core/testing";
 import { Deferred, Effect } from "effect";
 import { makeReactNodeControls } from "../src/nodeControls";
 import { projectReactNodeRead } from "../src/nodeReadProjection";
@@ -85,49 +86,24 @@ describe("React node store", () => {
     const runtime = createRuntime();
     let observed = 0;
     let unsubscribed = 0;
+    const countingObserve = (observer: Parameters<RuntimeInstance["observe"]>[0]) => {
+      observed += 1;
+      const subscription = runtime.observe(observer);
+
+      return {
+        unsubscribe: () => {
+          unsubscribed += 1;
+          subscription.unsubscribe();
+        },
+      };
+    };
     const wrappedRuntime: RuntimeInstance = {
       ...runtime,
       client: createRuntimeClient(
-        {
-          resolveNodeIdSync: runtime.resolveNodeIdSync,
-          getStatusSync: runtime.getStatusSync,
-          readNodeSnapshotSync: runtime.readNodeSnapshotSync,
-          readNodeSnapshot: (nodeId) =>
-            Effect.tryPromise({
-              try: () => runtime.readNodeSnapshot(nodeId),
-              catch: (error) => error,
-            }),
-          observe: (observer) =>
-            Effect.sync(() => {
-              observed += 1;
-              const subscription = runtime.observe(observer);
-
-              return {
-                unsubscribe: () => {
-                  unsubscribed += 1;
-                  subscription.unsubscribe();
-                },
-              };
-            }),
-          submit: (command) =>
-            Effect.tryPromise({ try: () => runtime.submit(command), catch: (error) => error }),
-        } as never,
-        {
-          run: (effect) => Effect.runPromise(effect),
-          runSync: (effect) => Effect.runSync(effect),
-        }
+        effectHostFromRuntime({ ...runtime, observe: countingObserve }),
+        effectBridgeRunner
       ),
-      observe: (observer: Parameters<RuntimeInstance["observe"]>[0]) => {
-        observed += 1;
-        const subscription = runtime.observe(observer);
-
-        return {
-          unsubscribe: () => {
-            unsubscribed += 1;
-            subscription.unsubscribe();
-          },
-        };
-      },
+      observe: countingObserve,
     };
     const args = {};
     const store = makeReactNodeStore(wrappedRuntime, {
@@ -502,25 +478,7 @@ function rejectTransportArgsUpdate(
 
   return {
     ...wrappedRuntime,
-    client: createRuntimeClient(
-      {
-        resolveNodeIdSync: wrappedRuntime.resolveNodeIdSync,
-        getStatusSync: wrappedRuntime.getStatusSync,
-        readNodeSnapshotSync: wrappedRuntime.readNodeSnapshotSync,
-        readNodeSnapshot: (nodeId) =>
-          Effect.tryPromise({
-            try: () => wrappedRuntime.readNodeSnapshot(nodeId),
-            catch: (error) => error,
-          }),
-        observe: (observer) => Effect.sync(() => wrappedRuntime.observe(observer)),
-        submit: (command) =>
-          Effect.tryPromise({ try: () => wrappedRuntime.submit(command), catch: (error) => error }),
-      } as never,
-      {
-        run: (effect) => Effect.runPromise(effect),
-        runSync: (effect) => Effect.runSync(effect),
-      }
-    ),
+    client: createRuntimeClient(effectHostFromRuntime(wrappedRuntime), effectBridgeRunner),
   };
 }
 

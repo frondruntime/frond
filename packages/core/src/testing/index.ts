@@ -8,6 +8,11 @@ export {
   type DeferredOperationGate,
 } from "./deferredDriver";
 export {
+  type EffectHostRuntime,
+  effectBridgeRunner,
+  effectHostFromRuntime,
+} from "./effectHost";
+export {
   createFrondTestHarness,
   type FrondTestHarness,
   type FrondTestHarnessOptions,

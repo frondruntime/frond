@@ -1,19 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
 import { createTransition, runTransition, type TransitionStep } from "../src";
-
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-};
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
+import { createDeferred as deferred } from "../src/testing";
 
 function step(label: string, log: string[], work?: () => Promise<unknown>): TransitionStep {
   return {
