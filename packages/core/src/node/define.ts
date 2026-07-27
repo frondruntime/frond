@@ -9,13 +9,13 @@ import {
 import type { Driver, DriverMode } from "../driver/types";
 import type { NodeBase } from "./runtime";
 import type {
+  AnyModeSpec,
   AsyncModeSpec,
   DependenciesRecord,
   DependencyResolver,
   EffectModeSpec,
   NodeDescriptor,
   NodeKind,
-  NodeSpec,
   NodeSpecActions,
   NodeSpecArgs,
   NodeSpecDeclaredDeps,
@@ -77,9 +77,7 @@ function isBrandedDependencyResolver<TArgs, TDeps extends DependenciesRecord>(
  * The driver hooks (`acquire`, `actions`, …) live alongside this metadata in the
  * flattened spec input; the mode is chosen by the `.async` / `.effect` factory.
  */
-type NodeSpecMeta<
-  TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
-> = {
+type NodeSpecMeta<TSpec extends AnyModeSpec> = {
   readonly tag: NodeTag;
   readonly key: (args: NodeSpecArgs<TSpec>) => NodeSpecKey<TSpec>;
   readonly dependencies?:
@@ -118,6 +116,22 @@ type RequireDeclaredMode<TSpec> = [DriverMode] extends [NodeSpecMode<TSpec>]
   : unknown;
 
 /**
+ * Input accepted by `fromDriver`: node metadata, the declared-mode guard, and
+ * the pre-built driver whose mode literal must agree with the shape.
+ */
+type FromDriverInput<TSpec extends AnyModeSpec, TMode extends DriverMode> = NodeSpecMeta<TSpec> &
+  RequireDeclaredMode<TSpec> & {
+    readonly driver: Driver<
+      NodeBase<TSpec>,
+      NodeSpecArgs<TSpec>,
+      NodeSpecResolvedDeps<TSpec>,
+      NodeSpecResult<TSpec>,
+      NodeSpecActions<TSpec>,
+      TMode
+    >;
+  };
+
+/**
  * A mode-flavored node spec factory.
  *
  * `.async` builds a Promise-facing node whose actions are Promise-native; `.effect`
@@ -144,20 +158,10 @@ export interface NodeSpecFactory {
   // driver's mode literal must agree with the shape-declared mode, and the
   // shape must declare a single mode — union-mode shapes are rejected.
   readonly fromDriver: <
-    TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
+    TSpec extends AnyModeSpec,
     TMode extends NodeSpecMode<TSpec> = NodeSpecMode<TSpec>,
   >(
-    input: NodeSpecMeta<TSpec> &
-      RequireDeclaredMode<TSpec> & {
-        readonly driver: Driver<
-          NodeBase<TSpec>,
-          NodeSpecArgs<TSpec>,
-          NodeSpecResolvedDeps<TSpec>,
-          NodeSpecResult<TSpec>,
-          NodeSpecActions<TSpec>,
-          TMode
-        >;
-      }
+    input: FromDriverInput<TSpec, TMode>
   ) => NodeDescriptor<TSpec, TMode>;
 }
 
@@ -178,20 +182,10 @@ function makeNodeSpecFactory(kind: NodeKind): NodeSpecFactory {
     ): NodeDescriptor<TSpec, "effect"> =>
       buildDescriptor<TSpec, "effect">(kind, input, Effect<TSpec, TActions>(input)),
     fromDriver: <
-      TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
+      TSpec extends AnyModeSpec,
       TMode extends NodeSpecMode<TSpec> = NodeSpecMode<TSpec>,
     >(
-      input: NodeSpecMeta<TSpec> &
-        RequireDeclaredMode<TSpec> & {
-          readonly driver: Driver<
-            NodeBase<TSpec>,
-            NodeSpecArgs<TSpec>,
-            NodeSpecResolvedDeps<TSpec>,
-            NodeSpecResult<TSpec>,
-            NodeSpecActions<TSpec>,
-            TMode
-          >;
-        }
+      input: FromDriverInput<TSpec, TMode>
     ): NodeDescriptor<TSpec, TMode> => buildDescriptor<TSpec, TMode>(kind, input, input.driver),
   };
 }
@@ -231,10 +225,7 @@ export const resourceSpec: NodeSpecFactory = makeNodeSpecFactory("resource");
  */
 export const facadeSpec: NodeSpecFactory = makeNodeSpecFactory("facade");
 
-function buildDescriptor<
-  TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
-  TMode extends DriverMode,
->(
+function buildDescriptor<TSpec extends AnyModeSpec, TMode extends DriverMode>(
   kind: NodeKind,
   meta: NodeSpecMeta<TSpec>,
   driver: Driver<
@@ -282,9 +273,7 @@ const emptyDependencies: DependencyResolver<unknown, Record<string, never>> = de
   () => ({})
 );
 
-function dependencyResolver<
-  TSpec extends NodeSpec<{ readonly mode: DriverMode; readonly result?: unknown }>,
->(
+function dependencyResolver<TSpec extends AnyModeSpec>(
   resolver: NodeSpecMeta<TSpec>["dependencies"] | undefined
 ): NodeDescriptor<TSpec>["dependencies"] {
   if (resolver === undefined) {

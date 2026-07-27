@@ -6,7 +6,6 @@ import {
   DisposerFailed,
   DisposerTimedOut,
   Driver,
-  dependencies,
   Effect,
   Key,
   makeInMemoryGraphSystem,
@@ -25,32 +24,48 @@ type SingletonSpec = NodeSpec<{
 
 const neverSettles = (): Promise<void> => new Promise<void>(() => {});
 
+// Disposer-scenario fixture (pattern: makeGatedLiveStartNode): a singleton
+// effect service whose acquire (and optional release) hook is the only thing
+// each scenario varies. None of these nodes declare dependencies, and the
+// resolver is optional, so no no-op resolver is spelled per node.
+type DisposerNodeHooks = Pick<
+  Parameters<typeof serviceSpec.effect<SingletonSpec>>[0],
+  "acquire" | "release"
+>;
+
+function makeDisposerNode(tag: string, hooks: DisposerNodeHooks) {
+  class DisposerNode extends NodeBase<SingletonSpec> {
+    static readonly spec = serviceSpec.effect<SingletonSpec>({
+      tag,
+      key: () => Key.singleton(),
+      ...hooks,
+    });
+  }
+
+  return DisposerNode;
+}
+
 describe("bounded async disposers", () => {
   test("later disposers still run in reverse order after an earlier one times out", async () => {
     const runs: Array<string> = [];
 
-    class TimeoutOrderNode extends NodeBase<SingletonSpec> {
-      static readonly spec = serviceSpec.effect<SingletonSpec>({
-        tag: "services/disposer-timeout-order",
-        key: () => Key.singleton(),
-        dependencies: dependencies(() => ({})),
-        acquire: Driver.Acquire((ctx) =>
-          Effect.sync(() => {
-            ctx.disposers.add(() => {
-              runs.push("first");
-            });
-            ctx.disposers.add(() => {
-              runs.push("hanging");
-              return neverSettles();
-            });
-            ctx.disposers.add(() => {
-              runs.push("last");
-            });
-            return "ready";
-          })
-        ),
-      });
-    }
+    const TimeoutOrderNode = makeDisposerNode("services/disposer-timeout-order", {
+      acquire: Driver.Acquire((ctx) =>
+        Effect.sync(() => {
+          ctx.disposers.add(() => {
+            runs.push("first");
+          });
+          ctx.disposers.add(() => {
+            runs.push("hanging");
+            return neverSettles();
+          });
+          ctx.disposers.add(() => {
+            runs.push("last");
+          });
+          return "ready";
+        })
+      ),
+    });
     const graph = makeInMemoryGraphSystem({
       driverTimeouts: { release: 10 },
     });
@@ -73,19 +88,14 @@ describe("bounded async disposers", () => {
   });
 
   test("eviction completes and removes graph records with a never-settling disposer", async () => {
-    class HangingDisposerNode extends NodeBase<SingletonSpec> {
-      static readonly spec = serviceSpec.effect<SingletonSpec>({
-        tag: "services/evict-hanging-disposer",
-        key: () => Key.singleton(),
-        dependencies: dependencies(() => ({})),
-        acquire: Driver.Acquire((ctx) =>
-          Effect.sync(() => {
-            ctx.disposers.add(() => neverSettles());
-            return "ready";
-          })
-        ),
-      });
-    }
+    const HangingDisposerNode = makeDisposerNode("services/evict-hanging-disposer", {
+      acquire: Driver.Acquire((ctx) =>
+        Effect.sync(() => {
+          ctx.disposers.add(() => neverSettles());
+          return "ready";
+        })
+      ),
+    });
     const graph = makeInMemoryGraphSystem({
       driverTimeouts: { release: 10 },
     });
@@ -107,19 +117,14 @@ describe("bounded async disposers", () => {
   });
 
   test("runtime stop completes with a never-settling disposer and reports the timeout", async () => {
-    class StopHangingDisposerNode extends NodeBase<SingletonSpec> {
-      static readonly spec = serviceSpec.effect<SingletonSpec>({
-        tag: "services/stop-hanging-disposer",
-        key: () => Key.singleton(),
-        dependencies: dependencies(() => ({})),
-        acquire: Driver.Acquire((ctx) =>
-          Effect.sync(() => {
-            ctx.disposers.add(() => neverSettles());
-            return "ready";
-          })
-        ),
-      });
-    }
+    const StopHangingDisposerNode = makeDisposerNode("services/stop-hanging-disposer", {
+      acquire: Driver.Acquire((ctx) =>
+        Effect.sync(() => {
+          ctx.disposers.add(() => neverSettles());
+          return "ready";
+        })
+      ),
+    });
     const graph = makeInMemoryGraphSystem({
       driverTimeouts: { release: 10 },
     });
@@ -137,20 +142,15 @@ describe("bounded async disposers", () => {
   test("runtime stop completes when an interrupted acquire holds a never-settling disposer", async () => {
     const started = await Effect.runPromise(Deferred.make<void>());
 
-    class InterruptedAcquireNode extends NodeBase<SingletonSpec> {
-      static readonly spec = serviceSpec.effect<SingletonSpec>({
-        tag: "services/interrupted-acquire-disposer",
-        key: () => Key.singleton(),
-        dependencies: dependencies(() => ({})),
-        acquire: Driver.Acquire((ctx) =>
-          Effect.gen(function* () {
-            ctx.disposers.add(() => neverSettles());
-            yield* Deferred.succeed(started, undefined);
-            return yield* Effect.never;
-          })
-        ),
-      });
-    }
+    const InterruptedAcquireNode = makeDisposerNode("services/interrupted-acquire-disposer", {
+      acquire: Driver.Acquire((ctx) =>
+        Effect.gen(function* () {
+          ctx.disposers.add(() => neverSettles());
+          yield* Deferred.succeed(started, undefined);
+          return yield* Effect.never;
+        })
+      ),
+    });
     const graph = makeInMemoryGraphSystem({
       driverTimeouts: { release: 10 },
     });
@@ -166,20 +166,15 @@ describe("bounded async disposers", () => {
   });
 
   test("timed-out disposer surfaces DisposerFailed with a DisposerTimedOut cause, not ReleaseFailed", async () => {
-    class TaxonomyNode extends NodeBase<SingletonSpec> {
-      static readonly spec = serviceSpec.effect<SingletonSpec>({
-        tag: "services/disposer-timeout-taxonomy",
-        key: () => Key.singleton(),
-        dependencies: dependencies(() => ({})),
-        acquire: Driver.Acquire((ctx) =>
-          Effect.sync(() => {
-            ctx.disposers.add(() => neverSettles());
-            return "ready";
-          })
-        ),
-        release: Driver.Release(() => Effect.void),
-      });
-    }
+    const TaxonomyNode = makeDisposerNode("services/disposer-timeout-taxonomy", {
+      acquire: Driver.Acquire((ctx) =>
+        Effect.sync(() => {
+          ctx.disposers.add(() => neverSettles());
+          return "ready";
+        })
+      ),
+      release: Driver.Release(() => Effect.void),
+    });
     const graph = makeInMemoryGraphSystem({
       driverTimeouts: { release: 10 },
     });
@@ -211,27 +206,22 @@ describe("bounded async disposers", () => {
       runs += 1;
     };
 
-    class SharedDisposerNode extends NodeBase<SingletonSpec> {
-      static readonly spec = serviceSpec.effect<SingletonSpec>({
-        tag: "services/shared-disposer-once",
-        key: () => Key.singleton(),
-        dependencies: dependencies(() => ({})),
-        acquire: Driver.Acquire((ctx) =>
-          Effect.sync(() => {
-            ctx.disposers.add(sharedDisposer);
-            ctx.disposers.add(sharedDisposer);
-            return "ready";
-          })
-        ),
-        // Same function registered again through the release hook's own bag:
-        // the registry, not the author's memoize, guarantees a single run.
-        release: Driver.Release((ctx) =>
-          Effect.sync(() => {
-            ctx.disposers.add(sharedDisposer);
-          })
-        ),
-      });
-    }
+    const SharedDisposerNode = makeDisposerNode("services/shared-disposer-once", {
+      acquire: Driver.Acquire((ctx) =>
+        Effect.sync(() => {
+          ctx.disposers.add(sharedDisposer);
+          ctx.disposers.add(sharedDisposer);
+          return "ready";
+        })
+      ),
+      // Same function registered again through the release hook's own bag:
+      // the registry, not the author's memoize, guarantees a single run.
+      release: Driver.Release((ctx) =>
+        Effect.sync(() => {
+          ctx.disposers.add(sharedDisposer);
+        })
+      ),
+    });
     const graph = makeInMemoryGraphSystem({
       driverTimeouts: { release: 10 },
     });
@@ -251,31 +241,26 @@ describe("bounded async disposers", () => {
     const events: Array<string> = [];
     let bag: DisposerBag | undefined;
 
-    class LateRegistrationNode extends NodeBase<SingletonSpec> {
-      static readonly spec = serviceSpec.effect<SingletonSpec>({
-        tag: "services/late-teardown-disposer",
-        key: () => Key.singleton(),
-        dependencies: dependencies(() => ({})),
-        acquire: Driver.Acquire((ctx) =>
-          Effect.sync(() => {
-            bag = ctx.disposers;
-            ctx.disposers.add(async () => {
-              events.push("outer-start");
+    const LateRegistrationNode = makeDisposerNode("services/late-teardown-disposer", {
+      acquire: Driver.Acquire((ctx) =>
+        Effect.sync(() => {
+          bag = ctx.disposers;
+          ctx.disposers.add(async () => {
+            events.push("outer-start");
+            await Promise.resolve();
+            // Cleanup spawned during the drain: registered while teardown is
+            // already running its disposers.
+            bag?.add(async () => {
+              events.push("spawned-start");
               await Promise.resolve();
-              // Cleanup spawned during the drain: registered while teardown is
-              // already running its disposers.
-              bag?.add(async () => {
-                events.push("spawned-start");
-                await Promise.resolve();
-                events.push("spawned-done");
-              });
-              events.push("outer-done");
+              events.push("spawned-done");
             });
-            return "ready";
-          })
-        ),
-      });
-    }
+            events.push("outer-done");
+          });
+          return "ready";
+        })
+      ),
+    });
     const graph = makeInMemoryGraphSystem({
       driverTimeouts: { release: 50 },
     });
@@ -305,19 +290,14 @@ describe("bounded async disposers", () => {
       runs += 1;
     };
 
-    class StableDisposerNode extends NodeBase<SingletonSpec> {
-      static readonly spec = serviceSpec.effect<SingletonSpec>({
-        tag: "services/stable-disposer-per-incarnation",
-        key: () => Key.singleton(),
-        dependencies: dependencies(() => ({})),
-        acquire: Driver.Acquire((ctx) =>
-          Effect.sync(() => {
-            ctx.disposers.add(stableUnsubscribe);
-            return "ready";
-          })
-        ),
-      });
-    }
+    const StableDisposerNode = makeDisposerNode("services/stable-disposer-per-incarnation", {
+      acquire: Driver.Acquire((ctx) =>
+        Effect.sync(() => {
+          ctx.disposers.add(stableUnsubscribe);
+          return "ready";
+        })
+      ),
+    });
     const graph = makeInMemoryGraphSystem({
       driverTimeouts: { release: 10 },
     });
@@ -352,25 +332,20 @@ describe("bounded async disposers", () => {
       runs += 1;
     };
 
-    class DoubleLifecycleNode extends NodeBase<SingletonSpec> {
-      static readonly spec = serviceSpec.effect<SingletonSpec>({
-        tag: "services/shared-disposer-double-lifecycle",
-        key: () => Key.singleton(),
-        dependencies: dependencies(() => ({})),
-        acquire: Driver.Acquire((ctx) =>
-          Effect.sync(() => {
-            ctx.disposers.add(sharedDisposer);
-            ctx.disposers.add(sharedDisposer);
-            return "ready";
-          })
-        ),
-        release: Driver.Release((ctx) =>
-          Effect.sync(() => {
-            ctx.disposers.add(sharedDisposer);
-          })
-        ),
-      });
-    }
+    const DoubleLifecycleNode = makeDisposerNode("services/shared-disposer-double-lifecycle", {
+      acquire: Driver.Acquire((ctx) =>
+        Effect.sync(() => {
+          ctx.disposers.add(sharedDisposer);
+          ctx.disposers.add(sharedDisposer);
+          return "ready";
+        })
+      ),
+      release: Driver.Release((ctx) =>
+        Effect.sync(() => {
+          ctx.disposers.add(sharedDisposer);
+        })
+      ),
+    });
     const graph = makeInMemoryGraphSystem({
       driverTimeouts: { release: 10 },
     });
@@ -399,19 +374,14 @@ describe("bounded async disposers", () => {
     let bag: DisposerBag | undefined;
     let lateRan = false;
 
-    class PostTeardownNode extends NodeBase<SingletonSpec> {
-      static readonly spec = serviceSpec.effect<SingletonSpec>({
-        tag: "services/post-teardown-disposer",
-        key: () => Key.singleton(),
-        dependencies: dependencies(() => ({})),
-        acquire: Driver.Acquire((ctx) =>
-          Effect.sync(() => {
-            bag = ctx.disposers;
-            return "ready";
-          })
-        ),
-      });
-    }
+    const PostTeardownNode = makeDisposerNode("services/post-teardown-disposer", {
+      acquire: Driver.Acquire((ctx) =>
+        Effect.sync(() => {
+          bag = ctx.disposers;
+          return "ready";
+        })
+      ),
+    });
     const graph = makeInMemoryGraphSystem({
       driverTimeouts: { release: 10 },
     });

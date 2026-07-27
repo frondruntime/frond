@@ -1,5 +1,6 @@
 import type { Driver, DriverMode } from "../driver/types";
 import type { NodeBase } from "./runtime";
+import { makeSpecOverrideClass } from "./specOverride";
 import type {
   NodeDescriptor,
   NodeKind,
@@ -16,8 +17,6 @@ import type {
   ResolvedDeps,
 } from "./types";
 import { FROND_NODE_SPEC_BRAND, FrondNodeSpecError } from "./types";
-
-type AbstractConstructor = abstract new (...args: ReadonlyArray<never>) => object;
 
 /**
  * The spec carrier of a `specWithDriver` override: every shape member is
@@ -127,18 +126,10 @@ export function specWithDriver<
     driver,
   };
 
-  Object.defineProperty(overrideDescriptor, FROND_NODE_SPEC_BRAND, {
-    configurable: false,
-    enumerable: false,
-    value: true,
-    writable: false,
-  });
-
-  abstract class SpecWithDriverOverride extends (original as unknown as AbstractConstructor) {
-    static readonly spec = overrideDescriptor;
-  }
-
-  return SpecWithDriverOverride as unknown as SpecWithDriverClass<TSpec, TMode>;
+  return makeSpecOverrideClass(original, overrideDescriptor) as unknown as SpecWithDriverClass<
+    TSpec,
+    TMode
+  >;
 }
 
 type RuntimeNodeDescriptor = {

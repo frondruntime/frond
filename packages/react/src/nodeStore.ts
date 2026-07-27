@@ -7,7 +7,7 @@ import { projectReactNodeRead } from "./nodeReadProjection";
 import { makeRevivableStoreSubscriptions } from "./storeSubscriptions";
 import type { ReactNodeRuntime, ReactNodeSpec, ReactNodeState } from "./types";
 
-interface ReactNodeStore<
+export interface ReactNodeStore<
   TArgs extends Frond.Key.KeyInput,
   TDeps extends object,
   TResult,

@@ -1,18 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createRuntimeCoordinator, FrondRuntimeBootSuperseded, type RuntimeLease } from "../src";
-
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-};
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
+import { createDeferred as deferred } from "../src/testing";
 
 type TrackedLease = {
   lease: RuntimeLease<string>;
