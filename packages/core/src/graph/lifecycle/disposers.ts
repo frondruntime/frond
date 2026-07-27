@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import type { RuntimeCancellationReason } from "../../cancellation";
+import { timedOutCancellation } from "../../cancellation";
 import type { Disposer } from "../../driver";
 import type { GraphNodeCell } from "../cell/cellModel";
 import { DisposerFailed, DisposerTimedOut, type DriverOperationTimeoutMs } from "../types";
@@ -203,16 +203,9 @@ function disposerTimedOut(cell: GraphNodeCell, timeout: DriverOperationTimeoutMs
       nodeId: cell.nodeId,
       tag: cell.tag,
       timeout,
-      cancellation: disposerTimeoutCancellation(timeout),
+      cancellation: timedOutCancellation(timeout),
     })
   );
-}
-
-function disposerTimeoutCancellation(timeout: number): RuntimeCancellationReason {
-  return {
-    _tag: "TimedOut",
-    detail: `${timeout}ms`,
-  };
 }
 
 function isThenable(value: unknown): value is PromiseLike<void> {
