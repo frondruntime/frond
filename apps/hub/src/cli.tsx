@@ -9,7 +9,7 @@ import { render } from "ink";
 import { isHubInternal } from "./hubInternal.ts";
 import { HubServerNode } from "./nodes/hubServer.ts";
 import { HubApp } from "./ui/App.tsx";
-import { HUB_VERSION } from "./version.ts";
+import { HUB_REPORTED_VERSION } from "./version.ts";
 
 const runHub = Effect.fnUntraced(function* (config: {
   readonly host: string;
@@ -98,7 +98,7 @@ const hub = Command.make(
   (config) => Effect.scoped(runHub(config))
 ).pipe(Command.withDescription("Run the Frond devtools hub and wait for runtimes to attach."));
 
-Command.run(hub, { version: HUB_VERSION }).pipe(
+Command.run(hub, { version: HUB_REPORTED_VERSION }).pipe(
   Effect.provide(BunServices.layer),
   BunRuntime.runMain
 );

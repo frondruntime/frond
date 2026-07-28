@@ -10,7 +10,7 @@ bunx @frondruntime/hub
 
 **Bun, not Node.** This package ships as TypeScript source rather than a bundle: its bin is `src/cli.tsx` behind a `#!/usr/bin/env bun` shebang, and it renders with Ink. `bunx` runs it. `npx` does not — Node reaches the `.tsx` and dies on a parse error that says nothing about why, which is the worst way to learn about a runtime requirement. Whatever starts the hub has to start it with Bun.
 
-It binds `127.0.0.1:17391` and takes over the terminal with a dashboard of attached runtimes. `--host` and `--port` override the defaults, but the port is worth leaving alone: apps hardcode it, and a hub somewhere else looks from the app's side exactly like a hub that is not running. `--version` reports the hub binary's version, which is not the protocol version the two halves have to agree on — see [Version mismatches](#version-mismatches).
+It binds `127.0.0.1:17391` and takes over the terminal with a dashboard of attached runtimes. `--host` and `--port` override the defaults, but the port is worth leaving alone: apps hardcode it, and a hub somewhere else looks from the app's side exactly like a hub that is not running. `--version` reports the protocol version this build speaks, not the release it came from — see [Version mismatches](#version-mismatches). For the release, ask the package manager: `npm ls @frondruntime/hub`.
 
 A port collision is fatal rather than silently resolved, for the same reason.
 

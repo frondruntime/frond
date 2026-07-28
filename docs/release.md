@@ -26,7 +26,9 @@ The setup intentionally does not publish to npm. After release-please opens a re
 
 Do not run `bun run publish:npm` or `bun run publish:npm:dry-run` from GitHub Actions. The publish script is local-only because the final publish step is interactive and may require npm 2FA.
 
-All four packages use linked versions. Release-please tracks each of them in `.release-please-manifest.json`, updates workspace peer dependencies through the `node-workspace` plugin, and emits component tags instead of one shared tag. The hub additionally syncs `apps/hub/src/version.ts` through an `extra-files` entry, so `frond-hub --version` cannot drift from `package.json`.
+All four packages use linked versions. Release-please tracks each of them in `.release-please-manifest.json`, updates workspace peer dependencies through the `node-workspace` plugin, and emits component tags instead of one shared tag.
+
+Release-please owns no version string outside `package.json` and the manifest. The hub used to keep a second copy in `apps/hub/src/version.ts`, synced by an `extra-files` marker; it no longer has one. `frond-hub --version` and the MCP handshake now report `HUB_PROTOCOL_VERSION`, which is a wire contract rather than a release, and which moves when the contract does — not when a release does. Nothing to sync means nothing that can silently fall out of sync, which is how that marker failed: it rewrites a semver on the line it is found on, so a marker sitting one line off matches, replaces nothing, and reports success.
 
 Use Conventional Commit subjects for release-driving commits:
 
@@ -69,6 +71,8 @@ The rehearsal must build, run `npm publish --dry-run` where possible, pack all f
 3. Confirm `bun.lock` changed if package versions changed.
 4. Run the full local verification again.
 5. Merge the release PR to create GitHub Releases and tags.
+
+`HUB_PROTOCOL_VERSION` in `packages/devtools/src/protocol.ts` is a second, independent axis and release-please does not touch it. Bump it in the same commit as any change to the attach wire — a field added to `AttachmentInfo`, a new member of `HubCommand`, a changed meaning for an existing one — because the two sides compare it for exact equality and an unbumped mismatch presents as a runtime that quietly stopped emitting. Leave it alone for everything else, including releases that move every package: bumping it refuses every app that has not upgraded, for a contract that did not change.
 
 ## Manual Publish
 

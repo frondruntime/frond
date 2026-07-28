@@ -23,13 +23,7 @@
     "apps/hub": {
       "package-name": "@frondruntime/hub",
       "component": "hub",
-      "release-type": "node",
-      "extra-files": [
-        {
-          "type": "generic",
-          "path": "src/version.ts"
-        }
-      ]
+      "release-type": "node"
     }
   },
   "plugins": [

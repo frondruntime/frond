@@ -25,7 +25,7 @@ import { Clock, Effect, Exit, Layer, Queue, Scope, Stream } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import { mcpLayer } from "../mcp.ts";
-import { HUB_VERSION } from "../version.ts";
+import { HUB_REPORTED_VERSION } from "../version.ts";
 import { AttachmentsNode } from "./attachments.ts";
 import { type HubConfigArgs, HubConfigNode } from "./hubConfig.ts";
 
@@ -216,7 +216,7 @@ export class HubServerNode extends NodeBase<HubServerSpec> {
             mcpLayer({
               attachments,
               selfInstanceId: ctx.args.selfInstanceId,
-              version: HUB_VERSION,
+              version: HUB_REPORTED_VERSION,
             })
           ),
           // Ink owns the terminal; anything written straight to stdout tears

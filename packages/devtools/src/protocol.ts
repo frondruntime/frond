@@ -21,8 +21,17 @@ import { Rpc, RpcGroup } from "effect/unstable/rpc";
  * it has never heard of and drop its socket — presenting as "the runtime stopped
  * emitting", which is the most expensive way this can fail. Refusing the
  * attachment outright says the same thing immediately and in words.
+ *
+ * The number counts published generations of *this contract*, and moves on its
+ * own schedule — it is not derived from, and does not track, the npm version of
+ * any package. Tying the two was the earlier arrangement and it was wrong in
+ * both directions: a release that touched nothing on the wire still moved the
+ * number and refused every app that had not upgraded, while a genuine schema
+ * change inside one release moved nothing and let two builds that disagreed
+ * attach to each other. Starting at 1 with the first published hub, so what the
+ * number counts is generations anyone could have installed.
  */
-export const HUB_PROTOCOL_VERSION = 3;
+export const HUB_PROTOCOL_VERSION = 1;
 
 /**
  * Unregistered, and chosen for the band rather than the number.
