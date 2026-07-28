@@ -54,7 +54,8 @@
     "ink": "7.1.1",
     "mobx": "6.15.3",
     "mobx-react-lite": "4.1.1",
-    "react": "19.2.5"
+    "react": "19.2.5",
+    "react-dom": "19.2.5"
   },
   "devDependencies": {
     "@types/bun": "1.3.9",
