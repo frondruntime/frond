@@ -55,3 +55,13 @@ jobs:
       - name: Pack react dry run
         working-directory: packages/react
         run: bun pm pack --dry-run
+
+      - name: Pack devtools dry run
+        working-directory: packages/devtools
+        run: bun pm pack --dry-run
+
+      # The hub is the one package that ships source rather than a bundle, so
+      # its pack is the only check that its bin target is inside the tarball.
+      - name: Pack hub dry run
+        working-directory: apps/hub
+        run: bun pm pack --dry-run

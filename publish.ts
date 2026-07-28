@@ -1,27 +1,54 @@
-import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
 
+const internalScope = "@frondruntime/";
+
+/** Dependency fields whose ranges a published consumer actually has to resolve. */
+const publishedDependencyFields = ["dependencies", "peerDependencies"] as const;
+
+type PublishedDependencyField = (typeof publishedDependencyFields)[number];
+
+type PublishKey = "core" | "react" | "devtools" | "hub";
+
 interface PackageJson {
   readonly name: string;
   readonly version: string;
+  readonly bin?: Record<string, string>;
+  readonly dependencies?: Record<string, string>;
   readonly devDependencies?: Record<string, string>;
   readonly peerDependencies?: Record<string, string>;
 }
 
-interface PublishPackage {
-  readonly key: "core" | "react";
+/**
+ * A published command exercised against the installed tarball. `args` must
+ * terminate on its own: the pack smoke is non-interactive.
+ */
+interface CliSmoke {
+  readonly bin: string;
+  readonly args: readonly string[];
+}
+
+interface PublishPackageInput {
+  readonly key: PublishKey;
+  readonly directory: string;
+  /**
+   * Paths that must exist inside the installed package. Directories are
+   * allowed. Source-only packages list no `dist` entries at all.
+   */
+  readonly expectedFiles: readonly string[];
+  readonly cliSmoke?: CliSmoke;
+}
+
+interface PublishPackage extends PublishPackageInput {
   readonly packageDir: string;
   readonly packageJson: PackageJson;
-  readonly expectedFiles: readonly string[];
 }
 
 interface PublishContext {
   readonly rootPackageJson: PackageJson;
-  readonly core: PublishPackage;
-  readonly react: PublishPackage;
   readonly publishPackages: readonly PublishPackage[];
 }
 
@@ -36,6 +63,65 @@ class PublishFailure {
 }
 
 const repoDir = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Publish order, not just a package list. Every package must appear after the
+ * internal packages it depends on, so a consumer installing while a release is
+ * mid-flight never resolves a dependency range that is not on the registry yet.
+ * `assertPublishOrder` enforces that this list actually holds that property.
+ */
+const publishPackageOrder: readonly PublishPackageInput[] = [
+  {
+    key: "core",
+    directory: "packages/core",
+    expectedFiles: [
+      "package.json",
+      "README.md",
+      "src",
+      "dist/index.js",
+      "dist/index.d.ts",
+      "dist/testing/index.js",
+      "dist/testing/index.d.ts",
+    ],
+  },
+  {
+    key: "react",
+    directory: "packages/react",
+    expectedFiles: [
+      "package.json",
+      "README.md",
+      "src",
+      "dist/index.js",
+      "dist/index.d.ts",
+      "dist/testing/index.js",
+      "dist/testing/index.d.ts",
+    ],
+  },
+  {
+    key: "devtools",
+    directory: "packages/devtools",
+    expectedFiles: [
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "src",
+      "dist/index.js",
+      "dist/index.d.ts",
+      "dist/node.js",
+      "dist/node.d.ts",
+    ],
+  },
+  {
+    // Ships as source: the entry point is `src/cli.tsx` behind a `bun` shebang,
+    // there is no hub target in build.ts, and there is deliberately no `dist`
+    // to assert on. `bunx @frondruntime/hub` works; `npx` does not.
+    key: "hub",
+    directory: "apps/hub",
+    expectedFiles: ["package.json", "README.md", "LICENSE", "src", "src/cli.tsx"],
+    cliSmoke: { bin: "frond-hub", args: ["--version"] },
+  },
+];
+
 const args = new Set(Bun.argv.slice(2));
 const dryRun = args.has("--dry-run");
 const smokeOnly = args.has("--smoke-only");
@@ -49,8 +135,10 @@ Runs the release publish pipeline:
   2. build and declaration rollup
   3. npm publish dry-run
   4. npm pack
-  5. clean Bun consumer smoke against packed tarballs
+  5. clean Bun consumer smoke against packed tarballs, including published CLIs
   6. npm publish with interactive 2FA prompt unless --dry-run is set
+
+Packages publish in dependency order: core, react, devtools, hub.
 
 Flags:
   --dry-run    Run steps 1-5 and stop before npm publish.
@@ -132,6 +220,37 @@ function removePath(path: string): Effect.Effect<void, PublishFailure> {
   });
 }
 
+/**
+ * Existence check that accepts directories. `Bun.file(...).exists()` reports
+ * `false` for a directory, and packed file lists name directories.
+ */
+function pathExists(step: string, path: string): Effect.Effect<boolean, PublishFailure> {
+  return Effect.tryPromise({
+    try: async () => {
+      try {
+        await stat(path);
+        return true;
+      } catch (cause) {
+        if ((cause as NodeJS.ErrnoException).code === "ENOENT") {
+          return false;
+        }
+
+        throw cause;
+      }
+    },
+    catch: (cause) => fail(step, `Could not inspect ${path}.`, cause),
+  });
+}
+
+function requirePackage(context: PublishContext, key: PublishKey): PublishPackage {
+  const found = context.publishPackages.find((input) => input.key === key);
+  if (found === undefined) {
+    throw new Error(`No publish package is registered under the key ${key}.`);
+  }
+
+  return found;
+}
+
 function requireDependency(
   packageJson: PackageJson,
   field: "devDependencies" | "peerDependencies",
@@ -157,31 +276,104 @@ function requireTarball(
   return tarball;
 }
 
+interface InternalEdge {
+  readonly from: PublishPackage;
+  readonly field: PublishedDependencyField;
+  readonly name: string;
+  readonly range: string;
+}
+
+/**
+ * Every `@frondruntime/*` range a published package asks a consumer to resolve,
+ * across both `dependencies` and `peerDependencies`. `devDependencies` are
+ * excluded: they hold `workspace:*` and never reach a consumer.
+ */
+function internalEdges(packages: readonly PublishPackage[]): readonly InternalEdge[] {
+  return packages.flatMap((from) =>
+    publishedDependencyFields.flatMap((field) =>
+      Object.entries(from.packageJson[field] ?? {})
+        .filter(([name]) => name.startsWith(internalScope))
+        .map(([name, range]) => ({ from, field, name, range }))
+    )
+  );
+}
+
 function assertPublishMetadata(
-  core: PublishPackage,
-  react: PublishPackage
+  packages: readonly PublishPackage[]
 ): Effect.Effect<void, PublishFailure> {
   return Effect.try({
     try: () => {
-      const reactCorePeer = requireDependency(
-        react.packageJson,
-        "peerDependencies",
-        "@frondruntime/core"
-      );
-      if (reactCorePeer !== core.packageJson.version) {
-        throw new Error(
-          `${react.packageJson.name} peer dependency on @frondruntime/core is ${reactCorePeer}, expected ${core.packageJson.version}.`
-        );
+      // Collected rather than thrown one at a time: a version bump usually
+      // breaks several edges at once, and reporting them together is the
+      // difference between one pass over the manifests and four.
+      const problems: string[] = [];
+
+      for (const input of packages) {
+        if (input.packageJson.version.length === 0) {
+          problems.push(`${input.packageJson.name} has an empty version.`);
+        }
       }
 
-      for (const input of [core, react]) {
-        if (input.packageJson.version.length === 0) {
-          throw new Error(`${input.packageJson.name} has an empty version.`);
+      const byName = new Map(packages.map((input) => [input.packageJson.name, input]));
+
+      for (const edge of internalEdges(packages)) {
+        const label = `${edge.from.packageJson.name} ${edge.field} on ${edge.name}`;
+        const target = byName.get(edge.name);
+        if (target === undefined) {
+          problems.push(`${label} points at a package this pipeline does not publish.`);
+          continue;
         }
+
+        // Called out separately because it is not version skew and reads like
+        // a working local setup: `npm pack` copies the workspace protocol into
+        // the tarball verbatim, and every consumer install then fails to
+        // resolve it. Bun's own workspaces are what make it look fine here.
+        if (edge.range.startsWith("workspace:")) {
+          problems.push(
+            `${label} is ${edge.range}. npm pack does not rewrite the workspace protocol, so a consumer cannot resolve it. Pin it to ${target.packageJson.version}.`
+          );
+          continue;
+        }
+
+        if (edge.range !== target.packageJson.version) {
+          problems.push(`${label} is ${edge.range}, expected ${target.packageJson.version}.`);
+        }
+      }
+
+      if (problems.length > 0) {
+        throw new Error(problems.map((problem) => `- ${problem}`).join("\n"));
       }
     },
     catch: (cause) =>
       fail("validate package metadata", "Package metadata is not publishable.", cause),
+  });
+}
+
+/**
+ * A package must publish after everything it depends on. Otherwise a consumer
+ * installing mid-run resolves a range whose target is not on the registry yet.
+ */
+function assertPublishOrder(
+  packages: readonly PublishPackage[]
+): Effect.Effect<void, PublishFailure> {
+  return Effect.try({
+    try: () => {
+      const position = new Map(
+        packages.map((input, index) => [input.packageJson.name, index] as const)
+      );
+
+      for (const edge of internalEdges(packages)) {
+        const fromIndex = position.get(edge.from.packageJson.name) ?? -1;
+        const targetIndex = position.get(edge.name) ?? -1;
+        if (targetIndex >= fromIndex) {
+          throw new Error(
+            `${edge.from.packageJson.name} depends on ${edge.name}, so ${edge.name} must publish first.`
+          );
+        }
+      }
+    },
+    catch: (cause) =>
+      fail("validate publish order", "Publish order is not dependency-safe.", cause),
   });
 }
 
@@ -221,10 +413,7 @@ function assertPackedFiles(
     ),
     ({ input, path, expectedFile }) =>
       Effect.gen(function* () {
-        const exists = yield* Effect.tryPromise({
-          try: () => Bun.file(path).exists(),
-          catch: (cause) => fail("check packed files", `Could not inspect ${path}.`, cause),
-        });
+        const exists = yield* pathExists("check packed files", path);
 
         if (!exists) {
           return yield* Effect.fail(
@@ -266,6 +455,51 @@ function assertSingleCopies(
               `${input.packageJson.name} has a nested @frondruntime copy at ${nested}. ` +
                 "The smoke must resolve a single copy of each workspace package, from the packed " +
                 "tarball. Check the smoke package.json overrides."
+            )
+          );
+        }
+      }),
+    { discard: true }
+  );
+}
+
+/**
+ * Every `bin` a package declares must be linked by the consumer's install, and
+ * the link must point at a file that survived packing.
+ */
+function assertPackedBinaries(
+  smokeDir: string,
+  packages: readonly PublishPackage[]
+): Effect.Effect<void, PublishFailure> {
+  return Effect.forEach(
+    packages.flatMap((input) =>
+      Object.entries(input.packageJson.bin ?? {}).map(([binName, target]) => ({
+        input,
+        binName,
+        target,
+      }))
+    ),
+    ({ input, binName, target }) =>
+      Effect.gen(function* () {
+        const linkPath = join(smokeDir, "node_modules/.bin", binName);
+        const targetPath = join(smokeDir, "node_modules", input.packageJson.name, target);
+
+        const linked = yield* pathExists("check packed binaries", linkPath);
+        if (!linked) {
+          return yield* Effect.fail(
+            fail(
+              "check packed binaries",
+              `${input.packageJson.name} bin ${binName} was not linked into node_modules/.bin.`
+            )
+          );
+        }
+
+        const resolved = yield* pathExists("check packed binaries", targetPath);
+        if (!resolved) {
+          return yield* Effect.fail(
+            fail(
+              "check packed binaries",
+              `${input.packageJson.name} bin ${binName} points at ${target}, which is not in the tarball.`
             )
           );
         }
@@ -368,37 +602,26 @@ function packageVersionExists(input: PublishPackage): Effect.Effect<boolean, Pub
 function loadPublishContext(): Effect.Effect<PublishContext, PublishFailure> {
   return Effect.gen(function* () {
     const rootPackageJson = yield* readPackageJson(join(repoDir, "package.json"));
-    const core: PublishPackage = {
-      key: "core",
-      packageDir: join(repoDir, "packages/core"),
-      packageJson: yield* readPackageJson(join(repoDir, "packages/core/package.json")),
-      expectedFiles: [
-        "dist/index.js",
-        "dist/index.d.ts",
-        "dist/testing/index.js",
-        "dist/testing/index.d.ts",
-      ],
-    };
-    const react: PublishPackage = {
-      key: "react",
-      packageDir: join(repoDir, "packages/react"),
-      packageJson: yield* readPackageJson(join(repoDir, "packages/react/package.json")),
-      expectedFiles: [
-        "dist/index.js",
-        "dist/index.d.ts",
-        "dist/testing/index.js",
-        "dist/testing/index.d.ts",
-      ],
-    };
+    const publishPackages = yield* Effect.forEach(publishPackageOrder, (input) =>
+      Effect.map(
+        readPackageJson(join(repoDir, input.directory, "package.json")),
+        (packageJson): PublishPackage => ({
+          ...input,
+          packageDir: join(repoDir, input.directory),
+          packageJson,
+        })
+      )
+    );
 
-    yield* assertPublishMetadata(core, react);
+    yield* assertPublishMetadata(publishPackages);
+    yield* assertPublishOrder(publishPackages);
+    yield* log(
+      `Publishing in order: ${publishPackages
+        .map((input) => `${input.packageJson.name}@${input.packageJson.version}`)
+        .join(", ")}`
+    );
 
-    return {
-      rootPackageJson,
-      core,
-      react,
-      publishPackages: [core, react],
-    };
+    return { rootPackageJson, publishPackages };
   });
 }
 
@@ -409,35 +632,29 @@ function smokePackageJson(
 ): Effect.Effect<unknown, PublishFailure> {
   return Effect.try({
     try: () => {
-      const corePath = fileDependency(smokeDir, requireTarball(tarballs, context.core));
-      const reactPath = fileDependency(smokeDir, requireTarball(tarballs, context.react));
+      const tarballDependencies = Object.fromEntries(
+        context.publishPackages.map((input) => [
+          input.packageJson.name,
+          fileDependency(smokeDir, requireTarball(tarballs, input)),
+        ])
+      );
 
       return {
         name: "frond-publish-smoke",
         private: true,
         type: "module",
-        // The smoke must resolve BOTH workspace packages to the tarballs under
-        // test and nothing else. Without this, react's exact `@frondruntime/core`
-        // peer range is satisfiable from the registry, so the installer is free
-        // to nest a published copy under react — react's declarations then get
-        // checked against a *released* core while the consumer sources use the
-        // packed one. That yields "two different types with this name exist"
-        // errors that indict the artifacts for a resolution accident, and worse,
-        // it can silently pass by testing a version we did not just build.
-        // Overrides pin every transitive request to the tarball.
-        overrides: {
-          "@frondruntime/core": corePath,
-          "@frondruntime/react": reactPath,
-        },
         scripts: {
           typecheck: "tsc -p tsconfig.json --noEmit",
           smoke: "node ./src/runtime-smoke.mjs",
         },
         dependencies: {
-          "@frondruntime/core": corePath,
-          "@frondruntime/react": reactPath,
+          ...tarballDependencies,
           effect: requireDependency(context.rootPackageJson, "devDependencies", "effect"),
-          mobx: requireDependency(context.core.packageJson, "devDependencies", "mobx"),
+          mobx: requireDependency(
+            requirePackage(context, "core").packageJson,
+            "devDependencies",
+            "mobx"
+          ),
           "mobx-react-lite": requireDependency(
             context.rootPackageJson,
             "devDependencies",
@@ -459,6 +676,19 @@ function smokePackageJson(
           ),
           typescript: requireDependency(context.rootPackageJson, "devDependencies", "typescript"),
         },
+        // Two reasons, and either one alone would be enough. The internal
+        // packages depend on each other by exact version, and a release
+        // candidate's versions are by definition not on the registry yet, so a
+        // nested range would 404. And where a range *is* satisfiable from the
+        // registry — react's exact `@frondruntime/core` peer, say — the
+        // installer is free to nest a published copy under the dependent, so
+        // react's declarations get checked against a *released* core while the
+        // consumer sources use the packed one. That yields "two different types
+        // with this name exist" errors that indict the artifacts for a
+        // resolution accident, and worse, it can silently pass by testing a
+        // version we did not just build. Overrides pin every internal
+        // resolution — direct and transitive — to the tarball under test.
+        overrides: tarballDependencies,
       };
     },
     catch: (cause) => fail("prepare smoke package", "Could not prepare smoke package.json.", cause),
@@ -500,6 +730,8 @@ import {
   mockSpec,
   readySpec,
 } from "@frondruntime/core/testing";
+import { attachDevtools, HUB_DEFAULT_ATTACH_URL } from "@frondruntime/devtools";
+import { type HubLock, readHubLock } from "@frondruntime/devtools/node";
 import { FrondProvider } from "@frondruntime/react";
 import { TestFrondProvider } from "@frondruntime/react/testing";
 
@@ -641,6 +873,18 @@ harness.node(RewiredProfile, { id: "2" });
 const SeveredProfile = mockSpec(ProfileNode, { dependencies: () => ({}) });
 harness.node(SeveredProfile, { id: "3" });
 
+// The devtools entry point, and the node-only lock reader behind its own
+// export condition: both have to resolve from the packed tarball, and the
+// attach call has to typecheck against the packed core's Runtime.
+const detachDevtools: () => void = attachDevtools({
+  runtime,
+  name: "publish-smoke",
+  url: HUB_DEFAULT_ATTACH_URL,
+});
+const hubLock: HubLock | undefined = readHubLock();
+void detachDevtools;
+void hubLock;
+
 void handle;
 void FrondProvider({ runtime, children: null });
 void TestFrondProvider({ runtime, children: null });
@@ -653,6 +897,8 @@ void TestFrondProvider({ harness, children: null });
 const coreTesting = await import("@frondruntime/core/testing");
 const react = await import("@frondruntime/react");
 const reactTesting = await import("@frondruntime/react/testing");
+const devtools = await import("@frondruntime/devtools");
+const devtoolsNode = await import("@frondruntime/devtools/node");
 
 for (const name of [
   "createRuntime",
@@ -691,6 +937,14 @@ if (typeof react.FrondProvider !== "function") {
 
 if (typeof reactTesting.TestFrondProvider !== "function") {
   throw new Error("Missing @frondruntime/react/testing TestFrondProvider export");
+}
+
+if (typeof devtools.attachDevtools !== "function") {
+  throw new Error("Missing @frondruntime/devtools attachDevtools export");
+}
+
+if (typeof devtoolsNode.readHubLock !== "function") {
+  throw new Error("Missing @frondruntime/devtools/node readHubLock export");
 }
 `
         ),
@@ -759,6 +1013,31 @@ function packPackage(
   });
 }
 
+/**
+ * Launches each published CLI from the consumer's `node_modules/.bin`, through
+ * the shebang rather than an interpreter this script picks, because the shebang
+ * is what an installing user actually gets. Terminating invocations only: the
+ * hub's default command is a long-lived Ink session, so `--version` stands in
+ * for "the bin resolves and the program starts".
+ */
+function smokeCommandLines(
+  smokeDir: string,
+  packages: readonly PublishPackage[]
+): Effect.Effect<void, PublishFailure> {
+  return Effect.forEach(
+    packages.flatMap((input) =>
+      input.cliSmoke === undefined ? [] : [{ input, cli: input.cliSmoke }]
+    ),
+    ({ input, cli }) =>
+      command(
+        `${input.packageJson.name} cli smoke`,
+        [join(smokeDir, "node_modules/.bin", cli.bin), ...cli.args],
+        { cwd: smokeDir }
+      ),
+    { concurrency: 1, discard: true }
+  );
+}
+
 function packAndSmoke(context: PublishContext): Effect.Effect<void, PublishFailure> {
   return Effect.gen(function* () {
     yield* section("Pack and smoke test tarballs");
@@ -786,8 +1065,10 @@ function packAndSmoke(context: PublishContext): Effect.Effect<void, PublishFailu
       yield* command("smoke install", ["bun", "install"], { cwd: smokeDir });
       yield* assertPackedFiles(smokeDir, context.publishPackages);
       yield* assertSingleCopies(smokeDir, context.publishPackages);
+      yield* assertPackedBinaries(smokeDir, context.publishPackages);
       yield* command("smoke typecheck", ["bun", "run", "typecheck"], { cwd: smokeDir });
       yield* command("smoke runtime import", ["bun", "run", "smoke"], { cwd: smokeDir });
+      yield* smokeCommandLines(smokeDir, context.publishPackages);
       yield* log("\nSmoke project passed.");
     }).pipe(Effect.ensuring(cleanup));
   });
