@@ -10,7 +10,7 @@ import {
 } from "@microsoft/api-extractor";
 import { Effect } from "effect";
 
-type PackageKey = "core" | "react" | "rootstock";
+type PackageKey = "core" | "react" | "rootstock" | "devtools";
 
 interface ApiEntry {
   readonly label: string;
@@ -76,12 +76,26 @@ const packages = {
     entrypoints: ["./src/index.ts", "./src/testing/index.ts"],
     apiEntries: standardApiEntries,
   },
+  devtools: {
+    key: "devtools",
+    packageName: "@frondruntime/devtools",
+    packageDir: resolve(repoDir, "packages/devtools"),
+    // `node` rather than `testing`: the second entry point here exists to keep
+    // `node:fs` out of the module graph a browser bundler walks, so it has to
+    // stay a separate chunk all the way through the build.
+    entrypoints: ["./src/index.ts", "./src/node.ts"],
+    apiEntries: [
+      { label: "main types", input: "dist-types/index.d.ts", output: "dist/index.d.ts" },
+      { label: "node types", input: "dist-types/node.d.ts", output: "dist/node.d.ts" },
+    ],
+  },
 } satisfies Record<PackageKey, PackageBuildInput>;
 
 const packageOrder: readonly PackageBuildInput[] = [
   packages.core,
   packages.react,
   packages.rootstock,
+  packages.devtools,
 ];
 
 function log(input: PackageBuildInput, message: string): Effect.Effect<void> {
@@ -305,7 +319,7 @@ function parsePackageArgs(args: readonly string[]): readonly PackageBuildInput[]
   const invalid = args.filter((arg) => !(arg in packages));
   if (invalid.length > 0) {
     console.error(`Unknown package input: ${invalid.join(", ")}`);
-    console.error("Usage: bun build.ts [core] [react] [rootstock]");
+    console.error("Usage: bun build.ts [core] [react] [rootstock] [devtools]");
     process.exit(1);
   }
 

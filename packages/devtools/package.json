@@ -1,0 +1,73 @@
+{
+  "name": "@frondruntime/devtools",
+  "version": "0.1.0",
+  "description": "Attach a Frond runtime to the local devtools hub.",
+  "license": "MIT",
+  "private": false,
+  "type": "module",
+  "sideEffects": false,
+  "homepage": "https://frondruntime.dev",
+  "bugs": {
+    "url": "https://github.com/frondruntime/frond/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/frondruntime/frond.git",
+    "directory": "packages/devtools"
+  },
+  "keywords": [
+    "devtools",
+    "effect",
+    "frond",
+    "runtime",
+    "typescript"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./node": {
+      "source": "./src/node.ts",
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js",
+      "default": "./dist/node.js"
+    }
+  },
+  "files": [
+    "CHANGELOG.md",
+    "dist",
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0",
+    "bun": ">=1"
+  },
+  "scripts": {
+    "build": "bun ../../build.ts devtools",
+    "prepack": "bun run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun --conditions=source test"
+  },
+  "peerDependencies": {
+    "@frondruntime/core": "0.1.0",
+    "effect": "^4.0.0-0"
+  },
+  "devDependencies": {
+    "@frondruntime/core": "workspace:*",
+    "@types/bun": "1.3.14",
+    "@types/node": "26.1.1",
+    "effect": "4.0.0-beta.90"
+  },
+  "author": {
+    "name": "Roman Dubinin",
+    "url": "https://romanonthego.dev"
+  }
+}
