@@ -22,15 +22,15 @@
     },
     "apps/hub": {
       "name": "@frondruntime/hub",
-      "version": "0.0.0",
+      "version": "0.2.0",
       "bin": {
         "frond-hub": "./src/cli.tsx",
       },
       "dependencies": {
         "@effect/platform-bun": "4.0.0-beta.90",
-        "@frondruntime/core": "workspace:*",
-        "@frondruntime/devtools": "workspace:*",
-        "@frondruntime/react": "workspace:*",
+        "@frondruntime/core": "0.1.0",
+        "@frondruntime/devtools": "0.2.0",
+        "@frondruntime/react": "0.1.0",
         "@pppp606/ink-chart": "0.2.7",
         "effect": "4.0.0-beta.90",
         "ink": "7.1.1",
@@ -57,7 +57,7 @@
     },
     "packages/devtools": {
       "name": "@frondruntime/devtools",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "devDependencies": {
         "@frondruntime/core": "workspace:*",
         "@types/bun": "1.3.14",

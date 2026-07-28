@@ -5,4 +5,5 @@
  * binary, and an app that installs the client half has no business seeing it.
  * The number the two sides actually have to agree on is `HUB_PROTOCOL_VERSION`.
  */
-export const HUB_VERSION = "0.3.0";
+// x-release-please-version
+export const HUB_VERSION = "0.2.0";

@@ -14,6 +14,22 @@
       "package-name": "@frondruntime/react",
       "component": "react",
       "release-type": "node"
+    },
+    "packages/devtools": {
+      "package-name": "@frondruntime/devtools",
+      "component": "devtools",
+      "release-type": "node"
+    },
+    "apps/hub": {
+      "package-name": "@frondruntime/hub",
+      "component": "hub",
+      "release-type": "node",
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "src/version.ts"
+        }
+      ]
     }
   },
   "plugins": [
@@ -24,7 +40,7 @@
     {
       "type": "linked-versions",
       "groupName": "frondruntime",
-      "components": ["core", "react"]
+      "components": ["core", "react", "devtools", "hub"]
     }
   ]
 }
