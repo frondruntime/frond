@@ -35,10 +35,18 @@ export type ReadHubLockOptions = {
  * not — a monorepo package running its own dev server is the normal case, not
  * the exception.
  *
- * Returns `undefined` rather than throwing on every failure mode there is:
- * absent, unreadable, malformed, or a leftover from a hub that is gone. Not
- * finding a hub is the ordinary state of a machine where nobody started one,
- * and the caller's response to all of these is identical anyway.
+ * Returns `undefined` rather than throwing for every way the file can fail to
+ * be a lock: absent, unreadable, or malformed. Not finding a hub is the
+ * ordinary state of a machine where nobody started one, and the caller's
+ * response to all three is identical anyway.
+ *
+ * What it does *not* do is decide whether the hub named by a well-formed lock
+ * is still there. A hub that died without running its finalizer leaves a file
+ * that parses, and this returns it. Liveness is the caller's call and the
+ * fields to make it are on the result: `pid` for a signal probe, `port` for a
+ * dial, and `protocolVersion` to compare against the one this build speaks. A
+ * reader that guessed on the caller's behalf would be guessing wrong for the
+ * scripts that only want the address.
  */
 export function readHubLock(options: ReadHubLockOptions = {}): HubLock | undefined {
   const port = options.port ?? HUB_DEFAULT_PORT;
@@ -86,9 +94,12 @@ function readLock(path: string): HubLock | undefined {
 
   const lock = parsed as Partial<HubLock>;
 
-  // Checked rather than trusted because this file outlives the process that
-  // wrote it if that process died badly, and a stale one from an older protocol
-  // is precisely the case where a confident cast turns into a wrong answer.
+  // Every field checked rather than cast, because this file outlives the process
+  // that wrote it if that process died badly — so what is on disk may have been
+  // written by a build that is no longer installed. A shape check is all this
+  // does: it says the five fields are there and are the right types, not that
+  // the hub behind them is alive or speaks the protocol this build speaks.
+  // Those are the caller's to decide, from `pid` and `protocolVersion`.
   return typeof lock.attachUrl === "string" &&
     typeof lock.host === "string" &&
     typeof lock.port === "number" &&

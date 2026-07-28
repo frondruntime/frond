@@ -135,9 +135,11 @@ export type AttachmentInfo = typeof AttachmentInfo.Type;
  *
  * `fields` holds JSON-safe shape descriptors, not live values — encoding
  * happens at observe time, because a `RuntimeEventRecord` carries live
- * references that keep mutating after the record is handed out. What a
- * descriptor looks like at each policy is documented once, on `describe` in
- * `encode.ts`; nothing on this side should restate it and drift.
+ * references that keep mutating after the record is handed out. The descriptor
+ * vocabulary is written down once, in `descriptors.ts`, and what each policy
+ * produces lives with the walk that produces it — `describeShape` in `shape.ts`,
+ * `describeFull` in `full.ts`, `describeError` in `cause.ts`. Nothing on this
+ * side should restate any of it and drift.
  */
 export const EncodedEventRecord = Schema.Struct({
   sequence: Schema.Number,

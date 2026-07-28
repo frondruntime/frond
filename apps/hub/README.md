@@ -30,7 +30,7 @@ if (import.meta.env.DEV) {
 
 No URL and no credential: the socket is unauthenticated and the address is the default. Attaching never throws, never rejects, and returns before it connects, so the call is safe in an entry file — but guard it anyway, because a production build that dials whatever answers on loopback is not a devtools client.
 
-The hub attaches to *itself* the same way, through the same public entry point, so the first row in the dashboard is always the hub and the client half is exercised end to end on every boot.
+The hub attaches to *itself* the same way, through the same public entry point, so the client half is exercised end to end on every boot. Its own row sorts to the bottom of the dashboard and is marked `(self)` — it is always attached and is never the thing being debugged, so leaving it in arrival order would put the cursor on it every time a fresh hub has nothing else to show.
 
 ## Connect an agent
 
