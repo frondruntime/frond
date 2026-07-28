@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Runtime } from "@frondruntime/core";
 import { Data } from "effect";
-import { encodeRecord } from "../src/encode.ts";
+import { createValueEncoder, encodeRecord } from "../src/encode.ts";
 
 /**
  * Builds a record around one event field.
@@ -50,9 +50,7 @@ describe("encodeRecord", () => {
   });
 
   test("shape still refuses to descend into values", () => {
-    const encoded = fieldOf({ user: { id: 7, name: "ada" } }, "shape");
-
-    expect(encoded).toEqual({ _: "object", keys: ["user"], truncated: false });
+    expect(fieldOf({ user: { id: 7, name: "ada" } }, "shape")).toBe("{user}");
   });
 
   test("none sends no fields at all", () => {
@@ -87,7 +85,7 @@ describe("encodeRecord", () => {
   test("full elides past its depth bound, and says so", () => {
     let deep: Record<string, unknown> = { bottom: true };
 
-    for (let i = 0; i < 12; i += 1) {
+    for (let i = 0; i < 30; i += 1) {
       deep = { nested: deep };
     }
 
@@ -100,12 +98,12 @@ describe("encodeRecord", () => {
 
   test("full reports the real length when it truncates a long array", () => {
     const encoded = fieldOf(
-      Array.from({ length: 400 }, (_, index) => index),
+      Array.from({ length: 5000 }, (_, index) => index),
       "full"
     ) as ReadonlyArray<unknown>;
 
-    expect(encoded).toHaveLength(257);
-    expect(encoded[encoded.length - 1]).toEqual({ _: "elided", by: "entries", length: 400 });
+    expect(encoded).toHaveLength(4097);
+    expect(encoded[encoded.length - 1]).toEqual({ _: "elided", by: "entries", length: 5000 });
   });
 
   /**
@@ -116,22 +114,22 @@ describe("encodeRecord", () => {
    */
   test("full reports the real key count when it truncates a wide object", () => {
     const wide = Object.fromEntries(
-      Array.from({ length: 400 }, (_, index) => [`k${index}`, index])
+      Array.from({ length: 5000 }, (_, index) => [`k${index}`, index])
     );
 
     const encoded = fieldOf(wide, "full") as Record<string, unknown>;
 
-    expect(Object.keys(encoded)).toHaveLength(257);
-    expect(encoded["_elided"]).toEqual({ _: "elided", by: "entries", length: 400 });
+    expect(Object.keys(encoded)).toHaveLength(4097);
+    expect(encoded["_elided"]).toEqual({ _: "elided", by: "entries", length: 5000 });
   });
 
   test("full stops at its per-record budget", () => {
-    // Wide *and* shallow: the per-key cap bounds the breadth at 256, so the
+    // Wide *and* shallow: the per-key cap bounds the breadth at 4096, so the
     // budget can only be reached by giving each of those keys a body. Twelve
-    // fields apiece puts the walk past 3000 values against a 2000 allowance,
+    // fields apiece puts the walk past 52000 values against a 50000 allowance,
     // with the depth bound nowhere near in play.
     const wide = Object.fromEntries(
-      Array.from({ length: 300 }, (_, index) => [
+      Array.from({ length: 4000 }, (_, index) => [
         `k${index}`,
         Object.fromEntries(Array.from({ length: 12 }, (_, field) => [`f${field}`, field])),
       ])
@@ -164,6 +162,214 @@ describe("encodeRecord", () => {
       size: 1,
     });
     expect(fieldOf(new Set([1, 2]), "full")).toEqual({ _: "set", values: [1, 2], size: 2 });
+  });
+});
+
+/**
+ * These are read by an agent, one line per field, so the assertions are on the
+ * exact rendering rather than on "some descriptor". The vocabulary is the
+ * contract: a reader that has never seen this format has to be able to tell an
+ * object from an array from a class instance without a legend, and any of these
+ * strings silently changing shape is that contract breaking.
+ */
+describe("the shape vocabulary", () => {
+  test("a plain object is its key list", () => {
+    expect(fieldOf({ id: 1, name: "ada", total: 3 }, "shape")).toBe("{id,name,total}");
+    expect(fieldOf({}, "shape")).toBe("{}");
+  });
+
+  /**
+   * The discriminant is structure rather than data, and a field that reads
+   * `Wired{_tag,run}` instead of `{_tag,run}` is the difference between knowing
+   * which arm a node is in and knowing that it has arms.
+   */
+  test("a tagged object leads with its tag", () => {
+    expect(fieldOf({ _tag: "Wired", run: { _tag: "Idle" } }, "shape")).toBe("Wired{_tag,run}");
+  });
+
+  test("a wide object says that it was cut", () => {
+    const wide = Object.fromEntries(Array.from({ length: 40 }, (_, index) => [`k${index}`, index]));
+    const encoded = fieldOf(wide, "shape") as string;
+
+    expect(encoded.endsWith(",…}")).toBe(true);
+    // Thirty-two keys and the marker.
+    expect(encoded.slice(1, -1).split(",")).toHaveLength(33);
+  });
+
+  test("an array is named by its first element and its length", () => {
+    expect(fieldOf(["a", "b"], "shape")).toBe("string[2]");
+    expect(fieldOf([1, 2, 3], "shape")).toBe("number[3]");
+    expect(fieldOf([{ id: 1, name: "ada" }], "shape")).toBe("{id,name}[1]");
+  });
+
+  /** Nothing to name it by, and `[]` alone would not say it was an array. */
+  test("an empty array still says it is one", () => {
+    expect(fieldOf([], "shape")).toBe("unknown[0]");
+  });
+
+  test("collections cross as their size", () => {
+    expect(fieldOf(new Map([["a", 1]]), "shape")).toBe("Map(1)");
+    expect(fieldOf(new Set([1, 2, 3]), "shape")).toBe("Set(3)");
+  });
+
+  /**
+   * `{?}` rather than a bare type name: a class instance has fields this policy
+   * will not name, and `AccountModel` on its own reads as one that has none.
+   */
+  test("a class instance is its type and an admission", () => {
+    class AccountModel {
+      readonly balance = 100;
+    }
+
+    expect(fieldOf(new AccountModel(), "shape")).toBe("AccountModel{?}");
+  });
+
+  test("values with no JSON form say what they were", () => {
+    expect(fieldOf(() => undefined, "shape")).toBe("function");
+    expect(fieldOf(Symbol("s"), "shape")).toBe("symbol");
+    expect(fieldOf(10n, "shape")).toBe("bigint");
+  });
+
+  test("the depth bound is a value that says it stopped", () => {
+    expect(fieldOf([[[[1]]]], "shape")).toBe("[…][1][1][1]");
+  });
+});
+
+/**
+ * The arm that did not exist: `"none"` fell through to the shape encoder, so an
+ * app that had said it would disclose nothing answered a graph read with a key
+ * list for every node on it.
+ */
+describe("the none policy", () => {
+  test("none describes nothing about a value, not even its shape", () => {
+    const encoder = createValueEncoder("none");
+
+    expect(encoder.value({ token: "secret", nested: { id: 1 } })).toBe("withheld");
+    expect(encoder.value(["a", "b"])).toBe("withheld");
+    expect(encoder.value("ada")).toBe("withheld");
+    expect(encoder.value(42)).toBe("withheld");
+  });
+
+  /**
+   * The line `"none"` does not cross: that something failed, and which thing, is
+   * not the value's data. What stays withheld is the failure's own payload and
+   * its stack, which are.
+   */
+  test("none still says a failure happened, and names it", () => {
+    const encoded = createValueEncoder("none").failure(wrapped()) as Record<string, unknown>;
+    const frames = encoded["causes"] as ReadonlyArray<Record<string, unknown>>;
+
+    expect(encoded["_"]).toBe("error");
+    expect(encoded["message"]).toBe("upstream unavailable (503)");
+    expect(frames[0]?.["tag"]).toBe("RefreshFailed");
+
+    for (const frame of frames) {
+      expect(frame).not.toHaveProperty("stack");
+      expect(frame).not.toHaveProperty("fields");
+    }
+  });
+});
+
+/**
+ * Builds an error with a stack that is a fixture rather than wherever this test
+ * happens to run from. The frame selection is the thing under test, and a real
+ * stack here would change with the runner.
+ */
+function stacked(frames: ReadonlyArray<string>): Error {
+  const error = new Error("boom");
+
+  error.stack = ["Error: boom", ...frames].join("\n");
+
+  return error;
+}
+
+function stackOf(error: Error): string {
+  const frames = (fieldOf(error, "full") as Record<string, unknown>)["causes"] as ReadonlyArray<
+    Record<string, unknown>
+  >;
+
+  return frames[0]?.["stack"] as string;
+}
+
+describe("stack abridging", () => {
+  /**
+   * The failure a character bound produces: the app frames sit below a wall of
+   * Effect and runtime internals, so the first 2048 characters are reliably the
+   * part nobody needed.
+   */
+  test("library frames go, app frames stay, and the header survives", () => {
+    const stack = stackOf(
+      stacked([
+        "    at load (/app/src/orders.ts:12:5)",
+        "    at Object.run (/app/node_modules/effect/dist/index.js:44:9)",
+        "    at drain (node:internal/process/task_queues:95:5)",
+        "    at commit (/app/src/graph.ts:88:3)",
+      ])
+    );
+
+    expect(stack.split("\n")[0]).toBe("Error: boom");
+    expect(stack).toContain("orders.ts:12:5");
+    expect(stack).toContain("graph.ts:88:3");
+    expect(stack).not.toContain("node_modules");
+    expect(stack).not.toContain("node:internal");
+  });
+
+  /**
+   * An abridged trace that does not admit it is abridged reads as the whole
+   * story, and a reader who cannot find the caller in it blames the code.
+   */
+  test("the trace says how many frames it dropped", () => {
+    const stack = stackOf(
+      stacked([
+        "    at load (/app/src/orders.ts:12:5)",
+        "    at Object.run (/app/node_modules/effect/dist/index.js:44:9)",
+        "    at drain (node:internal/process/task_queues:95:5)",
+      ])
+    );
+
+    expect(stack).toContain("2 frames dropped");
+  });
+
+  test("a long app trace keeps the first fifteen frames", () => {
+    const stack = stackOf(
+      stacked(
+        Array.from({ length: 30 }, (_, index) => `    at step${index} (/app/src/run.ts:${index}:1)`)
+      )
+    );
+
+    expect(stack).toContain("at step0 ");
+    expect(stack).toContain("at step14 ");
+    expect(stack).not.toContain("at step15 ");
+    expect(stack).toContain("15 frames dropped");
+  });
+
+  /**
+   * A failure raised entirely inside a dependency still says where in that
+   * dependency, and an empty stack would trade a bad trace for no trace.
+   */
+  test("a trace that is library all the way down keeps its top two frames", () => {
+    const stack = stackOf(
+      stacked(
+        Array.from(
+          { length: 6 },
+          (_, index) => `    at run (/app/node_modules/effect/dist/index.js:${index}:1)`
+        )
+      )
+    );
+
+    expect(stack.split("\n").filter((line) => line.includes("node_modules"))).toHaveLength(2);
+    expect(stack).toContain("4 frames dropped");
+  });
+
+  /** Not a stack this can reason about, so it does not pretend to. */
+  test("an unrecognizable stack falls back to the character bound", () => {
+    const error = new Error("boom");
+    error.stack = "x".repeat(5000);
+
+    const stack = stackOf(error);
+
+    expect(stack).toHaveLength(2049);
+    expect(stack.endsWith("…")).toBe(true);
   });
 });
 

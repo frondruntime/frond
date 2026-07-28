@@ -145,7 +145,38 @@ describe("encodeGraphSnapshot", () => {
     );
 
     expect(encoded.values).toBe("shape");
-    expect(encoded.nodes[0]?.result).toEqual({ _: "object", keys: ["token"], truncated: false });
+    expect(encoded.nodes[0]?.result).toBe("{token}");
+  });
+
+  /**
+   * `"none"` used to fall through to the shape encoder, so an app that had said
+   * it would disclose nothing still answered with a key list per node. The
+   * assertion that matters is the second one: not that the marker is right, but
+   * that no key name reached the wire.
+   */
+  test("a none snapshot describes no value at all", () => {
+    const encoded = encode(
+      snapshotOf({ nodes: [node({ _tag: "Ready", result: { token: "secret" } })] }),
+      "none",
+      "orders:v1"
+    );
+
+    expect(encoded.nodes[0]?.result).toBe("withheld");
+    expect(encoded.nodes[0]?.status).toBe("withheld");
+    expect(JSON.stringify(encoded)).not.toContain("token");
+  });
+
+  /**
+   * Both are the same fact charged twice in every row of a graph read: `label`
+   * is core's formatting of `tag`, and `key` is the half of `nodeId` after the
+   * colon. `kind` stays — release semantics are not derivable from either.
+   */
+  test("a node row carries no label and no key", () => {
+    const row = encode(snapshotOf({ nodes: [node({})] }), "full").nodes[0];
+
+    expect(row).not.toHaveProperty("label");
+    expect(row).not.toHaveProperty("key");
+    expect(row?.kind).toBe("resource");
   });
 
   /**
@@ -175,7 +206,7 @@ describe("encodeGraphSnapshot", () => {
 
   /**
    * The bug this whole encoder split exists to prevent. An `Error` handed to the
-   * value encoder at `"shape"` comes out as `{_: "object", keys: []}`, because
+   * value encoder at `"shape"` comes out as `{}` — an empty key list, because
    * `message` and `stack` are not own-enumerable — so a failing node would
    * report that it failed and say nothing about why.
    */

@@ -40,6 +40,12 @@ export type SnapshotRequest = {
  * survives serialization, and `state: "Pending"` already says the only thing it
  * would have told a reader. And `Ready.node` is the node facade object, which is
  * mostly methods; `result` is the value someone actually meant to ask about.
+ *
+ * Two more are dropped for costing a line each in every row of a graph read
+ * while saying something the row already said: `label` is core's presentation
+ * formatting of `tag`, and `key` is the second half of `nodeId`. `kind` stays —
+ * `"node"` against `"resource"` is nowhere in the other fields, and it is what
+ * tells a reader whether release semantics apply to this row.
  */
 export function encodeGraphSnapshot(
   snapshot: Runtime.RuntimeSnapshot,
@@ -93,8 +99,6 @@ function encodeNode(
     nodeId: node.nodeId,
     tag: node.tag,
     kind: node.kind,
-    label: node.label,
-    key: node.key,
     state: node._tag,
     revision: node.revision,
     // `status` can carry an error of its own — `Invalid.error`, or a `Wired` run
@@ -161,8 +165,9 @@ function nodeFailure(node: Graph.NodeSnapshot): unknown {
  * Unwrapped rather than handed to the value encoder whole.
  *
  * `NodeOperationFailure` is a struct with an error inside it, and passing the
- * struct as a value would describe that error as `{_: "object", keys: [...]}` at
- * `"shape"` — the exact loss the failure path exists to prevent. Naming the
+ * struct as a value would reduce the whole thing to `{operationId,kind,at,error}`
+ * at `"shape"` — a key list, with the error behind the last key never described
+ * at all. That is the exact loss the failure path exists to prevent. Naming the
  * field explicitly is what keeps the chain crossing at every policy.
  */
 function encodeOperationFailure(

@@ -254,7 +254,7 @@ export function mcpLayer(options: {
       })),
 
     frond_read_events: (params) =>
-      Effect.map(resolve(attachments, params.attachmentId), ([view, ring]) =>
+      Effect.map(resolve(attachments, selfInstanceId, params.attachmentId), ([view, ring]) =>
         page(view, ring, {
           since: params.since,
           limit: clampLimit(params.limit),
@@ -266,12 +266,12 @@ export function mcpLayer(options: {
       ),
 
     frond_read_work: (params) =>
-      Effect.map(resolve(attachments, params.attachmentId), ([view, ring]) =>
+      Effect.map(resolve(attachments, selfInstanceId, params.attachmentId), ([view, ring]) =>
         page(view, ring, { limit: clampLimit(params.limit), workId: params.workId })
       ),
 
     frond_read_state: (params) =>
-      Effect.flatMap(resolve(attachments, params.attachmentId), ([view]) => {
+      Effect.flatMap(resolve(attachments, selfInstanceId, params.attachmentId), ([view]) => {
         const query: StateQuery =
           params.nodeId === undefined ? { _tag: "Graph" } : { _tag: "Node", nodeId: params.nodeId };
 
@@ -327,14 +327,22 @@ function rows(attachments: AttachmentsNode): ReadonlyArray<Row> {
 /**
  * Picks the attachment to read from.
  *
- * A sole attachment is used without being named, because making the common case
- * cost a round trip is how a tool ends up unused. Anything else fails with the
- * candidates listed rather than guessing — the hub is itself an attachment, so
- * "the obvious one" is exactly the assumption that would silently return the
- * devtools' own events instead of the app's.
+ * A sole attached *app* is used without being named, because making the common
+ * case cost a round trip is how a tool ends up unused. The hub attaches to its
+ * own runtime, so it is always in the list and would be that sole candidate on
+ * an otherwise idle machine — and answering "what does my graph look like" with
+ * the devtools' own graph is a wrong answer wearing the shape of a right one.
+ * It is excluded from the fallback rather than from `candidates`: naming it
+ * explicitly still resolves, because inspecting the hub is a real thing to want
+ * and only the *accidental* case is the bug.
+ *
+ * Everything else fails with the candidates listed, on the same reasoning as
+ * the ambiguity below — a guess the caller cannot see is worse than a question
+ * it can answer in one more call.
  */
 function resolve(
   attachments: AttachmentsNode,
+  selfInstanceId: string,
   attachmentId: string | undefined
 ): Effect.Effect<Row, McpReadError> {
   const candidates = rows(attachments);
@@ -345,35 +353,64 @@ function resolve(
     return found === undefined
       ? Effect.fail(
           new McpReadError({
-            message: `No attachment ${attachmentId}. ${describe(candidates)}`,
+            message: `No attachment ${attachmentId}. ${describe(candidates, selfInstanceId)}`,
           })
         )
       : Effect.succeed(found);
   }
 
-  const only = candidates[0];
+  // `instanceId`, not `runtimeId`, for the reason `frond_list_runtimes` gives:
+  // the latter is a per-process counter and would match every row.
+  const apps = candidates.filter(([view]) => view.info.instanceId !== selfInstanceId);
+  const only = apps[0];
 
-  if (candidates.length === 1 && only !== undefined) {
+  if (apps.length === 1 && only !== undefined) {
     return Effect.succeed(only);
   }
 
-  return Effect.fail(
-    new McpReadError({
-      message:
-        candidates.length === 0
-          ? "No runtimes are attached to this hub."
-          : `attachmentId is required when more than one runtime is attached. ${describe(candidates)}`,
-    })
-  );
+  return Effect.fail(new McpReadError({ message: noDefault(candidates, apps, selfInstanceId) }));
 }
 
-function describe(candidates: ReadonlyArray<Row>): string {
+/**
+ * What to say when no attachment can be picked for the caller.
+ *
+ * Each branch ends in an action rather than a diagnosis, because the caller is
+ * a model deciding what to do next: "no app is attached" invites a retry of the
+ * same call, "attach one, or name the hub" does not.
+ */
+function noDefault(
+  candidates: ReadonlyArray<Row>,
+  apps: ReadonlyArray<Row>,
+  selfInstanceId: string
+): string {
+  if (apps.length > 1) {
+    return `attachmentId is required when more than one app is attached. ${describe(apps, selfInstanceId)}`;
+  }
+
+  const hub = candidates.find(([view]) => view.info.instanceId === selfInstanceId);
+
+  if (hub === undefined) {
+    return "No runtimes are attached to this hub. Attach an app with attachDevtools({ runtime, name }) from @frondruntime/devtools, then call frond_list_runtimes.";
+  }
+
+  return `No app is attached to this hub; the only attachment is the hub's own runtime. Attach an app with attachDevtools({ runtime, name }) from @frondruntime/devtools and call frond_list_runtimes again, or pass attachmentId ${hub[0].attachmentId} to read the hub itself.`;
+}
+
+function describe(candidates: ReadonlyArray<Row>, selfInstanceId: string): string {
   if (candidates.length === 0) {
     return "No runtimes are attached.";
   }
 
+  // The hub is marked rather than dropped: a caller choosing from this list has
+  // to be able to tell the program it is debugging from the tool it is
+  // debugging with, and the two rows are otherwise indistinguishable.
   return `Attached: ${candidates
-    .map(([view]) => `${view.attachmentId} (${view.info.name}, ${view.info.platform})`)
+    .map(
+      ([view]) =>
+        `${view.attachmentId} (${view.info.name}, ${view.info.platform}${
+          view.info.instanceId === selfInstanceId ? ", this hub" : ""
+        })`
+    )
     .join("; ")}`;
 }
 

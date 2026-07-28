@@ -388,8 +388,15 @@ describe("hub attachment", () => {
 
     const snapshot = await read(hub, attachmentId, { _tag: "Node", nodeId }, "full");
 
+    const result = snapshot.nodes[0]?.result;
+
     expect(snapshot.values).toBe("shape");
-    expect(snapshot.nodes[0]?.result).toMatchObject({ _: "object" });
+    // A shape descriptor, which at this policy is a single self-describing
+    // string: a key list, a tagged key list, or a class instance's type. The
+    // assertion is on the form rather than the exact text, because which of the
+    // hub's own nodes answers first is not this test's business.
+    expect(typeof result).toBe("string");
+    expect(result as string).toMatch(/^[\w$]*[{[(]/);
   });
 
   test("a query for a detached attachment fails instead of waiting for the timeout", async () => {

@@ -6,9 +6,14 @@ import type { EncodedEventRecord, ValuePolicy } from "./protocol.ts";
  *
  * `"full"` is a stub in the sense that it has no per-field allowlist and no
  * redaction — it sends what it finds. It is not a stub in its bounds: cycles,
- * depth, and total size are enforced, because those three are not polish. A
- * cyclic graph result would hang the observed app inside its own devtools, and
- * an unbounded one would put a megabyte of node state through a 250ms flush.
+ * depth, and breadth are enforced, because those three are not polish. A cyclic
+ * or unboundedly deep graph result would hang the observed app inside its own
+ * devtools, on its own event loop.
+ *
+ * What those bounds are not is a size budget. This socket is loopback and the
+ * eventual reader is an agent's context window, so the scarce resource is the
+ * reader's attention rather than the wire — which is why `"shape"` spends real
+ * effort being terse and `"full"` spends none.
  */
 export type EncodePolicy = ValuePolicy;
 
@@ -32,17 +37,29 @@ const MAX_KEYS = 32;
 const MAX_DEPTH = 3;
 
 /**
- * Bounds for `"full"`, chosen to be generous enough that hitting one is
- * interesting rather than routine — and every one of them announces itself in
- * the output. A cap an agent cannot see is worse than a low cap: it turns
- * "there was more" into "that was all", which is the one thing this feed must
- * never say.
+ * Bounds for `"full"`. Termination guards, not a byte budget.
+ *
+ * This encoder runs against a loopback socket, so bytes are close to free; what
+ * these stop is a cycle the `seen` set cannot catch, a proxy that manufactures
+ * keys on demand, or a linked list a few hundred thousand long — cases where the
+ * walk would hang the observed app inside its own devtools. Set them where a
+ * pathological structure trips them and a large-but-real one does not, and every
+ * one of them announces itself in the output. A cap an agent cannot see is worse
+ * than a low cap: it turns "there was more" into "that was all", which is the
+ * one thing this feed must never say.
  */
-const FULL_MAX_DEPTH = 8;
-const FULL_MAX_STRING_LENGTH = 4096;
-const FULL_MAX_ENTRIES = 256;
-/** Total encoded values per record, across the whole tree. */
-const FULL_MAX_NODES = 2000;
+const FULL_MAX_DEPTH = 24;
+const FULL_MAX_STRING_LENGTH = 65536;
+const FULL_MAX_ENTRIES = 4096;
+/**
+ * Total encoded values per record, across the whole tree.
+ *
+ * Counts values, not characters: one 64k string spends the same allowance as
+ * `true`. So this bounds how long the walk runs, and only loosely bounds what it
+ * produces — which is the right trade here, where the walk is the expensive half
+ * and the wire is a socket to the same machine.
+ */
+const FULL_MAX_NODES = 50000;
 
 /**
  * How far up a `cause` chain to walk. Matches the core default.
@@ -53,8 +70,45 @@ const FULL_MAX_NODES = 2000;
 const CAUSE_MAX_DEPTH = 8;
 const SHAPE_CAUSE_STRING_LENGTH = 256;
 const FULL_CAUSE_STRING_LENGTH = 1024;
-/** Long enough for the frames that name app code, short enough to not be the payload. */
+/**
+ * How much stack to take from core before selecting frames out of it.
+ *
+ * Deliberately far above anything a real stack reaches: cutting here cuts by
+ * character, which is the thing {@link abridgeStack} exists to stop doing. This
+ * is a guard against a fabricated `stack` string, not a budget.
+ */
+const CAUSE_STACK_SOURCE_LENGTH = 32768;
+/**
+ * How many frames survive selection.
+ *
+ * The frame that names app code is almost always within the first few once the
+ * library frames are gone; fifteen is room for a couple of layers of wrapping on
+ * top of that without the trace becoming the record.
+ */
+const KEPT_STACK_FRAMES = 15;
+/** Kept from a trace that is library frames all the way down. See {@link abridgeStack}. */
+const LIBRARY_ONLY_STACK_FRAMES = 2;
+/** The fallback bound, for a `stack` this cannot read as frames at all. */
 const FULL_CAUSE_STACK_LENGTH = 2048;
+
+/**
+ * Frames, in the two formats a JS runtime produces.
+ *
+ * V8 (Node, Bun, Chromium) indents every frame with `at `; JSC and SpiderMonkey
+ * write `name@url:line:column`. Matched rather than assumed because the header
+ * of a stack is the error's own message, which is app text and must not be
+ * mistaken for a frame and dropped.
+ */
+const V8_STACK_FRAME = /^\s*at\s\S/;
+const AT_STACK_FRAME = /@\S*:\d+:\d+\s*$/;
+
+/**
+ * Frames that belong to someone else's code.
+ *
+ * `node_modules` is the whole point; the rest are the same idea for code that
+ * has no file in the tree at all — Node's builtins, Bun's, and native frames.
+ */
+const LIBRARY_STACK_FRAME = /node_modules|node:|bun:|\(native\)|\[native code]/;
 
 /**
  * A failure, as its chain of causes rather than as its outermost link.
@@ -87,26 +141,33 @@ type ErrorDescriptor = {
 };
 
 /**
- * A structural stand-in for a value the sender will not transmit.
+ * A marker that survived where a value did not.
+ *
+ * Only ever emitted alongside real data — at `"full"`, and at `"shape"` for a
+ * string long enough to be cut — which is why these stay objects while the
+ * `"shape"` vocabulary below is strings. A reader looking at real values has to
+ * be able to tell a marker from one of them, and `{_: …}` is that tell.
  *
  * `_` rather than `_tag` so a descriptor is never mistaken for a domain tagged
  * union by anything reading the feed.
  */
 type ShapeDescriptor =
-  | { readonly _: "array"; readonly length: number; readonly of: unknown }
-  | {
-      readonly _: "object";
-      readonly tag?: string;
-      readonly keys: ReadonlyArray<string>;
-      readonly truncated: boolean;
-    }
   | { readonly _: "opaque"; readonly type: string }
   | { readonly _: "string"; readonly length: number; readonly head: string }
   | ErrorDescriptor
   /** A value already on the path above this one. Emitted instead of recursing. */
   | { readonly _: "cycle" }
-  /** A bound stopped the walk here. `of` names which one. */
+  /** A bound stopped the walk here. `by` names which one. */
   | { readonly _: "elided"; readonly by: "depth" | "budget" | "entries"; readonly length?: number };
+
+/**
+ * What `"none"` puts where a value was.
+ *
+ * A word, not a descriptor: `"none"` is the policy that has decided the reader
+ * learns nothing about this value, and a key list or a type name is something.
+ * The same marker for every value, so it cannot be read as a shape either.
+ */
+const WITHHELD = "withheld";
 
 /**
  * Encodes one runtime event for the wire.
@@ -138,18 +199,34 @@ export type ValueEncoder = {
 };
 
 export function createValueEncoder(policy: EncodePolicy): ValueEncoder {
+  // Spelled out rather than folded into the `"shape"` branch. Falling through
+  // was the bug: `"none"` reached the shape encoder and emitted key lists for
+  // every node in a graph snapshot, which is a description of app data by an
+  // app that had said it would send none.
+  if (policy === "none") {
+    return {
+      value: () => WITHHELD,
+      // Still a chain, because "there is an error here" is not the value's
+      // data. What crosses is what the failure names about itself — its tags,
+      // its node, the innermost message — and never its payload or its stack,
+      // which `describeError` withholds at anything below `"full"`.
+      failure: (value) => describeError(value, policy),
+    };
+  }
+
+  if (policy === "shape") {
+    return {
+      value: (value) => describe(value, 0),
+      failure: (value) => describeError(value, policy),
+    };
+  }
+
   const budget: Budget = { remaining: FULL_MAX_NODES };
 
-  return policy === "full"
-    ? {
-        value: (value) => describeFull(value, 0, new Set<object>(), budget),
-        failure: (value) =>
-          describeError(value, policy, { depth: 0, seen: new Set<object>(), budget }),
-      }
-    : {
-        value: (value) => describe(value, 0),
-        failure: (value) => describeError(value, policy),
-      };
+  return {
+    value: (value) => describeFull(value, 0, new Set<object>(), budget),
+    failure: (value) => describeError(value, policy, { depth: 0, seen: new Set<object>(), budget }),
+  };
 }
 
 export function encodeRecord(
@@ -234,7 +311,9 @@ function describeError(value: unknown, policy: EncodePolicy, full?: FullContext)
   const frames = Diagnostics.serializeCauseChain(value, {
     maxDepth: CAUSE_MAX_DEPTH,
     maxStringLength: disclose ? FULL_CAUSE_STRING_LENGTH : SHAPE_CAUSE_STRING_LENGTH,
-    maxStackLength: FULL_CAUSE_STACK_LENGTH,
+    // Asked for whole, then abridged by frame below. Core can only cut by
+    // character, which is exactly the cut that loses the frame worth keeping.
+    maxStackLength: CAUSE_STACK_SOURCE_LENGTH,
     maxObjectKeys: disclose ? 20 : 8,
   });
 
@@ -264,6 +343,7 @@ function describeError(value: unknown, policy: EncodePolicy, full?: FullContext)
         compact({
           ...frame,
           preview: undefined,
+          stack: frame.stack === undefined ? undefined : abridgeStack(frame.stack),
           fields: errorFields(links[index], (own) =>
             describeFull(own, full.depth + 1, full.seen, full.budget)
           ),
@@ -275,6 +355,63 @@ function describeError(value: unknown, policy: EncodePolicy, full?: FullContext)
       full.seen.delete(link);
     }
   }
+}
+
+/**
+ * A stack, selected by frame instead of cut by character.
+ *
+ * A raw stack is mostly other people's code — Effect's fiber runtime, the test
+ * runner, the module loader — and the frames that name the app are scattered
+ * through it rather than at the top. Truncating at a character count therefore
+ * spends the budget on internals and can cut the one frame a reader needed, so
+ * this drops library frames outright and keeps the first {@link
+ * KEPT_STACK_FRAMES} of what is left.
+ *
+ * The dropped count is not decoration. An abridged trace that does not say it is
+ * abridged reads as "this is where it came from", and a reader who then cannot
+ * find the caller concludes the wrong thing about the code rather than about the
+ * trace.
+ *
+ * Two cases deliberately do not select. A trace that is library frames all the
+ * way down — a failure raised entirely inside a dependency — still says where in
+ * that dependency, and an empty stack would throw that away for nothing. And a
+ * `stack` with no recognizable frames is not a stack this can reason about, so
+ * it falls back to the character bound rather than guessing.
+ */
+function abridgeStack(stack: string): string {
+  const lines = stack.split("\n");
+  const first = lines.findIndex(isStackFrame);
+
+  if (first === -1) {
+    return stack.length <= FULL_CAUSE_STACK_LENGTH
+      ? stack
+      : `${stack.slice(0, FULL_CAUSE_STACK_LENGTH)}…`;
+  }
+
+  // Everything above the first frame is the error's own header, kept whole: it
+  // is the name and message, which is the part a reader reads first.
+  const header = lines.slice(0, first);
+  const frames = lines.slice(first).filter(isStackFrame);
+  const own = frames.filter((line) => !LIBRARY_STACK_FRAME.test(line));
+  const kept = (own.length === 0 ? frames.slice(0, LIBRARY_ONLY_STACK_FRAMES) : own).slice(
+    0,
+    KEPT_STACK_FRAMES
+  );
+  const dropped = frames.length - kept.length;
+
+  if (dropped === 0) {
+    return [...header, ...kept].join("\n");
+  }
+
+  return [
+    ...header,
+    ...kept,
+    `    … ${dropped} frame${dropped === 1 ? "" : "s"} dropped: library internals, and any past the first ${KEPT_STACK_FRAMES}`,
+  ].join("\n");
+}
+
+function isStackFrame(line: string): boolean {
+  return V8_STACK_FRAME.test(line) || AT_STACK_FRAME.test(line);
 }
 
 /**
@@ -429,6 +566,40 @@ function describeFields(
  * timestamps, and flags — the entire signal. Anything structured becomes a
  * descriptor: a node result or an action input is exactly the kind of value
  * that must not leave the process, and it is always an object or an array.
+ *
+ * ## The shape vocabulary
+ *
+ * One line per value, in a syntax that says what it is without a legend:
+ *
+ * ```text
+ * {}                    a plain object, no own keys
+ * {id,name,total}       a plain object with those keys, in order
+ * {id,name,…}           …and more keys than {@link MAX_KEYS}
+ * Wired{_tag,run}       the same object, discriminated: its `_tag` is "Wired"
+ * AccountModel{?}       a class instance — the type, and no claim about fields
+ * string[42]            an array of 42, named by its first element
+ * {id,name}[3]          the same, where that element is an object
+ * unknown[0]            an empty array: nothing to name it by
+ * Map(3) / Set(3)       collections, by size
+ * function / symbol / bigint    values with no JSON form
+ * {…} / […]             the depth bound stopped the walk here
+ * ```
+ *
+ * Strings rather than the `{_: "object", keys, truncated}` objects this used to
+ * emit, and the reason is the reader rather than the wire: this feed is read by
+ * an agent through MCP, where each descriptor arrived as several lines of
+ * pretty-printed JSON to say one thing about one field. A node result rendered
+ * as forty lines that contain no data is worse than one rendered as `{id,name}`.
+ *
+ * Lossless, which is the part that makes it safe: a shape descriptor is only
+ * ever produced once the policy has decided the value itself is not crossing, so
+ * there is nothing behind it that a richer encoding could have expanded to.
+ *
+ * The residual ambiguity is named rather than defended: a short app string that
+ * happens to read `"function"` crosses verbatim at this policy and is
+ * indistinguishable from the descriptor. Structured values are not ambiguous —
+ * none of them cross — and paying an object per field to fix a collision with a
+ * literal `"function"` is the wrong trade.
  */
 function describe(value: unknown, depth: number): unknown {
   if (value === null || value === undefined) {
@@ -440,16 +611,15 @@ function describe(value: unknown, depth: number): unknown {
     case "number": {
       return value;
     }
-    case "bigint": {
-      return { _: "opaque", type: "bigint" } satisfies ShapeDescriptor;
-    }
-    case "function": {
-      return { _: "opaque", type: "function" } satisfies ShapeDescriptor;
-    }
+    case "bigint":
+    case "function":
     case "symbol": {
-      return { _: "opaque", type: "symbol" } satisfies ShapeDescriptor;
+      return typeof value;
     }
     case "string": {
+      // The one descriptor that stays an object at this policy, because it is
+      // the one carrying content: `head` is app data, and a reader has to be
+      // able to tell it from a string that crossed whole.
       return value.length <= MAX_STRING_LENGTH
         ? value
         : ({
@@ -472,53 +642,67 @@ function describeStructure(value: object, depth: number): unknown {
   }
 
   if (depth >= MAX_DEPTH) {
-    return {
-      _: "opaque",
-      type: Array.isArray(value) ? "array" : "object",
-    } satisfies ShapeDescriptor;
+    return Array.isArray(value) ? "[…]" : "{…}";
   }
 
   if (Array.isArray(value)) {
     const first = value[0];
 
-    return {
-      _: "array",
-      length: value.length,
-      of: first === undefined ? null : describe(first, depth + 1),
-    } satisfies ShapeDescriptor;
+    // Named by its first element rather than by every one of them: a
+    // homogeneous array is the common case and the first entry settles it, and
+    // a heterogeneous one is not summarizable at any length worth spending.
+    return `${first === undefined ? "unknown" : shapeName(first, depth + 1)}[${value.length}]`;
+  }
+
+  if (value instanceof Map) {
+    return `Map(${value.size})`;
+  }
+
+  if (value instanceof Set) {
+    return `Set(${value.size})`;
   }
 
   const prototype = Object.getPrototypeOf(value) as unknown;
 
-  // Class instances are app domain objects by construction; their key list is
-  // as far as this encoder is willing to go.
+  // Class instances are app domain objects by construction; the type name is as
+  // far as this encoder is willing to go, and `{?}` says the fields exist rather
+  // than letting a bare type name read as "it has none".
   if (prototype !== null && prototype !== Object.prototype) {
-    return {
-      _: "opaque",
-      type: (value.constructor as { readonly name?: string } | undefined)?.name ?? "object",
-    } satisfies ShapeDescriptor;
+    return `${(value.constructor as { readonly name?: string } | undefined)?.name ?? "object"}{?}`;
   }
 
   const keys = Object.keys(value);
+  const shown = keys.length > MAX_KEYS ? [...keys.slice(0, MAX_KEYS), "…"] : keys;
   // `_tag` is the one nested field that survives verbatim. A discriminant is
   // structure, not data — and a failure feed that says "an object with these
   // keys" instead of "GraphNodeAcquireFailed" is not worth reading.
   const tag = (value as { readonly _tag?: unknown })._tag;
 
-  if (typeof tag === "string") {
-    return {
-      _: "object",
-      tag,
-      keys: keys.slice(0, MAX_KEYS),
-      truncated: keys.length > MAX_KEYS,
-    } satisfies ShapeDescriptor;
+  return `${typeof tag === "string" ? tag : ""}{${shown.join(",")}}`;
+}
+
+/**
+ * What an array is an array of.
+ *
+ * Distinct from {@link describe} because that answers with the value where it
+ * can — a number stays a number — and a position naming a type needs the type.
+ * `typeof` supplies every primitive name; structured entries recurse, so an
+ * array of objects reads `{id,name}[3]` and inherits the depth bound with it.
+ */
+function shapeName(value: unknown, depth: number): string {
+  if (value === null) {
+    return "null";
   }
 
-  return {
-    _: "object",
-    keys: keys.slice(0, MAX_KEYS),
-    truncated: keys.length > MAX_KEYS,
-  } satisfies ShapeDescriptor;
+  if (typeof value !== "object") {
+    return typeof value;
+  }
+
+  const described = describeStructure(value, depth);
+
+  // An `Error` element describes as a cause chain, which is an object. Its
+  // descriptor names it `error`, so the array says the same.
+  return typeof described === "string" ? described : "error";
 }
 
 type Budget = { remaining: number };
@@ -526,9 +710,14 @@ type Budget = { remaining: number };
 /**
  * Reduces a value to JSON-safe form while keeping its contents.
  *
- * The counterpart to {@link describe}: same output vocabulary, opposite
- * default. Where the shape encoder asks "what can I say without revealing
- * this", this one asks "what is the least I can leave out".
+ * The counterpart to {@link describe}, and the opposite default: where the
+ * shape encoder asks "what can I say without revealing this", this one asks
+ * "what is the least I can leave out".
+ *
+ * Which is also why it does not share that encoder's string vocabulary. Here the
+ * values around a marker are real data, so a marker has to stay
+ * distinguishable from one — hence `{_: "elided"}` rather than a word. There,
+ * nothing structured is real, so there is nothing for a word to collide with.
  *
  * `seen` is the ancestor path, not every value visited. A value that appears
  * twice in a result — a shared config object, the same node referenced by two

@@ -1,7 +1,7 @@
 import type { Runtime } from "@frondruntime/core";
-import { Effect, Fiber } from "effect";
+import { Cause, Data, Effect, Fiber } from "effect";
 import { attachLayer, attachRuntime } from "./attach.ts";
-import { HUB_DEFAULT_ATTACH_URL, type ValuePolicy } from "./protocol.ts";
+import { HUB_DEFAULT_ATTACH_URL, HubRejection, type ValuePolicy } from "./protocol.ts";
 
 /**
  * How long to wait before dialing again.
@@ -12,6 +12,41 @@ import { HUB_DEFAULT_ATTACH_URL, type ValuePolicy } from "./protocol.ts";
  * Two seconds of an idle loopback socket costs nothing worth measuring.
  */
 const RETRY_DELAY = "2 seconds";
+
+/**
+ * Ends the retry loop.
+ *
+ * A second error rather than reusing `HubRejection`, because the two travel in
+ * opposite directions through the same code: `HubRejection` arrives from the
+ * hub into an attempt that swallows everything, and this one has to get back
+ * *out* of that swallowing. Keeping them distinct is what lets the loop stop for
+ * exactly one thing.
+ */
+class AttachRefused extends Data.TaggedError("AttachRefused")<{
+  readonly reason: string;
+}> {}
+
+/**
+ * The hub's refusal, picked out of whatever else an attempt failed with.
+ *
+ * Matched on the error value's own identity, not on message text: a refusal is
+ * the one outcome that stops the loop forever, and "the message looked like a
+ * rejection" is not a property worth betting that on.
+ *
+ * The refusal is a typed failure here rather than a defect or a closed stream
+ * because the RPC roles are inverted from who dials — the app is the *client*,
+ * so the hub's `Attach` error channel is this side's error channel, and the
+ * decoded `HubRejection` lands as an ordinary `Fail` on the cause.
+ */
+function refusal(cause: Cause.Cause<unknown>): HubRejection | undefined {
+  for (const reason of cause.reasons) {
+    if (Cause.isFailReason(reason) && reason.error instanceof HubRejection) {
+      return reason.error;
+    }
+  }
+
+  return undefined;
+}
 
 export type DevtoolsOptions = {
   readonly runtime: Runtime.Runtime;
@@ -39,6 +74,10 @@ export type DevtoolsOptions = {
    * the hub is the *normal* state of an app whose developer has not started one
    * yet, and a devtools client that logged about it once every two seconds
    * would be a worse citizen of the console than one that says nothing.
+   *
+   * The one exception is a hub that *refuses* the attachment, which is terminal
+   * rather than normal. Supplying this takes ownership of reporting it: the
+   * console fallback below fires only when this is absent.
    */
   readonly onError?: ((cause: unknown) => void) | undefined;
 };
@@ -55,6 +94,13 @@ export type DevtoolsOptions = {
  * take down the app it is observing. It retries forever, so the hub can be
  * started, stopped and restarted underneath a running app. And it returns
  * before it connects, so it costs the startup path nothing.
+ *
+ * "Forever" has one deliberate exception. A hub that *refuses* the attachment —
+ * today, only a protocol version mismatch — is answering a question about this
+ * build, and every retry would ask it again and get the same answer. So a
+ * refusal stops the loop and says so out loud, because the alternative is what
+ * this used to do: reconnect every two seconds, silently, for the whole life of
+ * a process that was never going to attach.
  *
  * @example
  * ```ts
@@ -97,18 +143,44 @@ export function attachDevtools(options: DevtoolsOptions): () => void {
     Effect.provide(attachLayer(url)),
     // `catchCause`, not `catch`: a defect in the transport is exactly as much
     // the host app's problem as a failure is, which is to say none.
-    Effect.catchCause((cause) =>
-      Effect.sync(() => {
-        options.onError?.(cause);
-      })
-    )
+    Effect.catchCause((cause) => {
+      options.onError?.(cause);
+
+      const refused = refusal(cause);
+
+      // Every other ending is worth another attempt — a hub not started yet, a
+      // socket dropped, a port moved — and retrying them is the behavior this
+      // whole loop exists for. A refusal is not one of those: the next attempt
+      // sends the same version and earns the same answer, so it leaves as a
+      // failure, which is the one thing `forever` below does not swallow.
+      return refused === undefined ? Effect.void : new AttachRefused({ reason: refused.reason });
+    })
   );
 
   // `forever` over a *caught* attempt rather than `retry` over a failing one,
   // so the loop is reached by both outcomes. A hub that closes the stream
   // cleanly on shutdown is a success, and a success that stopped reconnecting
   // would leave the app permanently detached from the next hub.
-  const fiber = Effect.runFork(Effect.forever(Effect.andThen(session, Effect.sleep(RETRY_DELAY))));
+  const fiber = Effect.runFork(
+    Effect.forever(Effect.andThen(session, Effect.sleep(RETRY_DELAY))).pipe(
+      Effect.catchTag("AttachRefused", (refused) =>
+        Effect.sync(() => {
+          // Reached at most once per call, and that is structural rather than
+          // guarded by a flag: getting here at all means the loop has stopped.
+          //
+          // Written to the console only when nobody asked for the causes. An
+          // app that passed `onError` has already been told, in the handler it
+          // supplied, and owns what it does with it; an app that did not would
+          // otherwise be left with devtools that will never connect and nothing
+          // anywhere saying so — which is the exact failure this whole change
+          // is about, and a silent default would only move it one layer down.
+          if (options.onError === undefined) {
+            console.error(`[frond] devtools attach refused: ${refused.reason}`);
+          }
+        })
+      )
+    )
+  );
 
   return () => {
     Effect.runFork(Fiber.interrupt(fiber));

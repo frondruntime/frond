@@ -49,6 +49,29 @@ const HEARTBEAT_INTERVAL = "30 seconds";
 
 const SHUTDOWN_TIMEOUT = "3 seconds";
 
+/**
+ * Why an attachment was refused, in one line somebody can act on.
+ *
+ * The old text was `"rejected"`, which named neither version nor a next step —
+ * and a version mismatch is precisely the failure where the developer has
+ * nothing else to go on, because the symptom is devtools that quietly never
+ * connect. Both numbers appear because neither side can work the answer out
+ * alone: the app knows only what it was compiled against, and the hub only sees
+ * a number it does not recognize.
+ *
+ * Naming which side is behind is the part that decides what to upgrade, and it
+ * is cheap here and a guess anywhere else. One line, because this ends up in a
+ * terminal next to whatever else the app is printing.
+ */
+function protocolMismatch(appVersion: number): string {
+  const behind =
+    appVersion < HUB_PROTOCOL_VERSION
+      ? "the app is behind, upgrade @frondruntime/devtools in the app"
+      : "the hub is behind, upgrade @frondruntime/hub";
+
+  return `protocol version mismatch: app speaks ${appVersion}, hub speaks ${HUB_PROTOCOL_VERSION}; ${behind}`;
+}
+
 export type HubServerResult = {
   readonly attachUrl: string;
   readonly host: string;
@@ -119,7 +142,9 @@ export class HubServerNode extends NodeBase<HubServerSpec> {
             Stream.unwrap(
               Effect.gen(function* () {
                 if (payload.info.protocolVersion !== HUB_PROTOCOL_VERSION) {
-                  return yield* new HubRejection({ reason: "rejected" });
+                  return yield* new HubRejection({
+                    reason: protocolMismatch(payload.info.protocolVersion),
+                  });
                 }
 
                 const attachmentId = crypto.randomUUID();

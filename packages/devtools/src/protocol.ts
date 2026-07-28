@@ -22,7 +22,7 @@ import { Rpc, RpcGroup } from "effect/unstable/rpc";
  * emitting", which is the most expensive way this can fail. Refusing the
  * attachment outright says the same thing immediately and in words.
  */
-export const HUB_PROTOCOL_VERSION = 2;
+export const HUB_PROTOCOL_VERSION = 3;
 
 /**
  * Unregistered, and chosen for the band rather than the number.
@@ -135,7 +135,9 @@ export type AttachmentInfo = typeof AttachmentInfo.Type;
  *
  * `fields` holds JSON-safe shape descriptors, not live values — encoding
  * happens at observe time, because a `RuntimeEventRecord` carries live
- * references that keep mutating after the record is handed out.
+ * references that keep mutating after the record is handed out. What a
+ * descriptor looks like at each policy is documented once, on `describe` in
+ * `encode.ts`; nothing on this side should restate it and drift.
  */
 export const EncodedEventRecord = Schema.Struct({
   sequence: Schema.Number,
@@ -182,14 +184,24 @@ export type EncodedEventRecord = typeof EncodedEventRecord.Type;
  * `Unknown`, because what it holds depends on the negotiated policy. Giving
  * `NodeStatus`, `NodeOperation` and the rest real schemas here would copy core's
  * type surface into the wire contract and guarantee the two drift apart.
+ *
+ * Every field here has to earn its place in *every row* of a graph read, which
+ * is why core's `label` and `key` are not among them: `label` is a formatting of
+ * `tag` and `key` is already inside `nodeId`, so both are the same fact charged
+ * twice, a few hundred times per snapshot.
  */
 export const EncodedNodeSnapshot = Schema.Struct({
   nodeId: Schema.String,
   /** The spec's tag, e.g. `"orders"`. Shared by every key; `nodeId` is the identity. */
   tag: Schema.String,
+  /**
+   * `"node"` or `"resource"` — the one identity field nothing else here implies.
+   *
+   * It says whether this row owns a release: a resource holds something the app
+   * has to give back, and a reader deciding what a leak looks like cannot get
+   * that from `tag` or `nodeId`.
+   */
   kind: Schema.String,
-  label: Schema.String,
-  key: Schema.String,
   /**
    * Which arm of core's `NodeSnapshot` this is: `Unwired`, `Idle`, `Pending`,
    * `Ready`, `ReadinessError`, `Releasing`, `Invalid`.
@@ -350,8 +362,16 @@ export type HubCommand = typeof HubCommand.Type;
 /**
  * The hub refused the attachment.
  *
- * Deliberately carries a reason and nothing else: a rejected caller learns that
- * it was rejected, not which of the version or the payload was wrong.
+ * `reason` is prose for a terminal, not a code to branch on. It is the last
+ * thing said on a connection that is about to close, and the symptom on the
+ * other end — devtools that quietly never appear — carries no information at
+ * all, so the string has to carry the diagnosis and the next step instead. The
+ * hub's version mismatch names both versions and which side to upgrade.
+ *
+ * Specific on purpose, where a rejection elsewhere would be deliberately vague:
+ * there is no authentication on this call (see `Attach`), so an uninvited
+ * caller learns nothing here it could not learn by dialing and observing, and
+ * vagueness would cost only the developer who is actually trying to attach.
  */
 export class HubRejection extends Schema.TaggedErrorClass<HubRejection>("HubRejection")(
   "HubRejection",
