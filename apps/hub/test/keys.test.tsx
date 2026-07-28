@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { PassThrough } from "node:stream";
 import { Args, createRuntime } from "@frondruntime/core";
-import type { AttachmentInfo } from "@frondruntime/devtools";
+import type { AttachmentInfo, HubCommand } from "@frondruntime/devtools";
 import { HUB_PROTOCOL_VERSION } from "@frondruntime/devtools";
 import { FrondProvider, useNode } from "@frondruntime/react";
-import { Effect } from "effect";
+import { Effect, Queue } from "effect";
 import { Box, render, Text } from "ink";
 import { observer } from "mobx-react-lite";
 import { type ReactNode, useState } from "react";
@@ -58,7 +58,11 @@ async function screen(): Promise<{
 
   for (const name of ["alpha", "beta", "gamma"]) {
     clock += 1;
-    await Effect.runPromise(attachments.attached(`att-${name}`, info(name), clock));
+    await Effect.runPromise(
+      Effect.flatMap(Queue.unbounded<HubCommand>(), (outbound) =>
+        attachments.attached(`att-${name}`, info(name), clock, outbound)
+      )
+    );
   }
 
   const stdin = new PassThrough() as unknown as NodeJS.ReadStream;

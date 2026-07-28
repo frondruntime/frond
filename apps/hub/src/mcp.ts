@@ -171,10 +171,18 @@ const ReadEvents = readOnly(
 const ReadWork = readOnly(
   Tool.make("frond_read_work", {
     description:
-      "Read every event belonging to one unit of runtime work, oldest first. A workId groups a whole acquire/refresh/action cascade, so this is the tool for 'what actually happened when that failed'.",
+      "Read every event belonging to one unit of runtime work, oldest first. A workId groups a whole acquire/refresh/action cascade, so this is the tool for 'what actually happened when that failed'. A long cascade pages like frond_read_events does: pass the returned nextSince back as since.",
     parameters: Schema.Struct({
       workId: Schema.Int,
       attachmentId: Schema.optionalKey(Schema.String),
+      /**
+       * Exclusive, and not optional in practice for a deep cascade. The response
+       * carries `nextSince` and `hasMore` like every other page here, so a
+       * caller that follows them has to have somewhere to put the cursor —
+       * without this the tail past `limit` is unreachable and a caller doing the
+       * documented thing re-reads the same page forever.
+       */
+      since: Schema.optionalKey(Schema.Int),
       limit: Schema.optionalKey(Schema.Int),
     }),
     success: EventPage,
@@ -267,7 +275,11 @@ export function mcpLayer(options: {
 
     frond_read_work: (params) =>
       Effect.map(resolve(attachments, selfInstanceId, params.attachmentId), ([view, ring]) =>
-        page(view, ring, { limit: clampLimit(params.limit), workId: params.workId })
+        page(view, ring, {
+          limit: clampLimit(params.limit),
+          workId: params.workId,
+          ...(params.since === undefined ? {} : { since: params.since }),
+        })
       ),
 
     frond_read_state: (params) =>

@@ -247,6 +247,38 @@ describe("dashboard tail", () => {
 
     expect(hub.dashboard().result.tail.map((row) => row.tag)).toEqual(["Before", "During"]);
   });
+
+  /**
+   * The freeze is of one attachment's tail, so moving the cursor has to take a
+   * new one. Otherwise the header names the attachment the cursor is on while
+   * the list below it shows the events of the attachment the cursor left, with
+   * nothing on screen to say the two disagree.
+   */
+  test("moving the cursor while paused freezes the tail it moved to", async () => {
+    const hub = await harness();
+
+    const alpha = await hub.attach("alpha");
+    const bravo = await hub.attach("bravo");
+
+    await hub.ingest(alpha, [record({ tag: "AlphaEvent" })]);
+    await hub.ingest(bravo, [record({ tag: "BravoEvent" })]);
+
+    await hub.dashboard().selectionChanged(alpha);
+    await hub.dashboard().pauseChanged(true);
+
+    expect(hub.dashboard().result.tail.map((row) => row.tag)).toEqual(["AlphaEvent"]);
+
+    await hub.dashboard().selectionChanged(bravo);
+
+    expect(hub.dashboard().result.selected?.attachmentId).toBe(bravo);
+    expect(hub.dashboard().result.tail.map((row) => row.tag)).toEqual(["BravoEvent"]);
+    // Still paused: moving the cursor re-snapshots, it does not resume.
+    expect(hub.dashboard().result.paused).toBe(true);
+
+    await hub.ingest(bravo, [record({ tag: "AfterPause" })]);
+
+    expect(hub.dashboard().result.tail.map((row) => row.tag)).toEqual(["BravoEvent"]);
+  });
 });
 
 describe("dashboard filter", () => {

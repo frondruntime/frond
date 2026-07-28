@@ -184,8 +184,17 @@ export class DashboardNode extends NodeBase<DashboardSpec> {
     }),
     actions: {
       selectionChanged: Driver.Action((ctx, input) => {
+        const { state, selectedOf } = internalOf(ctx.node.result);
+
         runInAction(() => {
-          internalOf(ctx.node.result).state.selectedId = input.attachmentId;
+          state.selectedId = input.attachmentId;
+          // Re-snapshot, because the freeze is of one attachment's tail and the
+          // cursor just moved to another. Keeping the old one would put the new
+          // attachment's name in the header above the old attachment's events,
+          // with nothing on screen to say the two disagree.
+          if (state.paused) {
+            state.frozenTail = selectedOf()?.tail ?? [];
+          }
         });
       }),
       pauseChanged: Driver.Action((ctx, input) => {

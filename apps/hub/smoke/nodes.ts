@@ -269,16 +269,16 @@ class Position {
 function buildPayload(kind: PayloadKind): unknown {
   switch (kind) {
     case "deep": {
-      // Past FULL_MAX_DEPTH (8), so `full` has to elide too.
+      // Past FULL_MAX_DEPTH (24), so `full` has to elide too.
       let node: Record<string, unknown> = { leaf: "bottom", secret: "deep-secret-value" };
-      for (let level = 12; level > 0; level -= 1) {
+      for (let level = 30; level > 0; level -= 1) {
         node = { level, child: node };
       }
       return node;
     }
     case "wide": {
-      // Past FULL_MAX_ENTRIES (256).
-      return { rows: Array.from({ length: 400 }, (_, i) => ({ i, v: `row-${i}` })) };
+      // Past FULL_MAX_ENTRIES (4096).
+      return { rows: Array.from({ length: 5000 }, (_, i) => ({ i, v: `row-${i}` })) };
     }
     case "cyclic": {
       const root: Record<string, unknown> = { name: "root" };
@@ -305,8 +305,8 @@ function buildPayload(kind: PayloadKind): unknown {
       };
     }
     case "huge": {
-      // Past FULL_MAX_STRING_LENGTH (4096) and MAX_STRING_LENGTH (256).
-      return { blob: "x".repeat(6000), note: "short enough to survive" };
+      // Past FULL_MAX_STRING_LENGTH (65536) and MAX_STRING_LENGTH (256).
+      return { blob: "x".repeat(70_000), note: "short enough to survive" };
     }
   }
 }
