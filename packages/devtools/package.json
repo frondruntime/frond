@@ -57,7 +57,7 @@
     "test": "bun --conditions=source test"
   },
   "peerDependencies": {
-    "@frondruntime/core": "0.1.0",
+    "@frondruntime/core": "0.2.0",
     "effect": "^4.0.0-0"
   },
   "devDependencies": {
