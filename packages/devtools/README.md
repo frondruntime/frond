@@ -1,6 +1,6 @@
 # @frondruntime/devtools
 
-Client half of the Frond devtools hub. One call attaches a runtime's event stream to a local hub, where a coding agent can read it over MCP.
+Client half of the Frond devtools hub. One call attaches a runtime to a local hub, which streams its events in and can ask it what the graph looks like right now — both readable by a coding agent over MCP.
 
 ## Install
 
@@ -9,6 +9,8 @@ bun add -d @frondruntime/devtools
 ```
 
 A dev dependency, not a runtime one. The intended shape is a call that only exists in development builds — see [Guarding it](#guarding-it) below.
+
+An ordinary dual-entry ESM library: `.` for the attach client and `./node` for filesystem discovery, both shipped built, installable with any package manager and runnable on Node, Bun, a browser bundle, or React Native. The Bun requirement belongs to the hub daemon, not to this half — see [The hub](#the-hub).
 
 `@frondruntime/core` and `effect` are peers. There are no runtime dependencies.
 
@@ -24,21 +26,31 @@ That is the whole configuration surface for the common case. With no `url`, it d
 
 Attaching never throws and never rejects. If no hub is listening it retries quietly every two seconds, so the call is safe to make before the hub starts, after it stops, and across restarts of either side. Pass `onError` if you want to see why it is not connecting.
 
+"Forever" has one exception. A hub that *refuses* the attachment — today, only a protocol version mismatch — is answering a question about this build, and every retry would ask it again and get the same answer. So a refusal stops the loop and says so out loud, once, on the console. Supplying `onError` takes ownership of reporting it and silences that fallback. The alternative is what this used to do: redial every two seconds, silently, for the whole life of a process that was never going to attach.
+
 ## What gets sent
 
-Values are redacted by default. `attachDevtools` declares a **ceiling** and the hub asks for a policy; the lesser of the two wins, and the ceiling defaults to `"shape"`:
+The event stream, and — when the hub asks — a snapshot of the graph as it stands, which is what backs the hub's `frond_read_state` tool. Both go through the same encoder, so a node that is failing in a snapshot and the event that failed it read identically.
 
-| Policy    | What a value looks like on the wire            |
-| --------- | ---------------------------------------------- |
-| `"none"`  | Nothing but the field's presence               |
-| `"shape"` | Type, key names, lengths — no contents         |
-| `"full"`  | Contents, bounded by depth, size, and count    |
+Values in either are redacted by default. `attachDevtools` declares a **ceiling** and the hub asks for a policy; the lesser of the two wins, and the ceiling defaults to `"shape"`:
+
+| Policy    | What a value looks like on the wire                                                        |
+| --------- | ------------------------------------------------------------------------------------------ |
+| `"none"`  | The literal `"withheld"`, in place of every value                                            |
+| `"shape"` | A one-line descriptor: `{id,name,total}`, `Wired{_tag,run}`, `string[42]`, `Map(3)`           |
+| `"full"`  | The value itself, bounded by depth, string length, entry count, and per-record value count    |
 
 ```ts
 attachDevtools({ runtime, name: "my-app", values: "full" });
 ```
 
-Opt into `"full"` per app, deliberately. The runtimes worth debugging are the ones holding tokens and account state, and a default that ships values is a default that ships them the first time someone forgets.
+Opt into `"full"` per app, deliberately. The runtimes worth debugging are the ones holding tokens and account state, and a default that ships values is a default that ships them the first time someone forgets. The hub always asks for `"full"` — once for the event stream when the attachment is accepted, and again on every state read — so the ceiling is the only thing standing between a reader and the data. That is the intended arrangement rather than a gap in it: the decision to put real values on a socket belongs to the app that owns them, not to the tool reading them.
+
+`"none"` is its own encoder rather than a stricter `"shape"`, because a key list is itself a description of app data — an app that said it would send none should not be sending the key names of every node in a graph snapshot.
+
+At `"shape"` the descriptors are strings rather than JSON objects, because this feed is read by an agent through MCP and a node result rendered as forty lines of pretty-printed JSON that contain no data is worse than one rendered as `{id,name}`. Numbers, booleans, and strings up to 256 characters still cross verbatim: in a runtime event those are ids, tags, timestamps, and flags, which is the entire signal. Anything structured is a descriptor, because a node result or an action input is always an object or an array. A class instance gives up only its type — `AccountModel{?}` — and `_tag` is the one nested field that survives, since a failure feed that says `{_tag,nodeId}` instead of `GraphNodeAcquireFailed` is not worth reading.
+
+Every bound at `"full"` announces itself in the output: `{"_": "elided", "by": "depth"}` — or `"budget"`, or `"entries"` — where the walk stopped, and a `{"_": "string"}` descriptor carrying `length` and `head` where a string was cut. A cap a reader cannot see is worse than a low one, because it turns "there was more" into "that was all". Markers stay objects under a `_` key at this policy, where the values around them are real data and a marker has to remain distinguishable from one.
 
 ### Failures
 
@@ -96,7 +108,15 @@ const lock = readHubLock(); // undefined when no hub is running
 
 ## The hub
 
-The other half is `frond-hub`, a local daemon that holds the event history and serves it over MCP. It is not published yet; it lives in this repository under `apps/hub`.
+The other half is `@frondruntime/hub`, a local daemon that holds the event history, asks attached apps for graph snapshots, and serves both to a coding agent over MCP:
+
+```sh
+bunx @frondruntime/hub
+```
+
+That daemon ships as TypeScript source and renders with Ink, so it needs Bun — `npx` cannot run it. Nothing about that reaches this package: the attach client is built ESM and runs wherever the app does. See its [README](../../apps/hub/README.md).
+
+The two halves must agree on `HUB_PROTOCOL_VERSION` exactly, with no capability negotiation, because a partial mismatch presents as "the runtime stopped emitting" rather than as an error. A hub that sees a version it does not recognize refuses the attachment in one line naming both numbers and which side is behind, and this side stops retrying and prints it.
 
 ## AI use
 

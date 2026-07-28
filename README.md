@@ -13,6 +13,8 @@ Frond gives frontend code an explicit runtime graph: keyed node identity, depend
 
 - `@frondruntime/core` - runtime, node authoring, drivers, lifecycle, diagnostics, signals, testing harness.
 - `@frondruntime/react` - React provider, hooks, Suspense/ErrorBoundary projection, React testing helper.
+- `@frondruntime/devtools` - one call from an app to stream its graph and events to a local hub.
+- `@frondruntime/hub` - the `frond-hub` daemon: a terminal dashboard, and an MCP server so a coding agent can read the running graph.
 
 ## Install
 
@@ -67,10 +69,28 @@ const ProfilePanel = observer(({ userId }: { userId: string }) => {
 });
 ```
 
+## Devtools
+
+Run the hub, then point an app at it:
+
+```sh
+bunx @frondruntime/hub
+```
+
+```ts
+import { attachDevtools } from "@frondruntime/devtools";
+
+attachDevtools({ runtime, name: "my-app" });
+```
+
+The hub is a terminal dashboard over the live graph and an MCP server on the same port, so a coding agent can read what the app is actually doing instead of guessing from source. By default results are described rather than sent - the app declares the ceiling, and the hub cannot raise it. See [`packages/devtools`](./packages/devtools/README.md) and [`apps/hub`](./apps/hub/README.md).
+
 ## Repository Layout
 
 - `packages/core` - `@frondruntime/core`.
 - `packages/react` - `@frondruntime/react`.
+- `packages/devtools` - `@frondruntime/devtools`.
+- `apps/hub` - `@frondruntime/hub`.
 - `.biome/plugins` - local Biome Grit rules.
 - `.agents/skills` - repo-local agent workflows.
 

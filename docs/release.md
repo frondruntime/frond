@@ -1,12 +1,14 @@
 # Release Checklist
 
-Use this checklist before publishing `@frondruntime/core` and `@frondruntime/react`.
+Use this checklist before publishing `@frondruntime/core`, `@frondruntime/react`, `@frondruntime/devtools`, and `@frondruntime/hub`.
 
 ## Policy
 
 - Publish only from `master` after CI is green.
-- Keep `@frondruntime/core` and `@frondruntime/react` on the same version unless a release explicitly documents why only one package changes.
-- Keep `packages/react/package.json` peer dependency on `@frondruntime/core` aligned to the release version.
+- Keep all four packages on the same version unless a release explicitly documents why only one package changes.
+- Keep every internal `@frondruntime/*` dependency and peer dependency pinned to the release version. `publish.ts` fails the run if any of them points at a version other than the one being published, and `workspace:*` never survives to the tarball because the pack step uses `npm pack`.
+- `@frondruntime/hub` ships as source under a `bun` shebang. `bunx @frondruntime/hub` works; `npx` does not, and there is no `dist` for it to assert on.
+- `HUB_PROTOCOL_VERSION` lives in `@frondruntime/devtools` and the hub imports it, so the two must be published together. A devtools release that leaves the hub's pin behind produces a hub that refuses every current app.
 - GitHub release PRs, tags, and Releases are managed by release-please. npm publish remains a local manual step.
 - Treat npm publish as irreversible. Do not automate publish or add npm tokens/trusted publishing until the release policy explicitly changes.
 - Treat public git tags as soft-irreversible. GitHub Releases and tags can be deleted or recreated, but consumers may already have fetched them.
@@ -24,7 +26,7 @@ The setup intentionally does not publish to npm. After release-please opens a re
 
 Do not run `bun run publish:npm` or `bun run publish:npm:dry-run` from GitHub Actions. The publish script is local-only because the final publish step is interactive and may require npm 2FA.
 
-`@frondruntime/core` and `@frondruntime/react` use linked versions. Release-please tracks both packages in `.release-please-manifest.json`, updates workspace peer dependencies through the `node-workspace` plugin, and emits component tags instead of one shared tag.
+All four packages use linked versions. Release-please tracks each of them in `.release-please-manifest.json`, updates workspace peer dependencies through the `node-workspace` plugin, and emits component tags instead of one shared tag. The hub additionally syncs `apps/hub/src/version.ts` through an `extra-files` entry, so `frond-hub --version` cannot drift from `package.json`.
 
 Use Conventional Commit subjects for release-driving commits:
 
@@ -58,7 +60,7 @@ Before a release PR merge or public npm publish, run the full local package rehe
 bun run publish:npm:dry-run
 ```
 
-The rehearsal must build, run `npm publish --dry-run` where possible, pack both packages, install the packed tarballs into a clean Bun consumer, typecheck with NodeNext, and run an ESM import smoke. The packed payloads must include `dist`, `src`, `README.md`, and `package.json` for each package. They must not include `node_modules`, test output, local tarballs, or generated workspace artifacts outside the package payload.
+The rehearsal must build, run `npm publish --dry-run` where possible, pack all four packages, install the packed tarballs into a clean Bun consumer, typecheck with NodeNext, and run an ESM import smoke. It also asserts that the packages pack in dependency order, that internal version pins agree, that declared `bin` entries survive the pack, and that `frond-hub --version` runs through the installed `.bin` shebang. The packed payloads must include `src`, `README.md`, `package.json`, and — for everything but the hub — `dist`. They must not include `node_modules`, test output, local tarballs, or generated workspace artifacts outside the package payload.
 
 ## Versioning
 
@@ -76,4 +78,4 @@ After the GitHub Releases and tags exist, publish from a local interactive termi
 bun run publish:npm
 ```
 
-The script reruns verification and package smoke before publishing `@frondruntime/core`, then `@frondruntime/react`. npm may prompt for a one-time password for each package.
+The script reruns verification and package smoke before publishing `@frondruntime/core`, then `@frondruntime/react`, then `@frondruntime/devtools`, then `@frondruntime/hub`. That order is dependency order and is asserted, not conventional: each package's internal dependencies are already on the registry by the time it publishes. npm may prompt for a one-time password for each package.
