@@ -72,8 +72,9 @@ export function encodeGraphSnapshot(
     capturedAt: request.capturedAt,
     // Absent rather than zero on a runtime that has not emitted: zero is a real
     // position in a log, and claiming one this snapshot does not have would let
-    // a reader line it up against events that had not happened yet.
-    sequence: snapshot.events.at(-1)?.sequence,
+    // a reader line it up against events that had not happened yet. Through
+    // `absent` for the same reason everything else optional here is — see below.
+    ...absent("sequence", snapshot.events.at(-1)?.sequence, identity),
     runtimeId: snapshot.runtimeId,
     runtimeStatus: snapshot.status,
     graphStatus: snapshot.graph.status,
@@ -88,7 +89,39 @@ function encodeEdge(edge: Graph.EdgeSnapshot): EncodedGraphEdge {
   return { from: edge.from, to: edge.to, dependency: edge.dependency };
 }
 
+/**
+ * One node's worth of failure stays one node's worth.
+ *
+ * The value encoder guards its own walks, so reaching here should take something
+ * it does not model at all. But a graph read is the answer to "what is the app
+ * doing", and answering it with a single `Failed` because one row of three
+ * hundred could not be encoded trades a complete diagnosis for none. The
+ * identity fields are the runtime's own struct rather than app data, so a row
+ * that keeps them and drops everything else is still a row a reader can act on —
+ * and `status` naming the hole is what stops it reading as a healthy node.
+ */
 function encodeNode(
+  node: Graph.NodeSnapshot,
+  encoder: ValueEncoder,
+  includeResult: boolean
+): EncodedNodeSnapshot {
+  try {
+    return encodeNodeUnguarded(node, encoder, includeResult);
+  } catch {
+    return {
+      nodeId: node.nodeId,
+      tag: node.tag,
+      kind: node.kind,
+      state: node._tag,
+      revision: node.revision,
+      status: { _: "opaque", type: "unreadable" },
+      liveDemand: { _: "opaque", type: "unreadable" },
+      operation: { _: "opaque", type: "unreadable" },
+    };
+  }
+}
+
+function encodeNodeUnguarded(
   node: Graph.NodeSnapshot,
   encoder: ValueEncoder,
   includeResult: boolean

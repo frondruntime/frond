@@ -100,15 +100,22 @@ const FULL_CAUSE_STACK_LENGTH = 2048;
  * mistaken for a frame and dropped.
  */
 const V8_STACK_FRAME = /^\s*at\s\S/;
-const AT_STACK_FRAME = /@\S*:\d+:\d+\s*$/;
+// Anchored and whitespace-free on both sides of the `@`, because a JSC stack has
+// no header line to protect it: a message like `Cannot find module
+// /app/node_modules/x/index.js:1:1` ends the way a frame ends, and an unanchored
+// pattern would call line 0 a frame, leaving `header` empty and feeding the
+// message itself to the library filter.
+const AT_STACK_FRAME = /^\S*@\S*:\d+:\d+\s*$/;
 
 /**
  * Frames that belong to someone else's code.
  *
  * `node_modules` is the whole point; the rest are the same idea for code that
  * has no file in the tree at all — Node's builtins, Bun's, and native frames.
+ * Bun writes its own native frames as `at moduleEvaluation (native:1:11)` rather
+ * than in either of the parenthesized spellings, hence the bare `native:`.
  */
-const LIBRARY_STACK_FRAME = /node_modules|node:|bun:|\(native\)|\[native code]/;
+const LIBRARY_STACK_FRAME = /node_modules|node:|bun:|native:|\(native\)|\[native code]/;
 
 /**
  * A failure, as its chain of causes rather than as its outermost link.
@@ -318,18 +325,37 @@ function describeError(value: unknown, policy: EncodePolicy, full?: FullContext)
   });
 
   if (full === undefined) {
+    // `path` and `valueKind` are the two frame fields that describe the app's
+    // data rather than the runtime's: a path is a list of the app's own key
+    // names, and a value kind says whether what failed was an array or an
+    // object. Both are shape by any definition, so `"none"` — whose whole
+    // contract is that no shape crosses — drops them. The message still
+    // crosses at every policy; that is deliberate, and it is the one thing a
+    // reader cannot diagnose without.
+    const shed = policy === "none" ? { path: undefined, valueKind: undefined } : {};
+
     return {
       _: "error",
       message: rootMessage(frames),
-      causes: frames.map((frame) => compact({ ...frame, stack: undefined, preview: undefined })),
+      causes: frames.map((frame) =>
+        compact({ ...frame, ...shed, stack: undefined, preview: undefined })
+      ),
     };
   }
 
   // Every link joins the ancestor path for the duration, so a payload field
   // pointing back at an error already on the chain is a cycle rather than a
   // second trip through this function.
+  //
+  // Only what this call actually inserted comes back out. A link an enclosing
+  // frame is still standing on has to stay marked: an error reached through an
+  // app object whose payload points back at that object is the ordinary shape of
+  // a wrapped failure, and un-marking it there would let the walk descend into
+  // the ancestor instead of naming the cycle.
   const links = causeValues(value, frames.length);
-  const marked = links.filter((link): link is object => typeof link === "object" && link !== null);
+  const marked = links.filter(
+    (link): link is object => typeof link === "object" && link !== null && !full.seen.has(link)
+  );
 
   for (const link of marked) {
     full.seen.add(link);
@@ -391,13 +417,18 @@ function abridgeStack(stack: string): string {
   // Everything above the first frame is the error's own header, kept whole: it
   // is the name and message, which is the part a reader reads first.
   const header = lines.slice(0, first);
-  const frames = lines.slice(first).filter(isStackFrame);
+  // Counted against everything below the header, not just the lines the two
+  // patterns recognize. JSC writes frames this cannot parse — `promiseReactionJob@[native code]`
+  // has no `:line:col` — and dropping those out of the denominator would let the
+  // trace claim it accounted for what it removed while quietly removing more.
+  const body = lines.slice(first).filter((line) => line.trim() !== "");
+  const frames = body.filter(isStackFrame);
   const own = frames.filter((line) => !LIBRARY_STACK_FRAME.test(line));
   const kept = (own.length === 0 ? frames.slice(0, LIBRARY_ONLY_STACK_FRAMES) : own).slice(
     0,
     KEPT_STACK_FRAMES
   );
-  const dropped = frames.length - kept.length;
+  const dropped = body.length - kept.length;
 
   if (dropped === 0) {
     return [...header, ...kept].join("\n");
@@ -406,7 +437,7 @@ function abridgeStack(stack: string): string {
   return [
     ...header,
     ...kept,
-    `    … ${dropped} frame${dropped === 1 ? "" : "s"} dropped: library internals, and any past the first ${KEPT_STACK_FRAMES}`,
+    `    … ${dropped} frame${dropped === 1 ? "" : "s"} dropped: library internals, unrecognized lines, and any past the first ${KEPT_STACK_FRAMES}`,
   ].join("\n");
 }
 
@@ -634,7 +665,38 @@ function describe(value: unknown, depth: number): unknown {
   }
 }
 
+/**
+ * Reading a value can run the app's code, so reading it can throw.
+ *
+ * A getter that throws, a revoked `Proxy` — a finalized immer draft, a torn-down
+ * reactive scope — a prototype whose `constructor` is a throwing getter: every
+ * one of those turns `Object.keys` or an `instanceof` into an exception, and
+ * none of them is exotic in a frontend app.
+ *
+ * The consequence is what makes this worth guarding rather than letting throw.
+ * On the event path the encoder runs inside the app's own observer, and core
+ * routes an observer failure to sinks only — so the record would vanish without
+ * incrementing `dropped`, which is exactly the "did not happen" versus "was
+ * lost" distinction the protocol exists to preserve. On the snapshot path one
+ * unreadable node would fail the whole graph read and leave a reader with
+ * nothing instead of with 299 good rows and one marked hole.
+ *
+ * `{_: "opaque"}` is the honest answer: there is something here, and this
+ * encoder could not look at it. The thrown error's own message is not carried —
+ * it comes from app code, and a `"shape"` read that let one through would be a
+ * hole in the policy rather than a diagnostic.
+ */
+const UNREADABLE = { _: "opaque", type: "unreadable" } satisfies ShapeDescriptor;
+
 function describeStructure(value: object, depth: number): unknown {
+  try {
+    return describeStructureUnguarded(value, depth);
+  } catch {
+    return UNREADABLE;
+  }
+}
+
+function describeStructureUnguarded(value: object, depth: number): unknown {
   // Before the depth check: a failure nested past the limit is still the reason
   // the event exists, and "an object, elided" is not worth the bytes it saves.
   if (value instanceof Error) {
@@ -771,6 +833,21 @@ function describeFull(value: unknown, depth: number, seen: Set<object>, budget: 
 }
 
 function describeFullStructure(
+  value: object,
+  depth: number,
+  seen: Set<object>,
+  budget: Budget
+): unknown {
+  try {
+    return describeFullStructureUnguarded(value, depth, seen, budget);
+  } catch {
+    // See {@link UNREADABLE}. The `seen` set is left as this call found it: the
+    // one place that adds to it deletes in a `finally`.
+    return UNREADABLE;
+  }
+}
+
+function describeFullStructureUnguarded(
   value: object,
   depth: number,
   seen: Set<object>,

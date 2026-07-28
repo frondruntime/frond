@@ -292,7 +292,9 @@ describe("encodeGraphSnapshot", () => {
    * would let a reader line it up against events that had not happened yet.
    */
   test("a runtime that has emitted nothing reports no sequence at all", () => {
-    expect(encode(snapshotOf({ nodes: [] }), "full").sequence).toBeUndefined();
+    // `not.toHaveProperty`, not `toBeUndefined`: the latter passes for a key
+    // that is present and holds `undefined`, which is the exact mistake here.
+    expect(encode(snapshotOf({ nodes: [] }), "full")).not.toHaveProperty("sequence");
   });
 
   test("the sequence is the last event the runtime had emitted", () => {

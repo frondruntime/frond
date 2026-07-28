@@ -195,11 +195,17 @@ export const EncodedNodeSnapshot = Schema.Struct({
   /** The spec's tag, e.g. `"orders"`. Shared by every key; `nodeId` is the identity. */
   tag: Schema.String,
   /**
-   * `"node"` or `"resource"` — the one identity field nothing else here implies.
+   * `"node"`, `"service"`, `"resource"` or `"facade"` — the one identity field
+   * nothing else here implies.
    *
    * It says whether this row owns a release: a resource holds something the app
    * has to give back, and a reader deciding what a leak looks like cannot get
    * that from `tag` or `nodeId`.
+   *
+   * Carried as a string rather than a literal union so a hub can read an app
+   * built against a core that has since grown a kind. Version equality already
+   * gates the wire; making this field the second thing that can reject a
+   * snapshot would buy nothing.
    */
   kind: Schema.String,
   /**

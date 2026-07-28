@@ -268,6 +268,100 @@ describe("the none policy", () => {
       expect(frame).not.toHaveProperty("fields");
     }
   });
+
+  /**
+   * `path` is the frame field that is app data wearing a runtime name — it is a
+   * list of the app's own key names, which is a shape description by any
+   * definition, under the one policy that promises no shape crosses. `valueKind`
+   * is the smaller version of the same thing.
+   */
+  test("none withholds the key names a failure walked through", () => {
+    const failure = Object.assign(new Error("validation failed"), {
+      _tag: "Denied",
+      path: ["order", "items", 0, "sku"],
+      valueKind: "object",
+    });
+
+    const none = createValueEncoder("none").failure(failure) as Record<string, unknown>;
+    const shape = createValueEncoder("shape").failure(failure) as Record<string, unknown>;
+    const frameOf = (encoded: Record<string, unknown>) =>
+      (encoded["causes"] as ReadonlyArray<Record<string, unknown>>)[0];
+
+    expect(frameOf(none)).not.toHaveProperty("path");
+    expect(frameOf(none)).not.toHaveProperty("valueKind");
+    // Still named, still tagged: what `"none"` withholds is the app's data, not
+    // the fact that something failed.
+    expect(frameOf(none)?.["tag"]).toBe("Denied");
+
+    // And `"shape"` is where a path is exactly what a reader wants.
+    expect(frameOf(shape)?.["path"]).toEqual(["order", "items", "0", "sku"]);
+  });
+});
+
+/**
+ * Reading a value runs the app's code, so reading it can throw. None of these is
+ * exotic: a computed getter that raises, a finalized immer draft, a torn-down
+ * reactive scope. The encoder runs inside the app's own observer, where a throw
+ * makes the record disappear without incrementing `dropped` — so "opaque" is the
+ * only answer that keeps the feed honest.
+ */
+describe("values that fight back", () => {
+  const cases: ReadonlyArray<readonly [string, () => object]> = [
+    [
+      "a getter that throws",
+      () => ({
+        get computed(): never {
+          throw new Error("nope");
+        },
+      }),
+    ],
+    [
+      "a revoked proxy",
+      () => {
+        const { proxy, revoke } = Proxy.revocable({ a: 1 }, {});
+        revoke();
+        return { held: proxy };
+      },
+    ],
+    [
+      "a prototype whose constructor throws",
+      () =>
+        Object.create(
+          Object.create(Object.prototype, {
+            constructor: {
+              get(): never {
+                throw new Error("nope");
+              },
+            },
+          })
+        ) as object,
+    ],
+  ];
+
+  for (const [what, build] of cases) {
+    test(`${what} is opaque rather than fatal, at every policy`, () => {
+      for (const policy of ["none", "shape", "full"] as const) {
+        const encoder = createValueEncoder(policy);
+
+        expect(() => JSON.stringify(encoder.value(build()))).not.toThrow();
+      }
+    });
+  }
+
+  test("only the unreadable part goes opaque; its siblings survive", () => {
+    const { proxy, revoke } = Proxy.revocable({ a: 1 }, {});
+    revoke();
+
+    const encoded = createValueEncoder("full").value({
+      before: "kept",
+      bad: proxy,
+      after: "also kept",
+    }) as Record<string, unknown>;
+
+    expect(encoded["before"]).toBe("kept");
+    expect(encoded["after"]).toBe("also kept");
+    expect(encoded["bad"]).toEqual({ _: "opaque", type: "unreadable" });
+  });
 });
 
 /**
@@ -359,6 +453,61 @@ describe("stack abridging", () => {
 
     expect(stack.split("\n").filter((line) => line.includes("node_modules"))).toHaveLength(2);
     expect(stack).toContain("4 frames dropped");
+  });
+
+  /**
+   * The header is "everything above the first frame", and a message can look
+   * like a frame. A module-resolution error is the ordinary case: its message
+   * carries a `node_modules` path ending in `:line:col`, which is how a JSC
+   * frame ends. Read as a frame, it left the header empty and then handed the
+   * message itself to the library filter, which dropped it.
+   */
+  test("a message that ends like a frame is still a header", () => {
+    const error = new Error("boom");
+
+    error.stack = [
+      "Error: Cannot find module /app/node_modules/@scope/pkg/index.js:1:1",
+      "    at load (/app/src/boot.ts:4:2)",
+      "    at run (/app/node_modules/effect/dist/x.js:1:1)",
+    ].join("\n");
+
+    const stack = stackOf(error);
+
+    expect(stack).toContain("Cannot find module");
+    expect(stack).toContain("at load (/app/src/boot.ts:4:2)");
+    expect(stack).toContain("1 frame dropped");
+  });
+
+  /**
+   * Bun writes its own native frames as `native:1:11`, which neither
+   * parenthesized spelling matches. Left unrecognized they read as app frames
+   * and spend the 15-frame allowance on the module loader.
+   */
+  test("bun's native frames count as library frames", () => {
+    const stack = stackOf(
+      stacked([
+        "    at open (/app/src/db.ts:8:3)",
+        "    at moduleEvaluation (native:1:11)",
+        "    at asyncModuleEvaluation (native:2)",
+      ])
+    );
+
+    expect(stack).toContain("at open (/app/src/db.ts:8:3)");
+    expect(stack).not.toContain("native:");
+    expect(stack).toContain("2 frames dropped");
+  });
+
+  /**
+   * JSC writes frames this cannot parse — `promiseReactionJob@[native code]`
+   * has no `:line:col`. Leaving them out of the count would let the trace claim
+   * it accounted for what it removed while quietly removing more.
+   */
+  test("lines it cannot parse are still counted as dropped", () => {
+    const stack = stackOf(
+      stacked(["    at open (/app/src/db.ts:8:3)", "promiseReactionJob@[native code]"])
+    );
+
+    expect(stack).toContain("1 frame dropped");
   });
 
   /** Not a stack this can reason about, so it does not pretend to. */
@@ -483,6 +632,37 @@ describe("failure encoding", () => {
     const frames = encoded["causes"] as ReadonlyArray<Record<string, unknown>>;
 
     expect(frames[0]?.["fields"]).toEqual({ self: { _: "cycle" } });
+  });
+
+  /**
+   * The other direction, and the harder one: an app object that holds an error
+   * whose `cause` points back at that object. Frond wraps failures with `cause`
+   * pointing at app values, and app values with parent pointers — a store root,
+   * an ORM relation — are the common case rather than the exotic one.
+   *
+   * The failure this guards is subtle. Describing the error puts its whole chain
+   * on the ancestor path, and clearing that path on the way out used to clear the
+   * *enclosing* walk's marks too. The object was then no longer an ancestor as
+   * far as the walk was concerned, so every later reference to it re-expanded
+   * instead of being named — turning a ~150-byte answer into megabytes stopped
+   * only by the node budget, computed synchronously on the app's own fiber.
+   */
+  test("full still names a cycle through a value the failure points back at", () => {
+    const root: Record<string, unknown> = { name: "root" };
+    const failure = new Error("boom");
+
+    failure.cause = root;
+    root["failure"] = failure;
+    root["againA"] = root;
+    root["againB"] = root;
+
+    const encoded = createValueEncoder("full").value(root) as Record<string, unknown>;
+
+    expect(encoded["againA"]).toEqual({ _: "cycle" });
+    expect(encoded["againB"]).toEqual({ _: "cycle" });
+    // And the whole thing stays small, which is the property that actually
+    // matters to an app being observed.
+    expect(JSON.stringify(encoded).length).toBeLessThan(2_000);
   });
 
   /**
