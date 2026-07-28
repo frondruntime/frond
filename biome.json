@@ -28,6 +28,9 @@
     "enabled": true,
     "rules": {
       "recommended": true,
+      "complexity": {
+        "useLiteralKeys": "off"
+      },
       "correctness": {
         "noUndeclaredDependencies": "error"
       },

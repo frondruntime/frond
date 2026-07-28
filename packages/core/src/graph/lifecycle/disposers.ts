@@ -145,7 +145,12 @@ function runDisposer(
   }).pipe(
     Effect.flatMap((pending) =>
       pending === undefined
-        ? Effect.succeed<DisposerFailed | undefined>(undefined)
+        ? // Not `Effect.void`, which the diagnostic suggests: this branch has to
+          // widen to the same `DisposerFailed | undefined` the other branch
+          // yields, and `void` is not assignable to `undefined`. Taking the
+          // suggestion fails the build on this function's return type.
+          // @effect-diagnostics-next-line effectSucceedWithVoid:off
+          Effect.succeed<DisposerFailed | undefined>(undefined)
         : awaitBoundedDisposer(cell, pending, timeout)
     ),
     Effect.catch((failure) => Effect.succeed(failure))

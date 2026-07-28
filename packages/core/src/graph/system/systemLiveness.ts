@@ -165,25 +165,23 @@ function notifyLiveResult(
   observers: GraphSystemObservers,
   result: NodeLiveLeaseResult
 ): Effect.Effect<void> {
-  return Effect.gen(function* () {
-    yield* Match.value(result).pipe(
-      Match.tag("Held", (held) =>
-        Effect.gen(function* () {
-          if (held.changed) {
-            yield* observers.notifyLiveDemandChanged(held.nodeId, held.liveDemand);
-          }
-          if (held.failures.length > 0) {
-            yield* observers.notifyLiveFailures(held.nodeId, held.failures);
-          }
-        })
-      ),
-      Match.tag("Failed", (failed) =>
-        failed.failures.length > 0
-          ? observers.notifyLiveFailures(failed.nodeId, failed.failures)
-          : Effect.void
-      ),
-      Match.tag("NodeMissing", () => Effect.void),
-      Match.exhaustive
-    );
-  });
+  return Match.value(result).pipe(
+    Match.tag("Held", (held) =>
+      Effect.gen(function* () {
+        if (held.changed) {
+          yield* observers.notifyLiveDemandChanged(held.nodeId, held.liveDemand);
+        }
+        if (held.failures.length > 0) {
+          yield* observers.notifyLiveFailures(held.nodeId, held.failures);
+        }
+      })
+    ),
+    Match.tag("Failed", (failed) =>
+      failed.failures.length > 0
+        ? observers.notifyLiveFailures(failed.nodeId, failed.failures)
+        : Effect.void
+    ),
+    Match.tag("NodeMissing", () => Effect.void),
+    Match.exhaustive
+  );
 }
