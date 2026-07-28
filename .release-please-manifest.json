@@ -1,6 +1,6 @@
 {
-  "packages/core": "0.2.0",
-  "packages/react": "0.2.0",
-  "packages/devtools": "0.2.0",
-  "apps/hub": "0.2.0"
+  "packages/core": "0.3.0",
+  "packages/react": "0.3.0",
+  "packages/devtools": "0.3.0",
+  "apps/hub": "0.3.0"
 }
