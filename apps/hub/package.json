@@ -1,6 +1,6 @@
 {
   "name": "@frondruntime/hub",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Frond devtools hub: a local daemon that attached runtimes stream to.",
   "license": "MIT",
   "private": false,
@@ -46,9 +46,9 @@
   },
   "dependencies": {
     "@effect/platform-bun": "4.0.0-beta.90",
-    "@frondruntime/core": "0.2.0",
-    "@frondruntime/devtools": "0.2.0",
-    "@frondruntime/react": "0.2.0",
+    "@frondruntime/core": "0.3.0",
+    "@frondruntime/devtools": "0.3.0",
+    "@frondruntime/react": "0.3.0",
     "@pppp606/ink-chart": "0.2.7",
     "effect": "4.0.0-beta.90",
     "ink": "7.1.1",

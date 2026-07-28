@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/frondruntime/frond/compare/core-v0.2.0...core-v0.3.0) (2026-07-28)
+
+
+### Miscellaneous Chores
+
+* **core:** Synchronize frondruntime versions
+
 ## [0.2.0](https://github.com/frondruntime/frond/compare/core-v0.1.0...core-v0.2.0) (2026-07-27)
 
 

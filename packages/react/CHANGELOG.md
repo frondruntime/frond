@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.0](https://github.com/frondruntime/frond/compare/react-v0.2.0...react-v0.3.0) (2026-07-28)
+
+
+### Miscellaneous Chores
+
+* **react:** Synchronize frondruntime versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @frondruntime/core bumped to 0.3.0
+  * peerDependencies
+    * @frondruntime/core bumped from 0.2.0 to 0.3.0
+
 ## [0.2.0](https://github.com/frondruntime/frond/compare/react-v0.1.0...react-v0.2.0) (2026-07-27)
 
 
