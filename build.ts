@@ -1,5 +1,5 @@
-import { rm } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { mkdir, rm, symlink } from "node:fs/promises";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   ConsoleMessageId,
@@ -281,6 +281,51 @@ function rollupDeclarations(input: PackageBuildInput): Effect.Effect<void, Build
   });
 }
 
+/**
+ * Links a package into its own `node_modules` under its published name.
+ *
+ * api-extractor calls a symbol external when the nearest package.json above the
+ * file it came from is not the package being rolled up. Core's `src/testing/*`
+ * reach the main entry by package name, and both Node and TypeScript resolve
+ * that self-reference through the `exports` field with no dependency entry at
+ * all — straight to `dist/index.d.ts`, a path *inside* the package being rolled
+ * up. So api-extractor reads every core type as local and inlines a second copy
+ * of the entire runtime into `dist/testing/index.d.ts`; a consumer that imports
+ * both entry points then holds two unrelated `Runtime` types and cannot pass a
+ * harness runtime to anything that wants the package one.
+ *
+ * Resolving the same specifier through `node_modules` puts a different
+ * package.json nearest, which is the whole of what keeps the import an import.
+ * Bun materialised this link as a side effect of the self-referential
+ * devDependency that #14 removed, and left it behind — so every tree installed
+ * before that kept building correctly and the regression was invisible in all
+ * of them, including the one #14 was verified in. A fresh clone has nothing to
+ * leave behind, so the build has to make it itself.
+ *
+ * Unconditional rather than core-only: the trap is that the failure is silent,
+ * and the next package to reach its own entry by name should not have to
+ * rediscover it.
+ */
+function linkSelf(input: PackageBuildInput): Effect.Effect<void, BuildFailure> {
+  const scopeDir = join(input.packageDir, "node_modules", dirname(input.packageName));
+  const linkPath = join(input.packageDir, "node_modules", input.packageName);
+
+  return Effect.tryPromise({
+    try: async () => {
+      await mkdir(scopeDir, { recursive: true });
+      await rm(linkPath, { force: true });
+      await symlink(relative(scopeDir, input.packageDir), linkPath, "dir");
+    },
+    catch: (cause) =>
+      fail(
+        input,
+        "self link",
+        `Could not link ${input.packageName} into its own node_modules.`,
+        cause
+      ),
+  });
+}
+
 function buildPackage(input: PackageBuildInput): Effect.Effect<void, BuildFailure> {
   const cleanupTypes = removePath(input, "dist-types").pipe(Effect.catch(() => Effect.void));
 
@@ -289,6 +334,8 @@ function buildPackage(input: PackageBuildInput): Effect.Effect<void, BuildFailur
       concurrency: 2,
       discard: true,
     });
+
+    yield* linkSelf(input);
 
     yield* Effect.all(
       [
