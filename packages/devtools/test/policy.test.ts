@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { resolvePolicy } from "../src/encode.ts";
+import { resolvePolicy } from "../src/policy.ts";
 import type { ValuePolicy } from "../src/protocol.ts";
 
 const POLICIES: ReadonlyArray<ValuePolicy> = ["none", "shape", "full"];

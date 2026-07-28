@@ -9,6 +9,17 @@ import { DashboardNode } from "../nodes/dashboard.ts";
 import type { HubConfigArgs } from "../nodes/hubConfig.ts";
 import { HubServerNode } from "../nodes/hubServer.ts";
 import { advanceRate, RATE_BUCKET_MS } from "../rate.ts";
+import {
+  clip,
+  clock,
+  count,
+  downsample,
+  pad,
+  padStart,
+  severityColor,
+  timelineColor,
+  tint,
+} from "./format.ts";
 import { useDashboardKeys } from "./keys.ts";
 
 export type HubAppProps = {
@@ -271,85 +282,4 @@ function useWallClock(): number {
   }, []);
 
   return now;
-}
-
-/**
- * Reduces `buckets` to `width` columns by taking the peak of each group.
- *
- * Averaging would be the other option and is the wrong one here: a burst of two
- * thousand events in one second, averaged across three, becomes a bump.
- */
-function downsample(buckets: ReadonlyArray<number>, width: number): Array<number> {
-  if (buckets.length <= width) {
-    return [...buckets];
-  }
-
-  const out = new Array<number>(width).fill(0);
-
-  for (let index = 0; index < buckets.length; index += 1) {
-    const slot = Math.min(width - 1, Math.floor((index / buckets.length) * width));
-
-    out[slot] = Math.max(out[slot] ?? 0, buckets[index] ?? 0);
-  }
-
-  return out;
-}
-
-/**
- * Spreads a colour prop, or nothing at all.
- *
- * `exactOptionalPropertyTypes` is on, so `color={undefined}` is a type error
- * rather than "leave it alone"; omitting the key is how you say default.
- */
-function tint(color: string | undefined): { readonly color?: string } {
-  return color === undefined ? {} : { color };
-}
-
-function timelineColor(timeline: EncodedEventRecord["timeline"]): string | undefined {
-  switch (timeline) {
-    case "work":
-      return "magenta";
-    case "state":
-      return "blue";
-    case "system":
-      return "gray";
-    default:
-      return undefined;
-  }
-}
-
-function severityColor(severity: EncodedEventRecord["severity"]): string | undefined {
-  switch (severity) {
-    case "error":
-      return "red";
-    case "warning":
-      return "yellow";
-    default:
-      return undefined;
-  }
-}
-
-function clock(at: number): string {
-  const date = new Date(at);
-  const pair = (value: number): string => String(value).padStart(2, "0");
-
-  return `${pair(date.getHours())}:${pair(date.getMinutes())}:${pair(date.getSeconds())}.${String(
-    date.getMilliseconds()
-  ).padStart(3, "0")}`;
-}
-
-function count(value: number): string {
-  return value.toLocaleString("en-US");
-}
-
-function clip(value: string, width: number): string {
-  return value.length > width ? `${value.slice(0, Math.max(0, width - 1))}…` : value;
-}
-
-function pad(value: string, width: number): string {
-  return value.length >= width ? `${value.slice(0, width - 2)}… ` : value.padEnd(width, " ");
-}
-
-function padStart(value: string, width: number): string {
-  return value.padStart(width, " ");
 }

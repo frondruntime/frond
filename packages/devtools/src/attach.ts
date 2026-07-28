@@ -2,7 +2,8 @@ import type { Runtime } from "@frondruntime/core";
 import { Clock, Effect, Layer, Stream } from "effect";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import { Socket } from "effect/unstable/socket";
-import { type EncodePolicy, encodeRecord, resolvePolicy } from "./encode.ts";
+import { encodeRecord } from "./encode.ts";
+import { type EncodePolicy, resolvePolicy } from "./policy.ts";
 import {
   type AttachmentInfo,
   type EncodedEventRecord,

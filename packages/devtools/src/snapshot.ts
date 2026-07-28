@@ -1,5 +1,6 @@
 import type { Graph, Runtime } from "@frondruntime/core";
-import { createValueEncoder, type EncodePolicy, type ValueEncoder } from "./encode.ts";
+import { createValueEncoder, type ValueEncoder } from "./encode.ts";
+import type { EncodePolicy } from "./policy.ts";
 import type { EncodedGraphEdge, EncodedNodeSnapshot, GraphSnapshot } from "./protocol.ts";
 
 /**

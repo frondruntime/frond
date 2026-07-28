@@ -1,29 +1,20 @@
-import {
-  EncodedEventRecord,
-  GraphSnapshot,
-  type StateQuery,
-  ValuePolicy,
-} from "@frondruntime/devtools";
+import { GraphSnapshot, type StateQuery, ValuePolicy } from "@frondruntime/devtools";
 import { Effect, Layer, Schema } from "effect";
 import { type McpSchema, McpServer, Tool, Toolkit } from "effect/unstable/ai";
 import type { HttpRouter } from "effect/unstable/http";
-import type { AttachmentsNode, AttachmentView } from "./nodes/attachments.ts";
-import type { EventRing } from "./retention.ts";
+import {
+  clampLimit,
+  EventPage,
+  McpReadError,
+  page,
+  RuntimeSummary,
+  resolve,
+  rows,
+  summarize,
+} from "./mcpReads.ts";
+import type { AttachmentsNode } from "./nodes/attachments.ts";
 
 export const MCP_PATH = "/mcp";
-
-/**
- * Ceiling on records returned by one read.
- *
- * The limiting resource is the caller's context window, not the hub's memory:
- * with `"full"` values a single graph event can run to kilobytes, so a
- * thousand-record answer is not a large response, it is an unusable one. The
- * reader pages with `since` instead, which is also how it stays correct while
- * the app keeps running.
- */
-const MAX_LIMIT = 200;
-
-const DEFAULT_LIMIT = 50;
 
 /**
  * What a state read asks for when the caller does not say.
@@ -34,85 +25,6 @@ const DEFAULT_LIMIT = 50;
  * ceiling, and the snapshot reports which policy actually applied.
  */
 const DEFAULT_VALUES: typeof ValuePolicy.Type = "full";
-
-/**
- * Reported by every read, alongside the records.
- *
- * Two independent gap counters, because they mean different things and an agent
- * that conflates them will draw the wrong conclusion. `droppedBySender` is
- * events the attached app could not buffer — they never reached the hub.
- * `evictedByHub` is events the hub received and has since aged out. Only the
- * second can be avoided by reading sooner.
- */
-const Coverage = Schema.Struct({
-  /** Sequence of the oldest record still held, absent when nothing is held. */
-  oldestRetainedSequence: Schema.optional(Schema.Number),
-  newestSequence: Schema.optional(Schema.Number),
-  retainedCount: Schema.Number,
-  evictedByHub: Schema.Number,
-  droppedBySender: Schema.Number,
-});
-
-const RuntimeSummary = Schema.Struct({
-  attachmentId: Schema.String,
-  name: Schema.String,
-  platform: Schema.String,
-  /**
-   * A label, not an identity. It comes from a per-process counter, so unrelated
-   * processes all report `runtime-1`; never match runtimes on it.
-   */
-  runtimeId: Schema.String,
-  /** Distinguishes the hub's own self-attachment from the apps it observes. */
-  isHub: Schema.Boolean,
-  /**
-   * Reconnections before this one. Above zero means the socket dropped and the
-   * app came back, and that everything it emitted in between is simply gone —
-   * `connectedAt` is when the current connection began, not when the app
-   * started. Nothing bridges that gap; devtools history is not durable.
-   */
-  generation: Schema.Number,
-  connectedAt: Schema.Number,
-  eventCount: Schema.Number,
-  lastSequence: Schema.Number,
-  lastEventAt: Schema.Number,
-  lastTag: Schema.optional(Schema.String),
-  /** What the app agreed to send. `"shape"` means values are descriptors. */
-  values: Schema.String,
-  coverage: Coverage,
-});
-
-const EventPage = Schema.Struct({
-  attachmentId: Schema.String,
-  records: Schema.Array(EncodedEventRecord),
-  /**
-   * Pass back as `since` to continue. Absent when the page is empty, which is
-   * the signal to keep the previous cursor rather than reset it.
-   */
-  nextSince: Schema.optional(Schema.Number),
-  /** True when the filter had more matches than `limit` allowed. */
-  hasMore: Schema.Boolean,
-  coverage: Coverage,
-});
-
-/**
- * Returned as a result rather than raised — see `failureMode: "return"`.
- *
- * The tradeoff is deliberate and it is not free. Raising sets MCP's `isError`
- * flag, which is the more accurate signal; it also renders the failure as
- * `Cause.pretty`, which means every "you passed an id that does not exist"
- * arrives with a six-frame stack through Effect and the frond driver attached.
- * That noise lands in the caller's context window, and none of it is about the
- * caller's mistake. Returning keeps the answer to a tagged message the model
- * can act on, and `_tag` says plainly that it is a failure.
- *
- * The ambiguous-attachment case is why the message is worth protecting: it
- * carries the full candidate list, which turns "you must pass an id" into
- * something answerable without a second round trip.
- */
-export class McpReadError extends Schema.ErrorClass<McpReadError>("McpReadError")({
-  _tag: Schema.tag("McpReadError"),
-  message: Schema.String,
-}) {}
 
 /**
  * Marks a tool as a pure read.
@@ -241,24 +153,7 @@ export function mcpLayer(options: {
   const handlers = HubTools.toLayer({
     frond_list_runtimes: () =>
       Effect.sync(() => ({
-        runtimes: rows(attachments).map(([view, ring]) => ({
-          attachmentId: view.attachmentId,
-          name: view.info.name,
-          platform: view.info.platform,
-          runtimeId: view.info.runtimeId,
-          // `instanceId`, not `runtimeId`: the latter is a per-process counter,
-          // so every process's first runtime is `runtime-1` and this comparison
-          // would match every row.
-          isHub: view.info.instanceId === selfInstanceId,
-          generation: view.info.generation,
-          connectedAt: view.connectedAt,
-          eventCount: view.eventCount,
-          lastSequence: view.lastSequence,
-          lastEventAt: view.lastEventAt,
-          ...(view.lastTag === undefined ? {} : { lastTag: view.lastTag }),
-          values: view.info.values,
-          coverage: coverageOf(view, ring),
-        })),
+        runtimes: rows(attachments).map(([view, ring]) => summarize(view, ring, selfInstanceId)),
       })),
 
     frond_read_events: (params) =>
@@ -276,9 +171,9 @@ export function mcpLayer(options: {
     frond_read_work: (params) =>
       Effect.map(resolve(attachments, selfInstanceId, params.attachmentId), ([view, ring]) =>
         page(view, ring, {
+          since: params.since,
           limit: clampLimit(params.limit),
           workId: params.workId,
-          ...(params.since === undefined ? {} : { since: params.since }),
         })
       ),
 
@@ -326,154 +221,4 @@ export function mcpLayer(options: {
     McpServer.layerHttp({ name: "frond-hub", version, path: MCP_PATH }),
     McpServer.toolkit(HubTools).pipe(Layer.provide(handlers))
   );
-}
-
-type Row = readonly [AttachmentView, EventRing | undefined];
-
-function rows(attachments: AttachmentsNode): ReadonlyArray<Row> {
-  const { attachments: views, retained } = attachments.result;
-
-  return [...views.values()].map((view) => [view, retained.get(view.attachmentId)] as const);
-}
-
-/**
- * Picks the attachment to read from.
- *
- * A sole attached *app* is used without being named, because making the common
- * case cost a round trip is how a tool ends up unused. The hub attaches to its
- * own runtime, so it is always in the list and would be that sole candidate on
- * an otherwise idle machine — and answering "what does my graph look like" with
- * the devtools' own graph is a wrong answer wearing the shape of a right one.
- * It is excluded from the fallback rather than from `candidates`: naming it
- * explicitly still resolves, because inspecting the hub is a real thing to want
- * and only the *accidental* case is the bug.
- *
- * Everything else fails with the candidates listed, on the same reasoning as
- * the ambiguity below — a guess the caller cannot see is worse than a question
- * it can answer in one more call.
- */
-function resolve(
-  attachments: AttachmentsNode,
-  selfInstanceId: string,
-  attachmentId: string | undefined
-): Effect.Effect<Row, McpReadError> {
-  const candidates = rows(attachments);
-
-  if (attachmentId !== undefined) {
-    const found = candidates.find(([view]) => view.attachmentId === attachmentId);
-
-    return found === undefined
-      ? Effect.fail(
-          new McpReadError({
-            message: `No attachment ${attachmentId}. ${describe(candidates, selfInstanceId)}`,
-          })
-        )
-      : Effect.succeed(found);
-  }
-
-  // `instanceId`, not `runtimeId`, for the reason `frond_list_runtimes` gives:
-  // the latter is a per-process counter and would match every row.
-  const apps = candidates.filter(([view]) => view.info.instanceId !== selfInstanceId);
-  const only = apps[0];
-
-  if (apps.length === 1 && only !== undefined) {
-    return Effect.succeed(only);
-  }
-
-  return Effect.fail(new McpReadError({ message: noDefault(candidates, apps, selfInstanceId) }));
-}
-
-/**
- * What to say when no attachment can be picked for the caller.
- *
- * Each branch ends in an action rather than a diagnosis, because the caller is
- * a model deciding what to do next: "no app is attached" invites a retry of the
- * same call, "attach one, or name the hub" does not.
- */
-function noDefault(
-  candidates: ReadonlyArray<Row>,
-  apps: ReadonlyArray<Row>,
-  selfInstanceId: string
-): string {
-  if (apps.length > 1) {
-    return `attachmentId is required when more than one app is attached. ${describe(apps, selfInstanceId)}`;
-  }
-
-  const hub = candidates.find(([view]) => view.info.instanceId === selfInstanceId);
-
-  if (hub === undefined) {
-    return "No runtimes are attached to this hub. Attach an app with attachDevtools({ runtime, name }) from @frondruntime/devtools, then call frond_list_runtimes.";
-  }
-
-  return `No app is attached to this hub; the only attachment is the hub's own runtime. Attach an app with attachDevtools({ runtime, name }) from @frondruntime/devtools and call frond_list_runtimes again, or pass attachmentId ${hub[0].attachmentId} to read the hub itself.`;
-}
-
-function describe(candidates: ReadonlyArray<Row>, selfInstanceId: string): string {
-  if (candidates.length === 0) {
-    return "No runtimes are attached.";
-  }
-
-  // The hub is marked rather than dropped: a caller choosing from this list has
-  // to be able to tell the program it is debugging from the tool it is
-  // debugging with, and the two rows are otherwise indistinguishable.
-  return `Attached: ${candidates
-    .map(
-      ([view]) =>
-        `${view.attachmentId} (${view.info.name}, ${view.info.platform}${
-          view.info.instanceId === selfInstanceId ? ", this hub" : ""
-        })`
-    )
-    .join("; ")}`;
-}
-
-function clampLimit(limit: number | undefined): number {
-  if (limit === undefined) {
-    return DEFAULT_LIMIT;
-  }
-
-  // Silently clamping beats failing: an over-large limit is a caller guessing
-  // at the ceiling, and `hasMore` already tells it the answer was cut short.
-  return Math.max(1, Math.min(Math.trunc(limit), MAX_LIMIT));
-}
-
-function page(
-  view: AttachmentView,
-  ring: EventRing | undefined,
-  options: Parameters<EventRing["read"]>[0]
-): typeof EventPage.Type {
-  if (ring === undefined) {
-    // The view exists but its ring does not, which means the attachment landed
-    // between the two writes. Reported as an empty page rather than an error:
-    // there is genuinely nothing retained yet.
-    return {
-      attachmentId: view.attachmentId,
-      records: [],
-      hasMore: false,
-      coverage: coverageOf(view, undefined),
-    };
-  }
-
-  const window = ring.read(options);
-  const last = window.records[window.records.length - 1];
-
-  return {
-    attachmentId: view.attachmentId,
-    records: window.records,
-    ...(last === undefined ? {} : { nextSince: last.sequence }),
-    hasMore: window.hasMore,
-    coverage: coverageOf(view, ring),
-  };
-}
-
-function coverageOf(view: AttachmentView, ring: EventRing | undefined): typeof Coverage.Type {
-  const oldest = ring?.oldestRetainedSequence;
-  const newest = ring?.newestSequence;
-
-  return {
-    ...(oldest === undefined ? {} : { oldestRetainedSequence: oldest }),
-    ...(newest === undefined ? {} : { newestSequence: newest }),
-    retainedCount: ring?.size ?? 0,
-    evictedByHub: ring?.evictedCount ?? 0,
-    droppedBySender: view.droppedCount,
-  };
 }

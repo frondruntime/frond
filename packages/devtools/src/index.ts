@@ -9,12 +9,7 @@
  */
 export { type AttachOptions, attachLayer, attachRuntime } from "./attach.ts";
 export { attachDevtools, type DevtoolsOptions } from "./attachDevtools.ts";
-export {
-  createValueEncoder,
-  type EncodePolicy,
-  encodeRecord,
-  resolvePolicy,
-  type ValueEncoder,
-} from "./encode.ts";
+export { createValueEncoder, encodeRecord, type ValueEncoder } from "./encode.ts";
+export { type EncodePolicy, resolvePolicy } from "./policy.ts";
 export * from "./protocol.ts";
 export { encodeGraphSnapshot, type SnapshotRequest } from "./snapshot.ts";

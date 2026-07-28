@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Graph, Runtime } from "@frondruntime/core";
-import type { EncodePolicy } from "../src/encode.ts";
+import type { EncodePolicy } from "../src/policy.ts";
 import { encodeGraphSnapshot } from "../src/snapshot.ts";
 
 /**
