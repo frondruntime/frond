@@ -50,7 +50,7 @@
     "@frondruntime/devtools": "0.3.0",
     "@frondruntime/react": "0.3.0",
     "@pppp606/ink-chart": "0.2.7",
-    "effect": "4.0.0-beta.90",
+    "effect": "4.0.0-beta.102",
     "ink": "7.1.1",
     "mobx": "6.15.3",
     "mobx-react-lite": "4.1.1",

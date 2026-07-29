@@ -29,7 +29,7 @@
     "@typescript/native-preview": "7.0.0-dev.20260627.2",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
-    "effect": "4.0.0-beta.90",
+    "effect": "4.0.0-beta.102",
     "global-jsdom": "29.0.0",
     "jsdom": "29.1.1",
     "mobx-react-lite": "4.1.1",
