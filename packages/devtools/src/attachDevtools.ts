@@ -65,11 +65,12 @@ export type DevtoolsOptions = {
   /** See {@link import("./attach.ts").AttachOptions.values}. Defaults to `"shape"`. */
   readonly values?: ValuePolicy | undefined;
   /**
-   * Stable identity for this app across reconnects. A fresh UUID by default.
+   * Stable identity for this app across reconnects. Generated when omitted.
    *
-   * Also the escape hatch for a runtime without `crypto.randomUUID` — React
-   * Native, until a polyfill installs one. Any string does, so long as it is
-   * stable for the life of the process and distinct per running app.
+   * Worth setting to something recognisable when several apps attach at once,
+   * since this is what tells one from another after a hub restart. Any string
+   * does, so long as it is stable for the life of the process and distinct per
+   * running app.
    */
   readonly instanceId?: string | undefined;
   /** Return false to leave a record out of the stream entirely. */

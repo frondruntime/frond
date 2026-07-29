@@ -98,17 +98,9 @@ The main entry imports nothing from `node:`. The transport is a global `WebSocke
 
 ### React Native
 
-Two things differ from a browser or a server process, and both bite on first attach.
+Nothing to install: this package uses no global beyond `WebSocket`, so there is no `crypto` polyfill to add and no Node shim to configure.
 
-**`crypto.randomUUID` has to exist.** It is how an attachment gets the id that identifies it across reconnects, and React Native has no global `crypto` until something installs one. Either install a polyfill — `react-native-get-random-values`, imported before the attach call — or skip the requirement by supplying the id yourself:
-
-```ts
-attachDevtools({ runtime, name: "my-app", instanceId: "my-app-dev" });
-```
-
-Any string does, as long as it is stable for the life of the process and distinct per running app. Without either, the attach call throws at startup with a message saying exactly this; it is the one thing in this package that does not fail quietly, because a missing global is a setup mistake and retrying it forever would only hide it.
-
-**The default address is loopback, and loopback means something different on each target.**
+What does differ is the address. **The default is loopback, and loopback means something different on each target.**
 
 | Target                     | What to do                                                                                 |
 | -------------------------- | ------------------------------------------------------------------------------------------ |

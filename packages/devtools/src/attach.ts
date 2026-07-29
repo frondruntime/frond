@@ -82,24 +82,26 @@ export type AttachOptions = {
 /**
  * Mints the id that identifies this runtime for the life of the process.
  *
- * Guarded rather than called directly because `crypto.randomUUID` is not
- * everywhere a Frond app runs. React Native has no global `crypto` until a
- * polyfill installs one, and the bare failure — a `TypeError` about `undefined`
- * — surfaces from inside a devtools call the app made once at startup and says
- * nothing about how to proceed. The caller can always supply `instanceId` and
- * skip this entirely, which is the fix this points at.
+ * Deliberately not `crypto.randomUUID`, which this used to be. That call is not
+ * available everywhere a Frond app runs — React Native has no global `crypto`
+ * until a polyfill installs one — and reaching for it meant either a startup
+ * crash on the runtime least able to explain it, or a guard, and a guard is a
+ * branch whose two halves nobody exercises together.
+ *
+ * The entropy was never the requirement. This id has to be unique among the
+ * handful of apps attached to one local hub at one time, and stable across that
+ * process's own reconnects. Nothing authenticates with it, nothing persists it,
+ * and it dies with the hub. A timestamp for cross-process separation and a short
+ * random suffix for anything started inside the same millisecond covers that
+ * with room to spare; the timestamp is the half that matters, because
+ * `Math.random` is seeded per process and two processes launched together is
+ * exactly where bare randomness is weakest.
+ *
+ * If this ever fronts something that is not a local devtools socket, it needs a
+ * real generator — but then it also needs a real identity, not this.
  */
 export function newInstanceId(): string {
-  if (typeof crypto?.randomUUID !== "function") {
-    throw new Error(
-      "attachDevtools needs crypto.randomUUID, which this runtime does not provide. " +
-        "React Native reaches this without a polyfill such as react-native-get-random-values. " +
-        "Install one before attaching, or pass your own `instanceId` — any string that is " +
-        "stable for the life of the process will do."
-    );
-  }
-
-  return crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 /**
