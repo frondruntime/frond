@@ -96,6 +96,42 @@ The attach socket is unauthenticated by design — it only carries data *into* t
 
 The main entry imports nothing from `node:`. The transport is a global `WebSocket` carrying ndjson, so the same build attaches from a browser, from Bun, from Node, and from React Native.
 
+### React Native
+
+Two things differ from a browser or a server process, and both bite on first attach.
+
+**`crypto.randomUUID` has to exist.** It is how an attachment gets the id that identifies it across reconnects, and React Native has no global `crypto` until something installs one. Either install a polyfill — `react-native-get-random-values`, imported before the attach call — or skip the requirement by supplying the id yourself:
+
+```ts
+attachDevtools({ runtime, name: "my-app", instanceId: "my-app-dev" });
+```
+
+Any string does, as long as it is stable for the life of the process and distinct per running app. Without either, the attach call throws at startup with a message saying exactly this; it is the one thing in this package that does not fail quietly, because a missing global is a setup mistake and retrying it forever would only hide it.
+
+**The default address is loopback, and loopback means something different on each target.**
+
+| Target                     | What to do                                                                                 |
+| -------------------------- | ------------------------------------------------------------------------------------------ |
+| iOS Simulator              | Nothing. It shares the host's network stack, so `ws://127.0.0.1:17391/attach` is the hub.     |
+| Android emulator           | `adb reverse tcp:17391 tcp:17391` on the host, then the default URL works unchanged.          |
+| Android emulator, no `adb` | Start the hub with `--host 0.0.0.0` and pass `url: "ws://10.0.2.2:17391/attach"`.             |
+| Physical device            | Start the hub with `--host 0.0.0.0` and pass `url: "ws://<host-lan-ip>:17391/attach"`.        |
+
+`adb reverse` is the better of the two Android options: it tunnels the port to the emulator over the existing debug bridge, so the hub stays on loopback and the app keeps the default URL. `10.0.2.2` is the emulator's alias for the host, and reaching it means the hub has to be listening on every interface.
+
+**`--host 0.0.0.0` puts an unauthenticated socket on your local network.** The hub has no notion of who is on the other end, in either direction: anything that can reach the port can push records into the dashboard an agent then reads, and can ask attached apps for graph snapshots up to whatever ceiling they declared. On a trusted network, for a development build, that is the trade; do not leave it bound that way, and do not do it at all with an app whose ceiling is `"full"`.
+
+### Testing
+
+Attaching from a Jest suite reaches Effect's RPC layer, which pulls in `msgpackr` — an ESM-only package that Jest's default CJS transform cannot load, and one this package does not choose: it is a dependency of `effect` itself, so no serialization setting here avoids it. Either run the suite as ESM, or let Jest transform it:
+
+```js
+// jest.config.js
+transformIgnorePatterns: ["node_modules/(?!(msgpackr|msgpackr-extract)/)"];
+```
+
+The narrower fix is not to attach in tests at all. `attachDevtools` exists to watch a process you are working on by hand; a test run has no hub to dial and nothing to watch.
+
 Filesystem discovery lives behind its own export, so a browser bundler never has to resolve it:
 
 ```ts

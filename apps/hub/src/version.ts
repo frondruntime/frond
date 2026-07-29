@@ -1,25 +1,30 @@
 import { HUB_PROTOCOL_VERSION } from "@frondruntime/devtools";
+import packageJson from "../package.json" with { type: "json" };
 
 /**
- * What `--version` prints and what the MCP handshake advertises: the protocol
- * generation this build speaks, not the npm version of `@frondruntime/hub`.
+ * What `--version` prints: the release and the wire contract, in that order.
  *
- * The npm version answers "which release is this", which nothing on either wire
- * can act on. The protocol version answers "will this talk to my app", which is
- * the only version question a hub is ever asked — by an operator staring at a
- * refused attachment, and by an MCP client deciding what it may call. Reporting
- * the one that cannot be acted on, when the two are free to diverge, is how an
- * operator ends up comparing release numbers that were never the disagreement.
+ * Both, because they answer different questions and an integrator hit exactly
+ * the confusion that reporting only one causes. The package version says which
+ * build is installed, which is what a bug report needs. The protocol version
+ * says what this build will talk to, which is the only number an attaching app
+ * compares — and the only one that explains a refused attachment.
  *
- * The cost, stated plainly because it is real: `--version` no longer identifies
- * a build. Every release for the life of a protocol generation answers the same,
- * so a bug report quoting it says which contract, not which code. `npm ls
- * @frondruntime/hub` is the question that has the other answer.
- *
- * Mechanically this also unbinds the constant from the release tooling. It used
- * to be a literal kept in step with `package.json` by a release-please
- * `extra-files` marker, which silently no-ops if the marker drifts off the
- * version's own line — a hub announcing a version it was not. Derived, there is
- * nothing left to keep in step.
+ * The release half is read from `package.json` rather than copied into a
+ * constant here. An earlier version of this file kept a literal in step through
+ * a release-please `extra-files` marker, which silently no-ops when the marker
+ * drifts off the version's own line — the failure that made `--version` a
+ * problem in the first place. Reading the file that release-please already owns
+ * leaves nothing to keep in step.
  */
-export const HUB_REPORTED_VERSION = String(HUB_PROTOCOL_VERSION);
+export const HUB_REPORTED_VERSION = `${packageJson.version} (protocol ${HUB_PROTOCOL_VERSION})`;
+
+/**
+ * Advertised to MCP clients as the server version.
+ *
+ * The bare package version, because MCP's `serverInfo.version` is specified as
+ * the version of the server implementation and clients display it as such.
+ * Protocol and the rest of the version surface belong in tool output, where a
+ * caller can read them as data instead of parsing them out of a label.
+ */
+export const HUB_MCP_VERSION = packageJson.version;

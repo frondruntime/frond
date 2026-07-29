@@ -1,6 +1,6 @@
 import type { Runtime } from "@frondruntime/core";
 import { Cause, Data, Effect, Fiber } from "effect";
-import { attachLayer, attachRuntime } from "./attach.ts";
+import { attachLayer, attachRuntime, newInstanceId } from "./attach.ts";
 import { HUB_DEFAULT_ATTACH_URL, HubRejection, type ValuePolicy } from "./protocol.ts";
 
 /**
@@ -64,6 +64,13 @@ export type DevtoolsOptions = {
   readonly platform?: string | undefined;
   /** See {@link import("./attach.ts").AttachOptions.values}. Defaults to `"shape"`. */
   readonly values?: ValuePolicy | undefined;
+  /**
+   * Stable identity for this app across reconnects. A fresh UUID by default.
+   *
+   * Also the escape hatch for a runtime without `crypto.randomUUID` — React
+   * Native, until a polyfill installs one. Any string does, so long as it is
+   * stable for the life of the process and distinct per running app.
+   */
   readonly instanceId?: string | undefined;
   /** Return false to leave a record out of the stream entirely. */
   readonly include?: ((record: Runtime.RuntimeEventRecord) => boolean) | undefined;
@@ -117,7 +124,7 @@ export function attachDevtools(options: DevtoolsOptions): () => void {
   // Minted here rather than per attempt, so a hub restart underneath a running
   // app brings back the same runtime instead of an apparent stranger. Paired
   // with `generation` below, which is what says how many times that happened.
-  const instanceId = options.instanceId ?? crypto.randomUUID();
+  const instanceId = options.instanceId ?? newInstanceId();
 
   let generation = 0;
 

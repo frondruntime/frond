@@ -80,6 +80,29 @@ export type AttachOptions = {
 };
 
 /**
+ * Mints the id that identifies this runtime for the life of the process.
+ *
+ * Guarded rather than called directly because `crypto.randomUUID` is not
+ * everywhere a Frond app runs. React Native has no global `crypto` until a
+ * polyfill installs one, and the bare failure — a `TypeError` about `undefined`
+ * — surfaces from inside a devtools call the app made once at startup and says
+ * nothing about how to proceed. The caller can always supply `instanceId` and
+ * skip this entirely, which is the fix this points at.
+ */
+export function newInstanceId(): string {
+  if (typeof crypto?.randomUUID !== "function") {
+    throw new Error(
+      "attachDevtools needs crypto.randomUUID, which this runtime does not provide. " +
+        "React Native reaches this without a polyfill such as react-native-get-random-values. " +
+        "Install one before attaching, or pass your own `instanceId` — any string that is " +
+        "stable for the life of the process will do."
+    );
+  }
+
+  return crypto.randomUUID();
+}
+
+/**
  * Transport for one attachment.
  *
  * Exported because the hub dials itself over exactly this layer — same
@@ -138,7 +161,7 @@ export const attachRuntime = Effect.fnUntraced(function* (options: AttachOptions
 
   const info: AttachmentInfo = {
     protocolVersion: HUB_PROTOCOL_VERSION,
-    instanceId: options.instanceId ?? crypto.randomUUID(),
+    instanceId: options.instanceId ?? newInstanceId(),
     runtimeId: options.runtime.getSnapshotSync().runtimeId,
     generation: options.generation ?? 0,
     name: options.name,
