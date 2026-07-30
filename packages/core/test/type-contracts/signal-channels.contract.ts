@@ -1,4 +1,5 @@
 import * as Frond from "@frondruntime/core";
+import type * as FrondTesting from "@frondruntime/core/testing";
 import { Effect } from "effect";
 
 type Equal<TLeft, TRight> =
@@ -30,6 +31,11 @@ const untyped = Frond.Signals.defineChannel({
   policy: { retention: "none" },
 });
 ({ channels: [Checkout, untyped] }) satisfies Frond.Runtime.RuntimeOptions;
+
+// The test surfaces take the same list, so a test declares a channel the way
+// production does instead of restating its policy as a raw `signalPolicies` entry.
+({ channels: [Checkout, untyped] }) satisfies FrondTesting.TestRuntimeOptions;
+({ channels: [Checkout, untyped] }) satisfies FrondTesting.FrondTestHarnessOptions;
 
 // Typed signals publish through the erased surface unchanged: `publish` takes a
 // `RuntimeSignal`, and every member of the typed union is one.

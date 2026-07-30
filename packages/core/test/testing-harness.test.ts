@@ -1,12 +1,14 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { Data, Effect } from "effect";
 import { classify } from "../src/events";
-import type {
-  Runtime,
-  RuntimeEventRecord,
-  RuntimeNodeHandle,
-  RuntimeNodeRead,
+import {
+  FrondRuntimeInvariantViolation,
+  type Runtime,
+  type RuntimeEventRecord,
+  type RuntimeNodeHandle,
+  type RuntimeNodeRead,
 } from "../src/runtime";
+import { Signals } from "../src/signals";
 import {
   createDeferredDriver,
   createFrondTestHarness,
@@ -26,6 +28,15 @@ import {
   serviceSpec,
   unwrapEffect,
 } from "./graphTestFixtures";
+
+const retainedChannel = Signals.defineChannel({
+  name: "testing.retained",
+  policy: { retention: "bounded", bufferSize: 2 },
+});
+const discardedChannel = Signals.defineChannel({
+  name: "testing.discarded",
+  policy: { retention: "none" },
+});
 
 describe("Frond testing harness", () => {
   test("creates an isolated runtime and records test-owned start/stop work", async () => {
@@ -649,7 +660,81 @@ describe("low-level test runtime", () => {
       runtime.events.find((record) => record.event._tag === "RuntimeStarted")?.work.source
     ).toBe("test");
   });
+
+  test("channels registered through the harness carry their declared retention", async () => {
+    const testRuntime = createTestRuntime({ channels: [retainedChannel] });
+
+    await testRuntime.runtime.publish(retainedChannel.signal("first"));
+    await testRuntime.runtime.publish(retainedChannel.signal("second"));
+    await testRuntime.runtime.publish(retainedChannel.signal("third"));
+
+    const retained = await testRuntime.runtime.query({
+      _tag: "RuntimeSignals",
+      channel: retainedChannel.channel,
+    });
+
+    // Nothing here restates `bufferSize: 2`; the definition carried it, and
+    // dropping "first" is what proves the harness installed it.
+    expect(retained._tag === "RuntimeSignals" ? retained.records.map(signalName) : []).toEqual([
+      "second",
+      "third",
+    ]);
+  });
+
+  test("a none-retention channel registered through the harness retains nothing", async () => {
+    const testRuntime = createTestRuntime({ channels: [discardedChannel] });
+
+    await testRuntime.runtime.publish(discardedChannel.signal("hidden", { token: "secret" }));
+
+    const retained = await testRuntime.runtime.query({
+      _tag: "RuntimeSignals",
+      channel: discardedChannel.channel,
+    });
+    const published = testRuntime.events.some(
+      (record) => record.event._tag === "RuntimeSignalPublished"
+    );
+
+    expect(retained._tag === "RuntimeSignals" ? retained.records : []).toEqual([]);
+    expect(published).toBe(true);
+  });
+
+  test("signalPolicies cannot redefine a channel the harness installed", () => {
+    // There is no precedence to pick between the two: the runtime rejects the
+    // overlap rather than letting either side silently win.
+    expect(() =>
+      createTestRuntime({
+        channels: [retainedChannel],
+        signalPolicies: {
+          [retainedChannel.channel]: { retention: "none" },
+        },
+      })
+    ).toThrow(FrondRuntimeInvariantViolation);
+  });
+
+  test("the harness passes channels through to the runtime it builds", async () => {
+    const harness = createFrondTestHarness({ channels: [retainedChannel] });
+
+    await harness.start();
+    await harness.runtime.publish(retainedChannel.signal("first"));
+    await harness.runtime.publish(retainedChannel.signal("second"));
+    await harness.runtime.publish(retainedChannel.signal("third"));
+
+    const retained = await harness.runtime.query({
+      _tag: "RuntimeSignals",
+      channel: retainedChannel.channel,
+    });
+    await harness.teardown();
+
+    expect(retained._tag === "RuntimeSignals" ? retained.records.map(signalName) : []).toEqual([
+      "second",
+      "third",
+    ]);
+  });
 });
+
+function signalName(record: { readonly signal: { readonly name: string } }): string {
+  return record.signal.name;
+}
 
 function runtimeStartedRecord(sequence: number): RuntimeEventRecord {
   const event = { _tag: "RuntimeStarted" as const, at: sequence };
