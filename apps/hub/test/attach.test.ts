@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { Args, createRuntime, type Runtime } from "@frondruntime/core";
+import { Args, createRuntime, type Runtime, Signals } from "@frondruntime/core";
 import type { GraphSnapshot, StateQuery, ValuePolicy } from "@frondruntime/devtools";
 import {
   attachLayer,
@@ -160,6 +160,33 @@ async function read(
   return outcome.snapshot;
 }
 
+interface CheckoutEvents {
+  "checkout.started": { readonly cartId: string };
+  "cart.cleared": { readonly cartId: string };
+}
+
+interface SyncEvents {
+  "checkout.started": { readonly cartId: string };
+}
+
+/**
+ * Two buses that overlap on a name, which is what makes the hub's two signal
+ * filters separable: neither one can be faked by the other's answer.
+ *
+ * Defined rather than branded so the retention policy is real — the app runtime
+ * below registers both through `channels`, which is how an app installs a
+ * channel, and the path a signal takes to the wire is the one an app takes.
+ */
+const checkoutChannel = Signals.defineChannel<CheckoutEvents>({
+  name: "app.checkout",
+  policy: { retention: "bounded", bufferSize: 8 },
+});
+
+const syncChannel = Signals.defineChannel<SyncEvents>({
+  name: "app.sync",
+  policy: { retention: "bounded", bufferSize: 8 },
+});
+
 describe("hub attachment", () => {
   test("a runtime that dials the hub shows up as an attachment", async () => {
     const hub = await startHub(takePort());
@@ -224,6 +251,64 @@ describe("hub attachment", () => {
     expect(window?.records.map((row) => row.sequence)).toEqual(
       [...(window?.records ?? [])].map((row) => row.sequence).sort((left, right) => left - right)
     );
+  });
+
+  /**
+   * `channel` and `name` are optional on the wire — which is how they arrived
+   * without moving `HUB_PROTOCOL_VERSION` — and an optional field that never
+   * gets populated is invisible to a per-layer test. Delivery, encoding and the
+   * hub's filters each have one; none of them would notice the fields going
+   * missing somewhere between the app's publish and the hub's ring, because
+   * every layer's own test supplies them itself.
+   *
+   * So this publishes through a registered channel on a real attached runtime
+   * and asks the hub what it ended up holding: the identities as they arrived,
+   * then each filter on its own, with no `tag` beside it. A channel and a name
+   * are the whole contract for `frond_read_events` — narrowing to one bus must
+   * not also require naming the category.
+   */
+  test("a signal's channel and name survive the wire and drive the hub's filters", async () => {
+    const hub = await startHub(takePort());
+
+    const app = createRuntime({ channels: [checkoutChannel, syncChannel] });
+    await app.submit({ _tag: "RuntimeStart" });
+
+    teardown.push(async () => {
+      await app.submit({ _tag: "RuntimeStop", reason: "test teardown" });
+    });
+
+    dial({ runtime: app, attachUrl: hub.attachUrl, name: "signals-app" });
+
+    const [attachment] = await waitFor(hub.attachments, (rows) => rows.length > 0, "an attachment");
+    const attachmentId = attachment?.attachmentId ?? "";
+
+    // After the attachment exists, because a record that fires before the
+    // observer is installed is one nothing here can wait for.
+    await app.publish(checkoutChannel.signal("checkout.started", { cartId: "cart-1" }));
+    await app.publish(checkoutChannel.signal("cart.cleared", { cartId: "cart-1" }));
+    await app.publish(syncChannel.signal("checkout.started", { cartId: "cart-2" }));
+
+    const published = await waitFor(
+      () => hub.retained(attachmentId)?.read({ limit: 50, tag: "RuntimeSignalPublished" }).records,
+      (records) => (records?.length ?? 0) >= 3,
+      "the published signals"
+    );
+
+    expect(published?.map((record) => [record.channel, record.name])).toEqual([
+      ["app.checkout", "checkout.started"],
+      ["app.checkout", "cart.cleared"],
+      ["app.sync", "checkout.started"],
+    ]);
+
+    const byChannel = hub.retained(attachmentId)?.read({ limit: 50, channel: "app.checkout" });
+    const byName = hub.retained(attachmentId)?.read({ limit: 50, name: "checkout.started" });
+
+    // One bus across two names, and one name across two buses.
+    expect(byChannel?.records.map((record) => record.name)).toEqual([
+      "checkout.started",
+      "cart.cleared",
+    ]);
+    expect(byName?.records.map((record) => record.channel)).toEqual(["app.checkout", "app.sync"]);
   });
 
   test("the retained history goes away with the attachment", async () => {
