@@ -4,3 +4,6 @@ coverage/
 .DS_Store
 *.tsbuildinfo
 .frond/
+
+# Agent worktrees are a local tool artifact, not repo content.
+.claude/worktrees/
