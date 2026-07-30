@@ -46,6 +46,11 @@ describe("newInstanceId", () => {
   });
 
   test("is a plain string, safe to use as a key and to read in a dashboard", () => {
+    // The suffix quantifier is `*` and not `+` on purpose, and it looks like a
+    // slack to tighten. `Math.random().toString(36).slice(2, 10)` is empty for a
+    // draw of exactly 0 and short for any draw whose base-36 form is, so `+`
+    // would be a test that fails once in a very long while and teaches nothing
+    // when it does. The timestamp half is what carries the identity.
     expect(newInstanceId()).toMatch(/^[0-9a-z]+-[0-9a-z]*$/);
   });
 });

@@ -44,9 +44,16 @@ export type RuntimeSignalPolicy =
  * like something to tighten and is not: a TypeScript `interface` gets no implicit
  * index signature, so `interface CheckoutEvents { ... }` does not satisfy
  * `Record<string, unknown>` — and an interface is exactly how an event map gets
- * declared, being the only form that merges across modules. Names come out of
- * `keyof TEvents & string` regardless, which is empty for anything that is not a
- * map of names, so the looser constraint costs nothing it was protecting.
+ * declared, being the only form that merges across modules.
+ *
+ * What the looser constraint gives up is narrow. `object` admits shapes
+ * `Record<string, unknown>` rejected — `string[]` among them, whose
+ * `keyof TEvents & string` is `"at" | "length" | ...` rather than the empty set
+ * it would be convenient to assume. But names come out of that intersection
+ * either way, so a wrong type argument yields a channel whose declared names are
+ * useless, not one that types a payload it cannot carry: the publisher and the
+ * subscriber read the same `TEvents`, so they are wrong about the same names in
+ * the same direction. The constraint was never what made that agree.
  */
 export type SignalEventMap = object;
 
@@ -215,13 +222,25 @@ export const channel = (channel: string): RuntimeSignalChannel => channel as Run
  * is not assignable to one the bus may hand any record to, and the bus is
  * heterogeneous on purpose — one `Set` of subscribers across every channel.
  *
- * That narrowing is sound for one reason, and only under one condition:
+ * The routing half of that narrowing is enforced rather than asserted:
  * `subscriber` pins `channels` to this channel, and `acceptsSignal` in the signal
- * bus filters delivery by exactly that field. So the type is a projection of an
- * invariant the bus enforces and already tests, not a promise this module makes
- * on its own. The corollary follows and is the right behavior: a subscriber
+ * bus filters delivery by exactly that field. So "records from this channel only"
+ * is a projection of an invariant the bus already tests, not a promise this module
+ * makes on its own. The corollary follows and is the right behavior: a subscriber
  * assembled by hand, with no `channels` filter, receives every channel's traffic
  * and gets no narrowing.
+ *
+ * The payload half is not enforced, and the difference matters. Channel equality
+ * is not payload equality: {@link signal} takes `name: string` and
+ * `payload?: unknown`, so
+ * `Signals.signal({ channel: Checkout.channel, name: "checkout.started", payload: 42 })`
+ * compiles with no cast, routes to this channel's subscribers, and reaches a
+ * handler that has been told the payload is a cart. What holds the types together
+ * is that `definition.signal` is the way publishers build records — it is the
+ * narrow constructor, and going around it gives the wide one. That is a
+ * convention, so the escape hatch stays open for adapters bridging a wire, and
+ * the untyped `signal` is where a channel's typing ends rather than where it is
+ * enforced.
  */
 export const defineChannel = <TEvents extends SignalEventMap = Record<string, unknown>>(input: {
   readonly name: string;

@@ -125,6 +125,11 @@ export function encodeRecord(
     reason: record.work.reason,
     priority: record.work.priority,
     nodeIds: record.nodeIds,
+    // Unclamped, like every routing field above it. A signal's channel and name
+    // are how a reader addresses one — the filters `frond_read_events` exposes —
+    // and they are authored as constants next to the code that publishes, the
+    // same standing as `tag` and `nodeIds`. What the payload holds is the value,
+    // and that is what `fields` withholds a line below.
     ...signalIdentity(record.event),
     fields: policy === "none" ? {} : describeFields(record.event, encodeField),
     // Failures are causes, not results: their messages are what makes a
