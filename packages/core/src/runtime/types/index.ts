@@ -2,6 +2,7 @@ export type {
   RuntimeSignal,
   RuntimeSignalChannel,
   RuntimeSignalChannelDefinition,
+  RuntimeSignalChannelRegistration,
   RuntimeSignalPolicy,
   RuntimeSignalRecord,
   RuntimeSignalSubscriber,

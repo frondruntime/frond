@@ -28,6 +28,18 @@ const ephemeralChannel = Signals.defineChannel({
   policy: { retention: "none" },
 });
 
+interface CheckoutEvents {
+  "checkout.started": { readonly cartId: string; readonly total: number };
+  "checkout.completed": { readonly orderId: string };
+  // biome-ignore lint/suspicious/noConfusingVoidType: an event that carries no payload is declared `void`.
+  "app.opened": void;
+}
+
+const checkoutChannel = Signals.defineChannel<CheckoutEvents>({
+  name: "app.checkout",
+  policy: { retention: "bounded", bufferSize: 4 },
+});
+
 describe("runtime signals", () => {
   test("publish records runtime id, sequence, channel, name, and supports channel queries", async () => {
     const runtimeId = "signal-runtime" as RuntimeId;
@@ -135,6 +147,62 @@ describe("runtime signals", () => {
       "second",
     ]);
     expect(ephemeral._tag === "RuntimeSignals" ? ephemeral.records : []).toEqual([]);
+  });
+
+  test("typed channel subscribers pin their own channel and round-trip declared payloads", async () => {
+    const delivered: Array<string> = [];
+    const subscriber = checkoutChannel.subscriber({
+      name: "checkout-analytics",
+      handle: (record) =>
+        Effect.sync(() => {
+          switch (record.signal.name) {
+            case "checkout.started": {
+              delivered.push(
+                `started:${record.signal.payload.cartId}:${record.signal.payload.total}`
+              );
+              break;
+            }
+            case "checkout.completed": {
+              delivered.push(`completed:${record.signal.payload.orderId}`);
+              break;
+            }
+            case "app.opened": {
+              delivered.push("opened");
+              break;
+            }
+          }
+        }),
+    });
+    const runtime = createRuntime({
+      channels: [checkoutChannel],
+      signalSubscribers: [subscriber],
+    });
+
+    // The pin is what makes the narrowing above true rather than asserted: the
+    // bus filters delivery by this field, so the handler cannot be handed a
+    // record from a channel whose names it does not know.
+    expect(subscriber.channels).toEqual([checkoutChannel.channel]);
+
+    await runtime.publish(
+      checkoutChannel.signal("checkout.started", { cartId: "cart-1", total: 42 })
+    );
+    await runtime.publish(checkoutChannel.signal("app.opened"));
+    await runtime.publish(Signals.signal({ channel: analyticsChannel, name: "button_clicked" }));
+
+    const retained = await runtime.query({
+      _tag: "RuntimeSignals",
+      channel: checkoutChannel.channel,
+    });
+
+    expect(delivered).toEqual(["started:cart-1:42", "opened"]);
+    expect(
+      retained._tag === "RuntimeSignals"
+        ? retained.records.map((record) => [record.signal.name, record.signal.payload])
+        : []
+    ).toEqual([
+      ["checkout.started", { cartId: "cart-1", total: 42 }],
+      ["app.opened", undefined],
+    ]);
   });
 
   test("none retention redacts signal payloads from runtime events and sink delivery", async () => {

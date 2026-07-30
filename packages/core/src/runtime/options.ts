@@ -4,7 +4,7 @@ import {
 } from "../graph/config";
 import type { GraphSystemOptions } from "../graph/types";
 import type {
-  RuntimeSignalChannelDefinition,
+  RuntimeSignalChannelRegistration,
   RuntimeSignalPolicy,
   RuntimeSignalSubscriber,
 } from "../signals";
@@ -118,7 +118,7 @@ function eventBufferSizeLimit(limit: number | undefined): number {
 }
 
 function normalizeRuntimeSignalPolicies(input: {
-  readonly channels: ReadonlyArray<RuntimeSignalChannelDefinition>;
+  readonly channels: ReadonlyArray<RuntimeSignalChannelRegistration>;
   readonly policies: Readonly<Record<string, RuntimeSignalPolicy>>;
 }): RuntimeSignalPolicyRegistry {
   const channelPolicies = signalPoliciesFromChannels(input.channels);
@@ -140,7 +140,7 @@ function normalizeRuntimeSignalPolicies(input: {
 }
 
 function signalPoliciesFromChannels(
-  channels: ReadonlyArray<RuntimeSignalChannelDefinition>
+  channels: ReadonlyArray<RuntimeSignalChannelRegistration>
 ): Readonly<Record<string, RuntimeSignalPolicy>> {
   const policies: Record<string, RuntimeSignalPolicy> = {};
 
