@@ -190,7 +190,9 @@ A channel constant is a module singleton, so it cannot hold anything that varies
 
 The dispatch method goes on the node's *result*, not in `actions`. An action is routed through the node's cell actor, which serializes - the right guarantee for a state update, the wrong one here, because routing every dispatch in the app through one actor reintroduces the head-of-line blocking the bus does not otherwise have. An action also hands back a Promise or an Effect that every call site would have to discard. A method on the result is a plain closure over `ctx.signals.publish`: no actor to enter, nothing to await.
 
-Analytics dispatch is fire-and-forget, so the method returns `void`. Use an async-mode node for it - there `ctx.signals.publish` returns `Promise<void>` and the body is `void this.publish(...)`, where in effect mode the method would have to run the Effect itself.
+Analytics dispatch is fire-and-forget, so the method returns `void`. Use an async-mode node for it - there `ctx.signals.publish` returns `Promise<void>` and the method can drop the promise, where in effect mode it would have to run the Effect itself.
+
+Dropping it means catching it rather than voiding it. Publish is admitted as runtime work, so it rejects with `FrondRuntimeClosed` once the runtime is stopped, and a dispatch racing teardown is exactly when that happens. An empty catch is right here specifically because the method is fire-and-forget: the caller was never told whether delivery happened, and analytics is the last subsystem that should take an app down on its way out.
 
 ```ts
 import * as Frond from "@frondruntime/core";
@@ -225,14 +227,17 @@ class Dispatcher {
   ): void => {
     const [payload, metadata] = args;
 
-    void this.publish(
+    this.publish(
       Frond.Signals.signal({
         channel: Analytics.channel,
         name,
         payload,
         metadata: { ...this.envelope, ...metadata },
       })
-    );
+    ).catch(() => {
+      // Publishing to a stopped runtime rejects. Analytics is the last thing
+      // that should take an app down on its way out.
+    });
   };
 
   screen(name: string): void {

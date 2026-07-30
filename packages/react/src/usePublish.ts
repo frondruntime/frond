@@ -38,10 +38,25 @@ export type FrondPublish<TEvents extends Frond.Signals.SignalEventMap> = <
  *
  * `void` on the returned Promise is deliberate at the call site above rather
  * than sloppy. Awaiting it is meaningful — publish resolves once every
- * subscriber has run — but nothing here rejects: a subscriber that fails is
- * reported as a `RuntimeSignalSubscriberFailureObserved` runtime event, not to
- * the publisher, so an unhandled rejection is not what a failed handler looks
- * like.
+ * subscriber has run — and a failing subscriber is not what would reject: that
+ * is reported as a `RuntimeSignalSubscriberFailureObserved` runtime event, not
+ * to the publisher, so an unhandled rejection is never what a failed handler
+ * looks like.
+ *
+ * One thing does reject, and `void` does not cover it. Publishing to a stopped
+ * runtime fails with `FrondRuntimeClosed`, because publish is admitted as
+ * runtime work like anything else. The window is real rather than theoretical:
+ * `createRuntimeCoordinator` stops the outgoing runtime on an HMR swap or a test
+ * teardown, and this callback holds that runtime until React re-renders, so a
+ * click in between rejects. Where that window is reachable — a component that
+ * survives a swap, an app whose teardown is not the end of the process — catch
+ * it rather than voiding it:
+ *
+ * ```tsx
+ * onClick={() => {
+ *   publish("checkout.started", { cartId, total }).catch(() => {});
+ * }}
+ * ```
  */
 export function usePublish<TEvents extends Frond.Signals.SignalEventMap = Record<string, unknown>>(
   channel: Frond.Signals.RuntimeSignalChannelDefinition<TEvents>

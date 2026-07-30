@@ -75,7 +75,11 @@ const publish = FrondReact.usePublish(Checkout);
 </button>;
 ```
 
-The publisher is stable while the runtime and the channel are - a channel is normally a module constant - so it can be a dependency of other hooks. Nothing here rejects: publish resolves once every subscriber has run, and a subscriber that fails is reported as a runtime event rather than to the publisher, so `void` at the call site loses no failure. Channels, event maps, and what a subscriber sees are in [@frondruntime/core](../core/README.md#signals).
+The publisher is stable while the runtime and the channel are - a channel is normally a module constant - so it can be a dependency of other hooks. Publish resolves once every subscriber has run, and a subscriber that fails is reported as a runtime event rather than to the publisher, so `void` at the call site loses no handler failure.
+
+One thing does reject, and `void` does not cover it: publishing to a stopped runtime fails with `FrondRuntimeClosed`. That window is reachable wherever a runtime is swapped under a live tree - an HMR reload or a test teardown through `createRuntimeCoordinator` - because this callback holds the outgoing runtime until React re-renders. Where that applies, end the call with `.catch(() => {})` rather than `void`.
+
+This is the publishing path for a channel published from many call sites, which is what makes the channel constant worth exporting. An app-wide domain-event channel is usually the other case: a single dispatch point, a per-session envelope, and a channel constant deliberately kept unexported, which `usePublish` cannot reach by construction. That shape is [the dispatcher node](../core/README.md#the-dispatcher-node). Channels, event maps, and what a subscriber sees are in [@frondruntime/core](../core/README.md#signals).
 
 ## Runtime Lifecycle Hooks
 
