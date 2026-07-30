@@ -41,7 +41,7 @@ claude mcp add --transport http frond http://127.0.0.1:17391/mcp
 Four tools, all read-only:
 
 - `frond_list_runtimes` — what is attached, and how much history the hub still holds for each. Start here; the others take an `attachmentId` from it.
-- `frond_read_events` — events oldest first, filterable by tag, category, severity, and nodeId, paged with `since`.
+- `frond_read_events` — events oldest first, filterable by tag, category, severity, and nodeId, paged with `since`. Signals also filter by `channel` and `name`, which the record carries beside its tag: `category: "signal"` is every publication on the app's message bus, `channel` narrows to one bus, `name` to one kind of message — none of which reads a payload, so the filters work the same on an app that publishes shapes as on one that publishes values.
 - `frond_read_work` — every event belonging to one `workId`, which is one whole acquire/refresh/action cascade. The tool for "what actually happened when that failed".
 - `frond_read_state` — the graph as it is now, rather than how it got here. Omit `nodeId` for the whole topology; pass one to get that node with its result and the edges on either side of it.
 

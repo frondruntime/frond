@@ -17,6 +17,7 @@ bun add @frondruntime/core effect mobx
 - `Driver.Async` and `Driver.Effect` builders for pre-built or shared drivers (paired with `.fromDriver` and `specWithDriver`); inline authoring goes through the flavored factories.
 - Graph/runtime types under `Frond.Graph`, `Frond.Runtime`, `Frond.Events`, `Frond.Signals`, and `Frond.Diagnostics`.
 - Session-flow helpers: `readReady`/`ensureReadyNode` on node handles, single-flight void-input actions (`admission: "join"`), `runTransition`/`createTransition` for ordered multi-node sequences, and the `pendingOperations`/`isQuiescent` runtime reads.
+- The signal bus: `Signals.defineChannel` (optionally typed by an event map), `runtime.publish`, `runtime.subscribeSignals`, and `ctx.signals` inside drivers.
 - MobX-facing node helpers under `Frond.MobX`.
 - Opt-in host utilities: the `withInternal`/`internalOf`/`carryInternal` result envelope for hidden imperative internals, and `createRuntimeCoordinator` for serialized runtime replacement (dev HMR, test isolation).
 - Testing helpers under `@frondruntime/core/testing`.
@@ -108,6 +109,88 @@ if (!outcome.ok) {
 Steps run strictly in order and may return a Promise or a self-contained Effect. One failure policy applies to the whole run: `"abort"` stops at the first failure and skips the rest, `"continue"` runs every step and collects each failure (the best-effort tail). The returned Promise never rejects - the `TransitionOutcome` record reports `completed`, `failures`, and `ok`. Deliberately minimal: no per-step timeouts, compensation, or resumability.
 
 For observability, `runtime.pendingOperations()` lists the nodes whose current operation is `Running` (`{ nodeId, tag, operation }`), and `runtime.isQuiescent()` is the same instantaneous read as a boolean. Both are projections of data `getSnapshotSync()` already carries - observability reads, NOT an await-quiescence barrier: operations may start or settle between the read and any code acting on it.
+
+## Signals
+
+Signals are an in-process, best-effort message bus, deliberately outside the graph. A domain event that several parts of an app care about - `checkout.completed`, `session.expired` - travels without becoming somebody else's node result or a chain of action calls, and devtools sees it as its own event category rather than as generic runtime noise.
+
+A channel declares what it carries as a type map, and `defineChannel` types the channel by it:
+
+```ts
+interface CheckoutEvents {
+  "checkout.started": { readonly cartId: string; readonly total: number };
+  "checkout.completed": { readonly orderId: string };
+  "app.opened": void; // an event that carries nothing
+}
+
+export const Checkout = Frond.Signals.defineChannel<CheckoutEvents>({
+  name: "app.checkout",
+  policy: { retention: "bounded", bufferSize: 256 },
+});
+
+const runtime = Frond.createRuntime({ channels: [Checkout] });
+```
+
+`Checkout.signal` accepts only declared names, each with the payload its map entry declares. An event typed `void` takes no payload argument at all, and a name the map does not contain is a compile error rather than a message nobody is subscribed to:
+
+```ts
+await runtime.publish(Checkout.signal("checkout.started", { cartId, total }));
+await runtime.publish(Checkout.signal("app.opened"));
+```
+
+The map is types only. Nothing decodes at publish time: a signal payload is built by the same application that consumes it, so a runtime check would spend work re-discovering a mistake the compiler already refused to compile. Omitting the type argument keeps the untyped channel - any name, an `unknown` payload - so existing channels need no change, and channels can be typed one at a time.
+
+### Subscribing from a node
+
+`Checkout.subscriber` builds a subscriber pinned to its own channel and hands the handler a record that narrows per branch. Registered in `acquire` and torn down through `ctx.disposers`, that is the whole analytics-node recipe:
+
+```ts
+acquire: Frond.Driver.Acquire((ctx) =>
+  Effect.gen(function* () {
+    const store = observable({ orders: 0 }); // the node's result; observable so React re-renders
+
+    const subscription = yield* ctx.signals.subscribe(
+      Checkout.subscriber({
+        name: "analytics",
+        handle: (record) =>
+          Effect.gen(function* () {
+            switch (record.signal.name) {
+              case "checkout.completed": {
+                // Narrowed to this branch's payload: orderId, no cast.
+                track(record.signal.payload.orderId);
+                yield* ctx.deps.orders.actions.counted({ by: 1 });
+                break;
+              }
+              case "checkout.started":
+              case "app.opened": {
+                break;
+              }
+            }
+          }),
+      })
+    );
+
+    ctx.disposers.add(subscription.unsubscribe);
+    return store;
+  })
+),
+```
+
+Two things that recipe leans on. `ctx.disposers` binds the subscription to the node incarnation, so it is torn down on release, eviction, or runtime stop instead of outliving the node that owns it. And a handler that needs to reach graph state does it by invoking an action on a *declared dependency* - `ctx.deps.orders` above - which is the same discipline every other outside-the-graph callback follows: the target's cell actor serializes the action, so a burst of signals cannot interleave halfway through an update.
+
+The per-branch narrowing is a projection of the delivery filter rather than a claim: `subscriber` pins `channels` to this channel, and the bus filters delivery by exactly that field. A subscriber assembled by hand without `channels` receives every channel's traffic and correctly gets the wide `RuntimeSignalRecord`. For consumers outside the graph entirely, `runtime.subscribeSignals(subscriber)` takes the same value and returns the same `unsubscribe`.
+
+### What delivery costs
+
+`publish` awaits its subscribers, one at a time, before it resolves. That is what lets a resolved publish mean "every subscriber has run", and it is also the cost: a slow handler delays the publisher and every subscriber behind it. Keep handlers short and fork what is not (`Effect.forkDetach`, or a queue the node drains on its own). A handler that fails does not fail the publish - the failure is reported as a `RuntimeSignalSubscriberFailureObserved` event naming both the subscriber and the signal, and delivery continues to the rest.
+
+### Retention is also the privacy lever
+
+A channel's `policy` decides what is kept. `bounded` retains the last `bufferSize` records (128 when omitted), readable through `ctx.signals.readRetained` and visible in the devtools feed. `none` retains nothing - and strips `payload` from the emitted runtime event and from sink delivery too, not only from the buffer. So a channel carrying anything that should not leave the process is declared `retention: "none"`: its payloads reach no devtools wire, while its channel and name still do, which is enough to see that it fired.
+
+### Not a graph dependency
+
+Signals do not participate in readiness. Nothing waits on one, delivery is best-effort, and a node that acquires after a signal fired sees no replay unless it asks for one (`ctx.signals.readRetained`), so a node result derived from delivery would differ by boot order. Dependencies stay declared through `dependencies`/`dep`; a signal that must change graph state does it by invoking an action, as above.
 
 ## Interop
 
