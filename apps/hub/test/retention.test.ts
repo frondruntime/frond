@@ -115,6 +115,53 @@ describe("EventRing", () => {
     ).toEqual([1]);
   });
 
+  /**
+   * The fields the encoder lifts off a signal so a reader can select one without
+   * the app's value policy having a say. Filtered here rather than out of
+   * `fields`, which holds a shape descriptor at every policy but `"full"`.
+   */
+  test("channel and name pick one signal out of a bus", () => {
+    const ring = new EventRing(10);
+    const signal = (channel: string, name: string): Partial<EncodedEventRecord> => ({
+      tag: "RuntimeSignalPublished",
+      category: "signal",
+      channel,
+      name,
+    });
+
+    ring.push([
+      record(1, signal("app.analytics", "checkout_started")),
+      record(2, signal("app.analytics", "checkout_completed")),
+      record(3, signal("app.sync", "checkout_started")),
+      record(4),
+    ]);
+
+    expect(
+      ring.read({ channel: "app.analytics", limit: 10 }).records.map((r) => r.sequence)
+    ).toEqual([1, 2]);
+    expect(
+      ring.read({ name: "checkout_started", limit: 10 }).records.map((r) => r.sequence)
+    ).toEqual([1, 3]);
+    expect(
+      ring
+        .read({ channel: "app.analytics", name: "checkout_started", limit: 10 })
+        .records.map((r) => r.sequence)
+    ).toEqual([1]);
+  });
+
+  /**
+   * A non-signal record has no channel at all, so it can never satisfy the
+   * filter — including when the caller passes an empty string, which is a real
+   * value to ask about and not a way to mean "unset".
+   */
+  test("a record with no channel is not matched by a channel filter", () => {
+    const ring = new EventRing(10);
+
+    ring.push([record(1), record(2, { channel: "app.analytics" })]);
+
+    expect(ring.read({ channel: "", limit: 10 }).records).toEqual([]);
+  });
+
   test("an empty ring reports no coverage rather than a fake zero", () => {
     const window = new EventRing(10).read({ limit: 10 });
 

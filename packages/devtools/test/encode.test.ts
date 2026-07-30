@@ -15,6 +15,13 @@ function recordWith(
   value: unknown,
   failures: ReadonlyArray<unknown> = []
 ): Runtime.RuntimeEventRecord {
+  return recordOf({ _tag: "Probe", value }, failures);
+}
+
+function recordOf(
+  event: unknown,
+  failures: ReadonlyArray<unknown> = []
+): Runtime.RuntimeEventRecord {
   return {
     runtimeId: "runtime-1",
     sequence: 1,
@@ -26,7 +33,7 @@ function recordWith(
       reason: "acquire",
       priority: "background",
     },
-    event: { _tag: "Probe", value },
+    event,
     classification: {
       category: "graph",
       severity: "info",
@@ -162,6 +169,83 @@ describe("encodeRecord", () => {
       size: 1,
     });
     expect(fieldOf(new Set([1, 2]), "full")).toEqual({ _: "set", values: [1, 2], size: 2 });
+  });
+});
+
+/**
+ * The failure these exist for: a publication is one field, `record`, so the
+ * uniform field walk reduced the whole event to
+ * `"{runtimeId,sequence,recordedAt,signal}"` — a feed that says a signal fired
+ * and withholds every part of it a reader came for.
+ */
+describe("a signal's identity", () => {
+  const signalRecord = {
+    runtimeId: "runtime-1",
+    sequence: 4,
+    recordedAt: 1000,
+    signal: {
+      channel: "app.analytics",
+      name: "checkout_started",
+      payload: { orderId: "order-4417" },
+    },
+  };
+
+  const published = (): Runtime.RuntimeEventRecord =>
+    recordOf({ _tag: "RuntimeSignalPublished", record: signalRecord, at: 1000 });
+
+  test("the channel and the name cross at every policy", () => {
+    for (const policy of ["none", "shape", "full"] as const) {
+      const encoded = encodeRecord(published(), policy);
+
+      expect([encoded.channel, encoded.name]).toEqual(["app.analytics", "checkout_started"]);
+    }
+  });
+
+  /**
+   * Lifting the routing fields out is not a licence for the payload to follow
+   * them: it is app data, and which policy applies to it did not change.
+   */
+  test("the payload is still clamped by the policy", () => {
+    expect(encodeRecord(published(), "none").fields).toEqual({});
+    expect(encodeRecord(published(), "shape").fields["record"]).toBe(
+      "{runtimeId,sequence,recordedAt,signal}"
+    );
+
+    expect(JSON.stringify(encodeRecord(published(), "none"))).not.toContain("order-4417");
+    expect(JSON.stringify(encodeRecord(published(), "shape"))).not.toContain("order-4417");
+    expect(JSON.stringify(encodeRecord(published(), "full"))).toContain("order-4417");
+  });
+
+  /** A subscriber failure that cannot say which signal it was on has no subject. */
+  test("a subscriber failure names the signal it was handling", () => {
+    const encoded = encodeRecord(
+      recordOf(
+        {
+          _tag: "RuntimeSignalSubscriberFailureObserved",
+          subscriber: "audit-log",
+          signal: signalRecord,
+          cause: new Error("subscriber threw"),
+          at: 1000,
+        },
+        [new Error("subscriber threw")]
+      ),
+      "shape"
+    );
+
+    expect([encoded.channel, encoded.name]).toEqual(["app.analytics", "checkout_started"]);
+  });
+
+  /**
+   * `not.toHaveProperty` rather than `toBeUndefined`: both are `optionalKey` on
+   * the wire, and a key present with an undefined value encodes as null — a
+   * record claiming a channel whose name is nothing. Absence is the answer a
+   * reader filtering on either field can act on.
+   */
+  test("an event that is about no signal carries neither field", () => {
+    const encoded = encodeRecord(recordWith({ id: 1 }), "shape");
+
+    expect(encoded).not.toHaveProperty("channel");
+    expect(encoded).not.toHaveProperty("name");
   });
 });
 

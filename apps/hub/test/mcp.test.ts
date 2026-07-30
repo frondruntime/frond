@@ -419,6 +419,35 @@ describe("page", () => {
   });
 
   /**
+   * The signal filters as `frond_read_events` hands them down. They are worth a
+   * test at this level because the tool's contract is that they are enough on
+   * their own: only a signal record carries a channel, so narrowing to one bus
+   * does not also require naming the category.
+   */
+  test("a page narrows to one signal channel, and to one message across channels", async () => {
+    const hub = await harness();
+    const app = await hub.attach("app");
+    const signal = (channel: string, name: string): EncodedEventRecord =>
+      record({ tag: "RuntimeSignalPublished", category: "signal", channel, name });
+
+    await hub.ingest(app, [
+      signal("app.analytics", "checkout_started"),
+      signal("app.analytics", "cart_cleared"),
+      signal("app.sync", "checkout_started"),
+      record(),
+    ]);
+
+    const [view, ring] = only(hub);
+
+    expect(
+      page(view, ring, { limit: 50, channel: "app.analytics" }).records.map((r) => r.name)
+    ).toEqual(["checkout_started", "cart_cleared"]);
+    expect(
+      page(view, ring, { limit: 50, name: "checkout_started" }).records.map((r) => r.channel)
+    ).toEqual(["app.analytics", "app.sync"]);
+  });
+
+  /**
    * The counter an agent reads to tell "nothing happened between sequence 5 and
    * sequence 900" from "the hub threw that away". The node's own ring is sized
    * for production, so this drives one small enough to actually overflow.

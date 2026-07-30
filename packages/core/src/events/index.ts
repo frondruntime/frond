@@ -8,6 +8,7 @@ export type RuntimeEventCategory =
   | "input"
   | "lifecycle"
   | "operation"
+  | "signal"
   | "state";
 
 export type RuntimeEventSeverity = "debug" | "error" | "info" | "warning";
@@ -51,7 +52,7 @@ const runtimeEventMetadata = {
   RuntimeStopped: fixed(lifecycle("info", "state")),
   InputIngestionChanged: fixed(command("info", "system")),
   RuntimeInputReceived: fixed(input("info", "system")),
-  RuntimeSignalPublished: fixed(input("info", "system")),
+  RuntimeSignalPublished: fixed(signal("info", "system")),
   RuntimeSignalSubscriberFailureObserved: metadata({
     classification: diagnostic("error", "system"),
     failures: ({ cause }) => [cause],
@@ -200,6 +201,22 @@ function input(
   timeline: RuntimeEventTimeline
 ): RuntimeEventClassification {
   return { category: "input", severity, reportable: false, timeline };
+}
+
+/**
+ * Its own category rather than `input`, which is where publications used to sit.
+ *
+ * A signal is not something that arrived from outside the runtime, and filing it
+ * under `input` cost a reader the only cheap way to ask for the message bus on
+ * its own — the category then meant "an input, or a signal", so selecting either
+ * one selected both. Subscriber failures stay `diagnostic`: they are a failure
+ * first, and a feed of what is broken that omits them is the wrong trade.
+ */
+function signal(
+  severity: RuntimeEventSeverity,
+  timeline: RuntimeEventTimeline
+): RuntimeEventClassification {
+  return { category: "signal", severity, reportable: false, timeline };
 }
 
 function state(

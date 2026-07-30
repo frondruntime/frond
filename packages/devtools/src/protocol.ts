@@ -71,6 +71,7 @@ export const RuntimeEventCategory = Schema.Literals([
   "input",
   "lifecycle",
   "operation",
+  "signal",
   "state",
 ]);
 
@@ -165,6 +166,30 @@ export const EncodedEventRecord = Schema.Struct({
   reason: RuntimeWorkReason,
   priority: RuntimeWorkPriority,
   nodeIds: Schema.Array(Schema.String),
+  /**
+   * Which signal this is, on the two events that carry one.
+   *
+   * Lifted out of `fields` because that is where they used to die: the field
+   * walk treats every event body the same way, so a publication whose one field
+   * is a signal record arrived at the default `"shape"` policy as a key list of
+   * that record — a reader could tell that *a* signal fired and nothing about
+   * which one. A channel and an event name are routing structure rather than app
+   * data, which is the same argument `describeShape` makes for letting `_tag`
+   * cross verbatim, so these two cross at every policy. The `payload` stays in
+   * `fields` and stays clamped, because it is the half that really is data.
+   *
+   * Optional, which is what let this land without moving
+   * {@link HUB_PROTOCOL_VERSION}: it is 1, the hub gates attachment on exact
+   * equality, and protocol-1 apps are already published on npm at 0.3.x.
+   * Required fields would have forced a bump and locked every one of those apps
+   * out of every newer hub. Optional works in both directions instead — an old
+   * hub ignores the extra properties a new app sends, because effect Schema
+   * drops excess properties on decode and nothing here overrides
+   * `onExcessProperty`, and a new hub reads an old app's records as what they
+   * are: signals whose channel it was never told.
+   */
+  channel: Schema.optionalKey(Schema.String),
+  name: Schema.optionalKey(Schema.String),
   /**
    * Keyed by the event's own field names, minus `_tag`.
    *

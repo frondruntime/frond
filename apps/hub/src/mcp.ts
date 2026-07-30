@@ -61,7 +61,7 @@ const ListRuntimes = readOnly(
 const ReadEvents = readOnly(
   Tool.make("frond_read_events", {
     description:
-      "Read runtime events from an attached Frond runtime, oldest first. Page forward by passing the returned nextSince back as since. Every filter is an exact match and they combine with AND. A record's failures array holds what went wrong as a chain of causes, outermost first; read its message field before its frames, because the outermost cause is usually a wrapper with nothing in it.",
+      "Read runtime events from an attached Frond runtime, oldest first. Page forward by passing the returned nextSince back as since. Every filter is an exact match and they combine with AND. A record's failures array holds what went wrong as a chain of causes, outermost first; read its message field before its frames, because the outermost cause is usually a wrapper with nothing in it. Signals published on the runtime's message bus carry channel and name alongside tag, so they can be filtered without reading any payload: category signal is every publication, channel narrows to one bus, name to one kind of message. Both fields are absent on events that are not about a signal.",
     parameters: Schema.Struct({
       attachmentId: Schema.optionalKey(Schema.String),
       /** Exclusive. Omit to start from the oldest record the hub still holds. */
@@ -73,6 +73,13 @@ const ReadEvents = readOnly(
       severity: Schema.optionalKey(Schema.String),
       /** Format is `tag:key`, e.g. `hub/attachments:v1:"singleton"`. */
       nodeId: Schema.optionalKey(Schema.String),
+      /**
+       * A signal channel, e.g. "app.analytics". Matches only signal events, so
+       * it needs no `category: "signal"` alongside it.
+       */
+      channel: Schema.optionalKey(Schema.String),
+      /** A signal's event name, e.g. "checkout_started". */
+      name: Schema.optionalKey(Schema.String),
     }),
     success: EventPage,
     failure: McpReadError,
@@ -165,6 +172,8 @@ export function mcpLayer(options: {
           category: params.category,
           severity: params.severity,
           nodeId: params.nodeId,
+          channel: params.channel,
+          name: params.name,
         })
       ),
 

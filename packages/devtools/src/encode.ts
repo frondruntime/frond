@@ -86,7 +86,9 @@ export function createValueEncoder(policy: EncodePolicy): ValueEncoder {
  *
  * Classification, work context, and node ids are metadata the runtime already
  * owns and are copied verbatim — they are ids and enum members, never user
- * data. Only the event body goes through the value encoder.
+ * data. A signal's channel and name join them, on the reasoning
+ * `EncodedEventRecord` gives for the two fields. Only the event body goes
+ * through the value encoder.
  */
 export function encodeRecord(
   record: Runtime.RuntimeEventRecord,
@@ -123,6 +125,7 @@ export function encodeRecord(
     reason: record.work.reason,
     priority: record.work.priority,
     nodeIds: record.nodeIds,
+    ...signalIdentity(record.event),
     fields: policy === "none" ? {} : describeFields(record.event, encodeField),
     // Failures are causes, not results: their messages are what makes a
     // devtools feed worth reading, so they are described rather than dropped —
@@ -134,6 +137,35 @@ export function encodeRecord(
     // encoder comes out as a bag of key names.
     failures: record.failures.map(encoder.failure),
   };
+}
+
+/**
+ * Names the signal an event is about, where it is about one.
+ *
+ * Two tags, written out, rather than a rule the field walk could apply to any
+ * event: a general "promote a field called `channel`" would promote whatever an
+ * app happened to name that way, which is app data crossing the policy that was
+ * meant to clamp it. Only these two events have a channel the runtime itself put
+ * there, and `RuntimeSignalSubscriberFailureObserved` is here for the same
+ * reason as the publication — a subscriber failure that cannot say which signal
+ * it was handling is a failure with no subject.
+ *
+ * Absent rather than empty on everything else. `channel: ""` is a record
+ * claiming a channel it does not have, and a reader filtering on the field would
+ * have to know to treat one string as meaning "no".
+ */
+function signalIdentity(event: Runtime.RuntimeEvent): {
+  readonly channel?: string;
+  readonly name?: string;
+} {
+  const signal =
+    event._tag === "RuntimeSignalPublished"
+      ? event.record.signal
+      : event._tag === "RuntimeSignalSubscriberFailureObserved"
+        ? event.signal.signal
+        : undefined;
+
+  return signal === undefined ? {} : { channel: signal.channel, name: signal.name };
 }
 
 function describeFields(
