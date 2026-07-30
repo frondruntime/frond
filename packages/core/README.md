@@ -184,9 +184,130 @@ The per-branch narrowing is a projection of the delivery filter rather than a cl
 
 `publish` awaits its subscribers, one at a time, before it resolves. That is what lets a resolved publish mean "every subscriber has run", and it is also the cost: a slow handler delays the publisher and every subscriber behind it. Keep handlers short and fork what is not (`Effect.forkDetach`, or a queue the node drains on its own). A handler that fails does not fail the publish - the failure is reported as a `RuntimeSignalSubscriberFailureObserved` event naming both the subscriber and the signal, and delivery continues to the rest.
 
+### The dispatcher node
+
+A channel constant is a module singleton, so it cannot hold anything that varies per session. Analytics wants exactly the opposite: a session id, the current screen, and the signed-in user on every event. That envelope is the part a module constant has nowhere to keep, and threading it through each call site instead is how it goes stale. The fix is to bind dispatch to the runtime by putting it behind a node, where the envelope lives in the node incarnation and is released with it.
+
+The dispatch method goes on the node's *result*, not in `actions`. An action is routed through the node's cell actor, which serializes - the right guarantee for a state update, the wrong one here, because routing every dispatch in the app through one actor reintroduces the head-of-line blocking the bus does not otherwise have. An action also hands back a Promise or an Effect that every call site would have to discard. A method on the result is a plain closure over `ctx.signals.publish`: no actor to enter, nothing to await.
+
+Analytics dispatch is fire-and-forget, so the method returns `void`. Use an async-mode node for it - there `ctx.signals.publish` returns `Promise<void>` and the body is `void this.publish(...)`, where in effect mode the method would have to run the Effect itself.
+
+```ts
+import * as Frond from "@frondruntime/core";
+
+// Exported: features extend it by declaration merging (below).
+export interface AppEvents {
+  "app.opened": void;
+  "cta.clicked": { readonly cta: string };
+}
+
+// NOT exported. The only way to build a signal on this channel is `track`.
+const Analytics = Frond.Signals.defineChannel<AppEvents>({
+  name: "app.analytics",
+  policy: { retention: "bounded", bufferSize: 256 },
+});
+
+interface Envelope {
+  sessionId: string;
+  screen: string;
+  userId: string | null;
+}
+
+class Dispatcher {
+  constructor(
+    private readonly publish: (signal: Frond.Signals.RuntimeSignal) => Promise<void>,
+    private readonly envelope: Envelope
+  ) {}
+
+  track = <K extends keyof AppEvents & string>(
+    name: K,
+    ...args: Frond.Signals.SignalPayloadArgs<AppEvents[K]>
+  ): void => {
+    const [payload, metadata] = args;
+
+    void this.publish(
+      Frond.Signals.signal({
+        channel: Analytics.channel,
+        name,
+        payload,
+        metadata: { ...this.envelope, ...metadata },
+      })
+    );
+  };
+
+  screen(name: string): void {
+    this.envelope.screen = name;
+  }
+}
+
+type DispatcherSpec = Frond.NodeSpec<{
+  readonly mode: "async";
+  readonly args: Frond.Args.None;
+  readonly key: Frond.Key.Singleton;
+  readonly result: Dispatcher;
+}>;
+
+export class AnalyticsDispatcherNode extends Frond.NodeBase<DispatcherSpec> {
+  static readonly spec = Frond.serviceSpec.async<DispatcherSpec>({
+    tag: Frond.tag("app/analytics-dispatcher"),
+    key: () => Frond.Key.singleton(),
+    acquire: Frond.Driver.Acquire(
+      async (ctx) =>
+        new Dispatcher((signal) => ctx.signals.publish(signal), {
+          sessionId: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+          screen: "boot",
+          userId: null,
+        })
+    ),
+  });
+}
+```
+
+The session id is minted from `Date.now` and `Math.random` rather than `crypto.randomUUID`, for the same reason the devtools client stopped calling it: React Native has no global `crypto` until a polyfill installs one, and a session id needs to be unique within a process rather than unguessable.
+
+The generic keeps the full per-name typing the channel has: `track("cta.clicked", { cta: "buy" })` is checked exactly as `Analytics.signal` would check it. An undeclared name, a wrong payload, a payload passed to an event declared `void`, and an omitted required payload are each a compile error through this path.
+
+No cast is needed inside, because `Signals.signal({ channel, name, payload, metadata })` declares `payload: unknown`. The other spelling does not work and is worth naming so nobody rediscovers it: destructuring `...args` and reassembling the call as `Analytics.signal(name, payload, metadata)` fails with TS2345, because the conditional tuple `SignalPayloadArgs<AppEvents[K]>` cannot be rebuilt from its own destructured elements while `K` is still generic. The object form sidesteps the rebuild entirely.
+
+Two things this shape buys, both measured. Dispatch does not wait on delivery: three dispatches returned in 1ms against a subscriber taking 100ms per event. And the envelope is live rather than captured per call: one event carried `screen: "boot"`, `screen("cart")` was then called, and the next two carried `screen: "cart"` - in the subscriber and in the retained buffer alike.
+
+The cost is cold start, and it is the honest one to state: `useNode` suspends, so a component cannot dispatch until the dispatcher node is acquired, and the events most at risk of being lost that way are precisely the cold-start ones. `Preload` the dispatcher at the app root, above anything that fires:
+
+```tsx
+<FrondReact.Preload nodes={[{ analytics: [AnalyticsDispatcherNode, {}] }]}>
+  <Routes />
+</FrondReact.Preload>;
+
+// Anywhere below it, with no suspense left to pay:
+const analytics = FrondReact.useNode(AnalyticsDispatcherNode, {}).result;
+
+<button type="button" onClick={() => analytics.track("cta.clicked", { cta: "buy" })}>
+  Buy
+</button>;
+```
+
+What it is not is a re-render risk. `_result` is `observable.ref` and the envelope mutates inside a stable `Dispatcher` instance, so a dispatch-only component does not re-render when the envelope changes. The flip side is the rule that follows from it: do not render from the envelope, because nothing will tell React it moved.
+
+"One way to dispatch" is enforced as a module boundary, not as a type. The channel constant stays unexported, so no other module can call `Analytics.signal` at all; the event map interface stays exported, because declaration merging needs it, so features keep contributing events without gaining a way to publish them. Other nodes reach the same method through a declared dependency - `ctx.deps.analytics.result.track(...)` - which is the ordinary dependency path, not a second door.
+
+That merged map is what makes one app-wide channel workable. A feature module extends the shared interface where its own events live:
+
+```ts
+// features/cart/events.ts
+declare module "../../analytics/dispatcher" {
+  interface AppEvents {
+    "cart.item.added": { readonly sku: string; readonly quantity: number };
+  }
+}
+```
+
+The channel constant is created before those augmentations are loaded and still sees every one of them, because merging is a type-level operation and `defineChannel` carries no per-event runtime artifact. The safety net is on the subscriber side: a handler whose `default:` branch does `const unhandled: never = record.signal` stops compiling the moment any feature adds an event, so a shared map cannot quietly grow past the code that handles it.
+
 ### Retention is also the privacy lever
 
 A channel's `policy` decides what is kept. `bounded` retains the last `bufferSize` records (128 when omitted), readable through `ctx.signals.readRetained` and visible in the devtools feed. `none` retains nothing - and strips `payload` from the emitted runtime event and from sink delivery too, not only from the buffer. So a channel carrying anything that should not leave the process is declared `retention: "none"`: its payloads reach no devtools wire, while its channel and name still do, which is enough to see that it fired.
+
+What `bounded` retains is the payload *by reference*: the record is pushed as published, with no clone and no freeze. So a payload you keep mutating shows up in devtools in whatever state it has reached by the time the feed is read, not the state it had at publish, and a live object stays pinned by the buffer for the next `bufferSize` publications on that channel. Publish flat facts - ids and scalars - rather than handing the bus an object the app goes on editing.
 
 ### Not a graph dependency
 
