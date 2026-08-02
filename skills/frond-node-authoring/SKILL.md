@@ -159,6 +159,10 @@ Rules:
 - Result unions carry only ready facts. No `"unknown"` or `"loading"`
   members: a probe that cannot determine the fact fails the hook; the
   runtime already models pending.
+- Multi-step flow encoding: a **linear** flow (start → verify → done) puts
+  the step union in the result. A **cyclical** flow (quote → re-quote →
+  submit) keeps a flat result plus a private node-owned machine, projected
+  through a closed presentation getter. Pick one per node; do not mix.
 - Commit-then-reveal: a result never claims `complete` until every side
   effect it implies has been awaited to completion. Await the handoff, then
   `ctx.setResult` — never concurrently.
@@ -220,6 +224,14 @@ actions: {
 - `ctx.disposers.add(fn)` registers incarnation-scoped cleanup for secondary
   listeners acquired mid-hook. The result's primary capability still tears
   down in `release`.
+- Staging precedence: mutations staged through `setResult` /
+  `setResultValidity` / `patchResult` commit when the hook succeeds. In
+  `acquire`/`refresh` a defined return value supersedes the staged result
+  (but not explicitly staged validity); action return values are always
+  result-neutral.
+- Effect-mode hooks also get `ctx.tryPromise` for promise interop, and both
+  modes get `ctx.signals` for publishing typed runtime signals from drivers
+  (see the signals coverage note — full lane rules are pending).
 
 ## Cancellation
 
