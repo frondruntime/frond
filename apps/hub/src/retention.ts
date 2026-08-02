@@ -48,6 +48,17 @@ export type ReadOptions = {
   readonly severity?: string | undefined;
   readonly workId?: number | undefined;
   readonly nodeId?: string | undefined;
+  /**
+   * A signal channel and event name, which only signal events carry.
+   *
+   * Matched against the record's own lifted fields rather than against anything
+   * in `fields`: the two exist on the wire precisely so a reader can select a
+   * signal without the app's value policy having a say, and a filter that
+   * reached into `fields` would work at `"full"` and quietly match nothing at
+   * `"shape"`.
+   */
+  readonly channel?: string | undefined;
+  readonly name?: string | undefined;
 };
 
 /**
@@ -173,6 +184,14 @@ function matches(record: EncodedEventRecord, options: ReadOptions): boolean {
   }
 
   if (options.nodeId !== undefined && !record.nodeIds.includes(options.nodeId)) {
+    return false;
+  }
+
+  if (options.channel !== undefined && record.channel !== options.channel) {
+    return false;
+  }
+
+  if (options.name !== undefined && record.name !== options.name) {
     return false;
   }
 

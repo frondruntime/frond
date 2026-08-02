@@ -44,5 +44,11 @@ export function unwrapEffect<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
 export function wrapPromise<A>(
   thunk: (signal: AbortSignal) => Promise<A>
 ): Effect.Effect<A, unknown> {
+  // The diagnostic is right about the general case and wrong about this one.
+  // Wrapping in a `Data.TaggedError` here would be a tag this function invented
+  // for a rejection it never saw — `thunk` is the caller's arbitrary Promise, so
+  // `unknown` is not a gap in the typing, it is the honest type of what comes
+  // back. Narrowing it belongs to whoever knows what they passed in.
+  // @effect-diagnostics-next-line unknownInEffectCatch:off
   return Effect.tryPromise({ try: thunk, catch: (error) => error });
 }

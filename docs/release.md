@@ -28,7 +28,9 @@ Do not run `bun run publish:npm` or `bun run publish:npm:dry-run` from GitHub Ac
 
 All four packages use linked versions. Release-please tracks each of them in `.release-please-manifest.json`, updates workspace peer dependencies through the `node-workspace` plugin, and emits component tags instead of one shared tag.
 
-Release-please owns no version string outside `package.json` and the manifest. The hub used to keep a second copy in `apps/hub/src/version.ts`, synced by an `extra-files` marker; it no longer has one. `frond-hub --version` and the MCP handshake now report `HUB_PROTOCOL_VERSION`, which is a wire contract rather than a release, and which moves when the contract does — not when a release does. Nothing to sync means nothing that can silently fall out of sync, which is how that marker failed: it rewrites a semver on the line it is found on, so a marker sitting one line off matches, replaces nothing, and reports success.
+Release-please owns no version string outside `package.json` and the manifest. The hub used to keep a second copy in `apps/hub/src/version.ts`, synced by an `extra-files` marker; it no longer has one. That marker is worth remembering as a failure mode: it rewrites a semver on the line it is found on, so a marker sitting one line off matches, replaces nothing, and reports success — a hub announcing a version it was not.
+
+`apps/hub/src/version.ts` now reads `package.json` directly instead. `frond-hub --version` prints both numbers, `0.4.0 (protocol 2)`, because they answer different questions: the release says which build is installed, which is what a bug report needs, and the protocol says what that build will talk to, which is the only number an attaching app compares. The MCP handshake advertises the bare package version, which is what `serverInfo.version` is specified to mean. Nothing here is copied, so nothing can fall out of sync.
 
 Use Conventional Commit subjects for release-driving commits:
 

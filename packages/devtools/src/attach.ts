@@ -80,6 +80,31 @@ export type AttachOptions = {
 };
 
 /**
+ * Mints the id that identifies this runtime for the life of the process.
+ *
+ * Deliberately not `crypto.randomUUID`, which this used to be. That call is not
+ * available everywhere a Frond app runs — React Native has no global `crypto`
+ * until a polyfill installs one — and reaching for it meant either a startup
+ * crash on the runtime least able to explain it, or a guard, and a guard is a
+ * branch whose two halves nobody exercises together.
+ *
+ * The entropy was never the requirement. This id has to be unique among the
+ * handful of apps attached to one local hub at one time, and stable across that
+ * process's own reconnects. Nothing authenticates with it, nothing persists it,
+ * and it dies with the hub. A timestamp for cross-process separation and a short
+ * random suffix for anything started inside the same millisecond covers that
+ * with room to spare; the timestamp is the half that matters, because
+ * `Math.random` is seeded per process and two processes launched together is
+ * exactly where bare randomness is weakest.
+ *
+ * If this ever fronts something that is not a local devtools socket, it needs a
+ * real generator — but then it also needs a real identity, not this.
+ */
+export function newInstanceId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
  * Transport for one attachment.
  *
  * Exported because the hub dials itself over exactly this layer — same
@@ -138,7 +163,7 @@ export const attachRuntime = Effect.fnUntraced(function* (options: AttachOptions
 
   const info: AttachmentInfo = {
     protocolVersion: HUB_PROTOCOL_VERSION,
-    instanceId: options.instanceId ?? crypto.randomUUID(),
+    instanceId: options.instanceId ?? newInstanceId(),
     runtimeId: options.runtime.getSnapshotSync().runtimeId,
     generation: options.generation ?? 0,
     name: options.name,

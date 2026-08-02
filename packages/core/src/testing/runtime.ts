@@ -18,6 +18,7 @@ export interface TestRuntimeOptions
     | "eventBufferSize"
     | "sinks"
     | "specOverrides"
+    | "channels"
     | "signalSubscribers"
     | "signalPolicies"
     | "syncClock"

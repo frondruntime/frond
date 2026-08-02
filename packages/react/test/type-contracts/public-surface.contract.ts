@@ -50,3 +50,27 @@ FrondReactTesting.TestFrondProvider satisfies (props: {
   readonly runtime?: Frond.Runtime.Runtime | undefined;
   readonly children: React.ReactNode;
 }) => React.ReactNode;
+
+interface PublishContractEvents {
+  "contract.paid": { readonly orderId: string };
+  // biome-ignore lint/suspicious/noConfusingVoidType: an event that carries no payload is declared `void`.
+  "contract.opened": void;
+}
+
+FrondReact.usePublish satisfies <TEvents extends Frond.Signals.SignalEventMap>(
+  channel: Frond.Signals.RuntimeSignalChannelDefinition<TEvents>
+) => FrondReact.FrondPublish<TEvents>;
+
+declare const publishContract: FrondReact.FrondPublish<PublishContractEvents>;
+
+publishContract("contract.paid", { orderId: "o-1" }) satisfies Promise<void>;
+publishContract("contract.opened") satisfies Promise<void>;
+
+// @ts-expect-error the channel declares no event by that name.
+publishContract("contract.refunded", { orderId: "o-1" });
+
+// @ts-expect-error contract.paid carries an orderId, not a number.
+publishContract("contract.paid", { orderId: 1 });
+
+// @ts-expect-error contract.opened carries nothing, so there is no payload to pass.
+publishContract("contract.opened", { orderId: "o-1" });

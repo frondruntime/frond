@@ -10,7 +10,7 @@ bunx @frondruntime/hub
 
 **Bun, not Node.** This package ships as TypeScript source rather than a bundle: its bin is `src/cli.tsx` behind a `#!/usr/bin/env bun` shebang, and it renders with Ink. `bunx` runs it. `npx` does not — Node reaches the `.tsx` and dies on a parse error that says nothing about why, which is the worst way to learn about a runtime requirement. Whatever starts the hub has to start it with Bun.
 
-It binds `127.0.0.1:17391` and takes over the terminal with a dashboard of attached runtimes. `--host` and `--port` override the defaults, but the port is worth leaving alone: apps hardcode it, and a hub somewhere else looks from the app's side exactly like a hub that is not running. `--version` reports the protocol version this build speaks, not the release it came from — see [Version mismatches](#version-mismatches). For the release, ask the package manager: `npm ls @frondruntime/hub`.
+It binds `127.0.0.1:17391` and takes over the terminal with a dashboard of attached runtimes. `--host` and `--port` override the defaults, but the port is worth leaving alone: apps hardcode it, and a hub somewhere else looks from the app's side exactly like a hub that is not running. `--version` prints both numbers — `frond-hub v0.4.0 (protocol 2)` — because they answer different questions: the release is what a bug report needs, and the protocol is what an attaching app compares. See [Version mismatches](#version-mismatches).
 
 A port collision is fatal rather than silently resolved, for the same reason.
 
@@ -41,7 +41,7 @@ claude mcp add --transport http frond http://127.0.0.1:17391/mcp
 Four tools, all read-only:
 
 - `frond_list_runtimes` — what is attached, and how much history the hub still holds for each. Start here; the others take an `attachmentId` from it.
-- `frond_read_events` — events oldest first, filterable by tag, category, severity, and nodeId, paged with `since`.
+- `frond_read_events` — events oldest first, filterable by tag, category, severity, and nodeId, paged with `since`. Signals also filter by `channel` and `name`, which the record carries beside its tag: `category: "signal"` is every publication on the app's message bus, `channel` narrows to one bus, `name` to one kind of message — none of which reads a payload, so the filters work the same on an app that publishes shapes as on one that publishes values.
 - `frond_read_work` — every event belonging to one `workId`, which is one whole acquire/refresh/action cascade. The tool for "what actually happened when that failed".
 - `frond_read_state` — the graph as it is now, rather than how it got here. Omit `nodeId` for the whole topology; pass one to get that node with its result and the edges on either side of it.
 

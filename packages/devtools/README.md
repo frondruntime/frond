@@ -48,6 +48,8 @@ Opt into `"full"` per app, deliberately. The runtimes worth debugging are the on
 
 `"none"` is its own encoder rather than a stricter `"shape"`, because a key list is itself a description of app data — an app that said it would send none should not be sending the key names of every node in a graph snapshot.
 
+What every policy still sends is how a record is addressed: its tag, its `nodeIds`, and — on a signal — its channel and event name. Those are the filters `frond_read_events` takes, so withholding them would leave a feed that cannot be narrowed to the thing you are looking for, and they are authored as constants beside the publishing code rather than derived from data. The payload is the value, and at `"none"` the payload is what goes.
+
 At `"shape"` the descriptors are strings rather than JSON objects, because this feed is read by an agent through MCP and a node result rendered as forty lines of pretty-printed JSON that contain no data is worse than one rendered as `{id,name}`. Numbers, booleans, and strings up to 256 characters still cross verbatim: in a runtime event those are ids, tags, timestamps, and flags, which is the entire signal. Anything structured is a descriptor, because a node result or an action input is always an object or an array. A class instance gives up only its type — `AccountModel{?}` — and `_tag` is the one nested field that survives, since a failure feed that says `{_tag,nodeId}` instead of `GraphNodeAcquireFailed` is not worth reading.
 
 Every bound at `"full"` announces itself in the output: `{"_": "elided", "by": "depth"}` — or `"budget"`, or `"entries"` — where the walk stopped, and a `{"_": "string"}` descriptor carrying `length` and `head` where a string was cut. A cap a reader cannot see is worse than a low one, because it turns "there was more" into "that was all". Markers stay objects under a `_` key at this policy, where the values around them are real data and a marker has to remain distinguishable from one.
@@ -95,6 +97,34 @@ The attach socket is unauthenticated by design — it only carries data *into* t
 ## Platforms
 
 The main entry imports nothing from `node:`. The transport is a global `WebSocket` carrying ndjson, so the same build attaches from a browser, from Bun, from Node, and from React Native.
+
+### React Native
+
+Nothing to install: this package uses no global beyond `WebSocket`, so there is no `crypto` polyfill to add and no Node shim to configure.
+
+What does differ is the address. **The default is loopback, and loopback means something different on each target.**
+
+| Target                     | What to do                                                                                 |
+| -------------------------- | ------------------------------------------------------------------------------------------ |
+| iOS Simulator              | Nothing. It shares the host's network stack, so `ws://127.0.0.1:17391/attach` is the hub.     |
+| Android emulator           | `adb reverse tcp:17391 tcp:17391` on the host, then the default URL works unchanged.          |
+| Android emulator, no `adb` | Start the hub with `--host 0.0.0.0` and pass `url: "ws://10.0.2.2:17391/attach"`.             |
+| Physical device            | Start the hub with `--host 0.0.0.0` and pass `url: "ws://<host-lan-ip>:17391/attach"`.        |
+
+`adb reverse` is the better of the two Android options: it tunnels the port to the emulator over the existing debug bridge, so the hub stays on loopback and the app keeps the default URL. `10.0.2.2` is the emulator's alias for the host, and reaching it means the hub has to be listening on every interface.
+
+**`--host 0.0.0.0` puts an unauthenticated socket on your local network.** The hub has no notion of who is on the other end, in either direction: anything that can reach the port can push records into the dashboard an agent then reads, and can ask attached apps for graph snapshots up to whatever ceiling they declared. On a trusted network, for a development build, that is the trade; do not leave it bound that way, and do not do it at all with an app whose ceiling is `"full"`.
+
+### Testing
+
+Attaching from a Jest suite reaches Effect's RPC layer, which pulls in `msgpackr` — an ESM-only package that Jest's default CJS transform cannot load, and one this package does not choose: it is a dependency of `effect` itself, so no serialization setting here avoids it. Either run the suite as ESM, or let Jest transform it:
+
+```js
+// jest.config.js
+transformIgnorePatterns: ["node_modules/(?!(msgpackr|msgpackr-extract)/)"];
+```
+
+The narrower fix is not to attach in tests at all. `attachDevtools` exists to watch a process you are working on by hand; a test run has no hub to dial and nothing to watch.
 
 Filesystem discovery lives behind its own export, so a browser bundler never has to resolve it:
 

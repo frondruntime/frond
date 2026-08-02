@@ -30,8 +30,17 @@ import { Rpc, RpcGroup } from "effect/unstable/rpc";
  * change inside one release moved nothing and let two builds that disagreed
  * attach to each other. Starting at 1 with the first published hub, so what the
  * number counts is generations anyone could have installed.
+ *
+ * Moved to 2 because {@link RuntimeEventCategory} gained `"signal"`. A literal
+ * union is not an excess property: a 0.3.x hub decoding `category: "signal"`
+ * fails with `SchemaError(Expected "command" | ... | "state", got "signal")`,
+ * and that failure takes the whole `Frond.Ingest` batch, non-signal records
+ * included. Both builds announce 1, so the attachment would succeed and the app
+ * would simply stop streaming — the exact failure the paragraph above refuses to
+ * ship. The optional `channel`/`name` fields really are two-way safe and would
+ * not have needed this; the category is what forced it.
  */
-export const HUB_PROTOCOL_VERSION = 1;
+export const HUB_PROTOCOL_VERSION = 2;
 
 /**
  * Unregistered, and chosen for the band rather than the number.
@@ -71,6 +80,7 @@ export const RuntimeEventCategory = Schema.Literals([
   "input",
   "lifecycle",
   "operation",
+  "signal",
   "state",
 ]);
 
@@ -165,6 +175,31 @@ export const EncodedEventRecord = Schema.Struct({
   reason: RuntimeWorkReason,
   priority: RuntimeWorkPriority,
   nodeIds: Schema.Array(Schema.String),
+  /**
+   * Which signal this is, on the two events that carry one.
+   *
+   * Lifted out of `fields` because that is where they used to die: the field
+   * walk treats every event body the same way, so a publication whose one field
+   * is a signal record arrived at the default `"shape"` policy as a key list of
+   * that record — a reader could tell that *a* signal fired and nothing about
+   * which one. A channel and an event name are routing structure rather than app
+   * data, which is the same argument `describeShape` makes for letting `_tag`
+   * cross verbatim, so these two cross at every policy. The `payload` stays in
+   * `fields` and stays clamped, because it is the half that really is data.
+   *
+   * Optional rather than required, which keeps these two fields compatible in
+   * both directions on their own: an old hub ignores the extra properties a new
+   * app sends, because effect Schema drops excess properties on decode and
+   * nothing here overrides `onExcessProperty`, and a new hub reads an old app's
+   * records as what they are — signals whose channel it was never told.
+   *
+   * That is a property of these fields and not of the release. The same release
+   * added `"signal"` to {@link RuntimeEventCategory}, which an old hub does
+   * reject, so {@link HUB_PROTOCOL_VERSION} moved to 2 regardless. Keeping these
+   * optional is still what makes a new hub able to read an old app at all.
+   */
+  channel: Schema.optionalKey(Schema.String),
+  name: Schema.optionalKey(Schema.String),
   /**
    * Keyed by the event's own field names, minus `_tag`.
    *

@@ -2,7 +2,7 @@ import type { Effect } from "effect";
 import type { SpecOverride } from "../../graph/types/operations";
 import type { DriverOperationTimeoutOptions } from "../../graph/types/service";
 import type {
-  RuntimeSignalChannelDefinition,
+  RuntimeSignalChannelRegistration,
   RuntimeSignalPolicy,
   RuntimeSignalSubscriber,
 } from "../../signals";
@@ -30,7 +30,12 @@ export interface RuntimeOptions {
   readonly inputIngestionEnabled?: boolean | undefined;
   readonly specOverrides?: ReadonlyArray<SpecOverride> | undefined;
   readonly driverTimeouts?: DriverOperationTimeoutOptions | undefined;
-  readonly channels?: ReadonlyArray<RuntimeSignalChannelDefinition> | undefined;
+  /**
+   * Channels to install at boot, as registrations rather than full definitions:
+   * the list is heterogeneous by nature, and only a channel's name and policy are
+   * read here. See {@link RuntimeSignalChannelRegistration}.
+   */
+  readonly channels?: ReadonlyArray<RuntimeSignalChannelRegistration> | undefined;
   readonly signalSubscribers?: ReadonlyArray<RuntimeSignalSubscriber> | undefined;
   readonly signalPolicies?: Readonly<Record<string, RuntimeSignalPolicy>> | undefined;
   readonly syncClock?: RuntimeSyncClock | undefined;

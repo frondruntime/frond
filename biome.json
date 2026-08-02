@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!bun.lock", "!*.lock", "!node_modules", "!**/dist"]
+    "includes": ["**", "!bun.lock", "!*.lock", "!node_modules", "!**/dist", "!.claude/worktrees"]
   },
   "formatter": {
     "enabled": true,
@@ -28,6 +28,9 @@
     "enabled": true,
     "rules": {
       "recommended": true,
+      "complexity": {
+        "useLiteralKeys": "off"
+      },
       "correctness": {
         "noUndeclaredDependencies": "error"
       },

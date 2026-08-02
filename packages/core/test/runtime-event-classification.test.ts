@@ -98,6 +98,37 @@ describe("runtime event classification", () => {
     });
   });
 
+  /**
+   * A publication is its own category rather than an `input`, so a reader can
+   * ask for the message bus without also getting everything that arrived from
+   * outside the runtime. A subscriber failure is not part of that: it is a
+   * failure, and it belongs in the feed of what is broken.
+   */
+  test("publishing a signal is a signal; failing to handle one is a diagnostic", () => {
+    const signalRecord = {
+      runtimeId: "runtime-events" as RuntimeEventSamplesRuntimeId,
+      sequence: 1,
+      recordedAt: at,
+      signal: Signals.signal({ channel: "app.analytics", name: "checkout_started" }),
+    };
+
+    expect(classify({ _tag: "RuntimeSignalPublished", record: signalRecord, at })).toMatchObject({
+      category: "signal",
+      reportable: false,
+      severity: "info",
+      timeline: "system",
+    });
+    expect(
+      classify({
+        _tag: "RuntimeSignalSubscriberFailureObserved",
+        subscriber: "audit-log",
+        signal: signalRecord,
+        cause: new Error("subscriber threw"),
+        at,
+      })
+    ).toMatchObject({ category: "diagnostic", reportable: true, severity: "error" });
+  });
+
   test("node id projection does not require event-specific devtools code", () => {
     expect(
       nodeIds({

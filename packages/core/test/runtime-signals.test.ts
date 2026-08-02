@@ -28,6 +28,18 @@ const ephemeralChannel = Signals.defineChannel({
   policy: { retention: "none" },
 });
 
+interface CheckoutEvents {
+  "checkout.started": { readonly cartId: string; readonly total: number };
+  "checkout.completed": { readonly orderId: string };
+  // biome-ignore lint/suspicious/noConfusingVoidType: an event that carries no payload is declared `void`.
+  "app.opened": void;
+}
+
+const checkoutChannel = Signals.defineChannel<CheckoutEvents>({
+  name: "app.checkout",
+  policy: { retention: "bounded", bufferSize: 4 },
+});
+
 describe("runtime signals", () => {
   test("publish records runtime id, sequence, channel, name, and supports channel queries", async () => {
     const runtimeId = "signal-runtime" as RuntimeId;
@@ -137,6 +149,62 @@ describe("runtime signals", () => {
     expect(ephemeral._tag === "RuntimeSignals" ? ephemeral.records : []).toEqual([]);
   });
 
+  test("typed channel subscribers pin their own channel and round-trip declared payloads", async () => {
+    const delivered: Array<string> = [];
+    const subscriber = checkoutChannel.subscriber({
+      name: "checkout-analytics",
+      handle: (record) =>
+        Effect.sync(() => {
+          switch (record.signal.name) {
+            case "checkout.started": {
+              delivered.push(
+                `started:${record.signal.payload.cartId}:${record.signal.payload.total}`
+              );
+              break;
+            }
+            case "checkout.completed": {
+              delivered.push(`completed:${record.signal.payload.orderId}`);
+              break;
+            }
+            case "app.opened": {
+              delivered.push("opened");
+              break;
+            }
+          }
+        }),
+    });
+    const runtime = createRuntime({
+      channels: [checkoutChannel],
+      signalSubscribers: [subscriber],
+    });
+
+    // The pin is what makes the narrowing above true rather than asserted: the
+    // bus filters delivery by this field, so the handler cannot be handed a
+    // record from a channel whose names it does not know.
+    expect(subscriber.channels).toEqual([checkoutChannel.channel]);
+
+    await runtime.publish(
+      checkoutChannel.signal("checkout.started", { cartId: "cart-1", total: 42 })
+    );
+    await runtime.publish(checkoutChannel.signal("app.opened"));
+    await runtime.publish(Signals.signal({ channel: analyticsChannel, name: "button_clicked" }));
+
+    const retained = await runtime.query({
+      _tag: "RuntimeSignals",
+      channel: checkoutChannel.channel,
+    });
+
+    expect(delivered).toEqual(["started:cart-1:42", "opened"]);
+    expect(
+      retained._tag === "RuntimeSignals"
+        ? retained.records.map((record) => [record.signal.name, record.signal.payload])
+        : []
+    ).toEqual([
+      ["checkout.started", { cartId: "cart-1", total: 42 }],
+      ["app.opened", undefined],
+    ]);
+  });
+
   test("none retention redacts signal payloads from runtime events and sink delivery", async () => {
     const sinkSignals: Array<RuntimeSignalRecord> = [];
     const runtime = createRuntime({
@@ -211,6 +279,54 @@ describe("runtime signals", () => {
     const result = await runtime.query({ _tag: "RuntimeSignals", channel: analyticsChannel });
 
     expect(result._tag === "RuntimeSignals" ? result.records : []).toEqual([]);
+  });
+
+  test("a channel named for an Object.prototype member is still bounded", async () => {
+    // `byChannel` is an ordinary object literal, so a bare `byChannel[channel]`
+    // lookup resolves `toString` to the inherited function rather than to
+    // `undefined`. That skips the default-policy fallback and hands `store` a
+    // "policy" with no `bufferSize`, making the trim's `excess` NaN — never
+    // `> 0`, so the buffer grows forever. Names like `constructor` are not
+    // hypothetical for a domain event bus, and `channels` is a public
+    // registration surface now.
+    const runtime = createRuntime();
+    const inherited = Signals.channel("toString");
+
+    for (let index = 0; index < 200; index += 1) {
+      await runtime.publish(Signals.signal({ channel: inherited, name: "tick", payload: index }));
+    }
+
+    const result = await runtime.query({ _tag: "RuntimeSignals", channel: inherited });
+    const retained = result._tag === "RuntimeSignals" ? result.records : [];
+
+    // The default bound, not 200.
+    expect(retained.length).toBe(128);
+  });
+
+  test("prototype-named channels register and collide like any other name", () => {
+    const constructorChannel = Signals.defineChannel({
+      name: "constructor",
+      policy: { retention: "bounded", bufferSize: 4 },
+    });
+
+    // Registering one must not read as a duplicate of the inherited member.
+    expect(() => createRuntime({ channels: [constructorChannel] })).not.toThrow();
+
+    // And a raw policy for a name nothing registered must not read as a
+    // collision with `Object.prototype.valueOf`.
+    expect(() =>
+      createRuntime({
+        signalPolicies: { [Signals.channel("valueOf")]: { retention: "none" } },
+      })
+    ).not.toThrow();
+
+    // The real collision still throws.
+    expect(() =>
+      createRuntime({
+        channels: [constructorChannel],
+        signalPolicies: { [constructorChannel.channel]: { retention: "none" } },
+      })
+    ).toThrow(FrondRuntimeInvariantViolation);
   });
 
   test("signal retention and query limits fail loudly when malformed", async () => {
