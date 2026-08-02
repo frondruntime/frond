@@ -34,13 +34,18 @@ node. If a name genuinely helps, rename at the import site or wrap in a plain
 function.
 
 ```ts
-// FORBIDDEN: a rename with a lifecycle.
+// DON'T: a rename with a lifecycle.
 acquire: Frond.Driver.Acquire((ctx) => ({
   status: ctx.deps.provider.result.status,     // stale the moment provider moves
 })),
 actions: {
   openChat: Frond.Driver.Action((ctx) => ctx.deps.provider.actions.show()),
 }
+
+// DO: no vertex. Consumers depend on the real node and read/call it directly;
+// a name that helps is an import-site rename or a plain function.
+const provider = useNode(SupportProviderNode, Frond.Args.none);
+provider.actions.show();
 ```
 
 **DI-point nodes.** A node inserted so something can be swapped later is

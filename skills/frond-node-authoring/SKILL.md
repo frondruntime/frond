@@ -121,6 +121,32 @@ Rules:
 - If a result method takes an `AbortSignal` from the caller, the action lane
   has been rebuilt by hand. Move the work into an action.
 
+```ts
+// DON'T: dependency smuggled through a factory, work on the result,
+// cancellation rebuilt by hand. Every line here is a consequence of the
+// missing graph edge.
+export function createCollectorDriver(options: { createHost?: () => Host } = {}) {
+  const createHost = options.createHost ?? createRealHost;
+  return Frond.Driver.Async<CollectorSpec>({
+    acquire: Frond.Driver.Acquire(() =>
+      Object.freeze({
+        collect: (signal: AbortSignal) => collectSafely(createHost(), signal),
+      })
+    ),
+  });
+}
+
+// DO: the dependency is an edge, the work is an action, the runtime owns
+// cancellation. Test it by stubbing SourceNode.
+actions: {
+  collect: Frond.Driver.Action(async (ctx) => {
+    const local = readLocalHints(); // leaf owned by this node
+    const remote = await ctx.deps.source.read(ctx.signal).catch(() => ({}));
+    return { ...local, ...remote };
+  }),
+}
+```
+
 ## Cancellation
 
 - `ctx.signal` is the operation's signal; pass it to everything the hook or
@@ -135,18 +161,38 @@ Rules:
   interrupt), and `admission: "join"` when equal inputs should share one
   in-flight run. The default admission queues per node.
 
-## The Only Injection Seams
+## Injection Seams And Platform Splits
 
-Graph dependencies and spec overrides. Nothing else.
+Graph dependencies and spec overrides are the injection seams. Test-only
+options are never one (see frond-node-testing).
 
-- A driver factory (`create*Driver(options)`) may exist only when production
-  code passes non-default options: a platform file-resolution split
-  (`.native.ts` / `.web.ts`) or a composition-root injection the app really
-  performs. If only tests would pass options, delete the factory and stub the
-  dependency instead (see the frond-node-testing skill).
-- `spec.fromDriver` / `Frond.specWithDriver` exist for exactly those cases and
-  for intentionally shared pre-built drivers. Never inline-extract a driver
-  just to name it.
+**Platform split is a normal pattern, not an exception.** One node, one
+carrier, one tag — and two implementation files resolved by the bundler:
+
+```ts
+// DO: one node, platform implementation leaves.
+// readDeviceSnapshot.web.ts / readDeviceSnapshot.native.ts, one .d.ts contract
+acquire: Frond.Driver.Acquire(async () => readDeviceSnapshot()),
+
+// DO: when the whole driver differs per platform, split the driver instead.
+// createDevicePlatformDriver.web.ts / .native.ts, consumed once:
+static readonly spec = Frond.serviceSpec.fromDriver<DeviceSpec>({
+  tag: Frond.tag("app/device"),
+  key: () => Frond.Key.singleton(),
+  driver: createDevicePlatformDriver(),
+});
+```
+
+The class, spec shape, tests, and consumers stay single; only the touch of the
+platform forks.
+
+- A driver factory (`create*Driver(options)`) taking an options bag needs a
+  real production caller passing non-default options — a composition-root
+  injection the app actually performs. If only tests would pass options,
+  delete the parameter and stub the dependency instead.
+- `spec.fromDriver` / `Frond.specWithDriver` exist for platform splits,
+  production driver injection, and intentionally shared pre-built drivers.
+  Never inline-extract a driver just to name it.
 - A `NodeDescriptor<Spec, mode>["driver"]` type alias in a node file is a
   symptom: the driver left the spec without one of the two reasons above.
 - If a hook needs outside-world state, either depend on the node that owns it

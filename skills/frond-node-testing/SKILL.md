@@ -10,6 +10,35 @@ it is being tested: no test-only constructor parameters, options, flags,
 callbacks, or setters in production code. If a node is hard to test without
 one, its dependencies are wrong — fix the graph, not the test.
 
+## Test The Node As A Node
+
+Node tests run on the harness and assert on reads, results, actions, and
+events. They never mount React.
+
+```tsx
+// DON'T: the node "tested" through the whole pipeline. This proves nothing
+// about the node that the harness would not prove, and re-tests the React
+// adapter, which is not this repository's contract.
+function Probe() {
+  const orders = useNode(OrdersNode, Frond.Args.none);
+  return <span>{orders.result.total}</span>;
+}
+render(<TestFrondProvider><Probe /></TestFrondProvider>);
+expect(await screen.findByText("42")).toBeVisible();
+```
+
+```ts
+// DO
+const node = await harness.startNode(OrdersNode, Frond.Args.none);
+expect(node.result.total).toBe(42);
+```
+
+The React adapter — `useNode` projecting node state into renders, Suspense
+and boundary behavior — is `@frondruntime/react`'s own contract, proven in
+that package's suite. A host application never re-proves it. React component
+tests, including bridge components, are UI tests with UI tooling; they belong
+to the app's UI suite and are not part of node coverage.
+
 ## Golden Path
 
 ```ts
@@ -123,17 +152,20 @@ dependency edges) against a hand-maintained inventory. Platform variants
 assert topology parity. This is the test that catches alias nodes, orphaned
 vertices, and accidental edges.
 
-## React
+## If A UI Suite Needs A Runtime
 
-- `TestFrondProvider` from `@frondruntime/react/testing`; it owns a harness
-  when none is passed.
-- `useNode` / `useNodeState` assertions require an ErrorBoundary in the test
-  tree; readiness errors are boundary errors, not rejected promises.
-- Assert on node reads and events, not render counts.
+Only UI suites (bridge components, composition-level screens) mount React —
+and they are UI tests, not node tests. When one needs a runtime:
+`TestFrondProvider` from `@frondruntime/react/testing` (it owns a harness when
+none is passed), an ErrorBoundary in the tree because readiness errors are
+boundary errors, and node state driven through the harness — never through
+probe components written to expose node fields.
 
 ## Avoid
 
 - Overriding or mocking the node under test.
+- Mounting React to assert node behavior; probe components exposing node
+  fields; asserting node results via rendered output.
 - Test seams in production surfaces (options, flags, exported setters).
 - `jest.mock` / `mock.module` for anything except the raw capability inside
   the owning leaf's own test file.
@@ -148,4 +180,5 @@ vertices, and accidental edges.
 rg "setTimeout\(|sleep\(" --glob "*.test.*"
 rg "mock\.module|jest\.mock" --glob "*.test.*"   # only inside the owning leaf's suite
 rg "from ['\"].*\/testing['\"]" src --glob "!*test*" --glob "!*/testing.ts"
+rg "useNode\(|TestFrondProvider|render\(" --glob "*Node.test.*"   # React in a node suite
 ```
