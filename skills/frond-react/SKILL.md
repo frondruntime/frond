@@ -137,3 +137,7 @@ rg "from ['\"]@frondruntime/core['\"]" src/components src/surfaces
 rg "createRuntime\(" src --glob "!*composition*" --glob "!*bootstrap*"
 rg "export function use\w+Node\(" src   # alias hooks
 ```
+
+---
+
+Describes: @frondruntime/core 0.3 (checked against .release-please-manifest.json by `bun run skills:check`)

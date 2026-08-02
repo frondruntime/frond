@@ -69,6 +69,19 @@ events, and agents read back over MCP.
 - MCP tools: `frond_list_runtimes` (who is attached), `frond_read_events`
   (event history, filterable), `frond_read_work` (operations in flight),
   `frond_read_state` (current graph state).
+- Connect an agent to the hub's MCP endpoint (HTTP transport, same port,
+  `/mcp` path). Project `.mcp.json`:
+
+  ```json
+  {
+    "mcpServers": {
+      "frond": { "type": "http", "url": "http://127.0.0.1:17391/mcp" }
+    }
+  }
+  ```
+
+  or `claude mcp add --transport http frond http://127.0.0.1:17391/mcp`.
+  If the hub runs on a non-default port, read it from `.frond/hub-<port>.json`.
 - Value policy is `none < shape < full`, enforced by the **sender**. The hub
   asks; apps clamp. If values arrive as shapes, raise the app's ceiling —
   do not look for a hub-side switch.
@@ -101,3 +114,7 @@ No fix ships on inference alone; validation is part of the diagnosis.
 - Sprinkling `console.log` into drivers — use events and sinks; they carry
   node identity and ordering.
 - Concluding from one read what a `waitForNodeRead` predicate should prove.
+
+---
+
+Describes: @frondruntime/core 0.3 (checked against .release-please-manifest.json by `bun run skills:check`)

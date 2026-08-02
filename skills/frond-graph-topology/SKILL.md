@@ -142,3 +142,7 @@ rg -B2 -A6 "Driver\.Acquire" src | rg "deps\.\w+\.result\."   # snapshot-at-acqu
 rg "Driver\.Action\(\(ctx[^)]*\) =>\s*ctx\.deps\.\w+\.actions\." src   # 1:1 renames
 rg "bindHost|unbindHost|BindingToken" src   # migration-only shapes in new code
 ```
+
+---
+
+Describes: @frondruntime/core 0.3 (checked against .release-please-manifest.json by `bun run skills:check`)

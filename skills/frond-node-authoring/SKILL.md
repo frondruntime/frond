@@ -297,3 +297,7 @@ rg "driver: Frond\.Driver\.(Async|Effect)<" src   # nested driver outside fromDr
 
 Every hit needs one of the two sanctioned reasons or a fix. Run the package
 typecheck after authoring; run broader checks when public typing changed.
+
+---
+
+Describes: @frondruntime/core 0.3 (checked against .release-please-manifest.json by `bun run skills:check`)

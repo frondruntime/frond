@@ -64,7 +64,7 @@ test("placing an order updates the result", async () => {
   const order = await node.actions.placeOrder({ symbol: "X", amount: 1 });
 
   expect(order.id).toBeDefined();
-  expect(node.result.byId(order.id)).toEqual(order);
+  expect(node.result.byId[order.id]).toEqual(order);
   expect(transport.calls).toHaveLength(2); // list + place
 });
 ```
@@ -189,3 +189,7 @@ rg "mock\.module|jest\.mock" --glob "*.test.*"   # only inside the owning leaf's
 rg "from ['\"].*\/testing['\"]" src --glob "!*test*" --glob "!*/testing.ts"
 rg "useNode\(|TestFrondProvider|render\(" --glob "*Node.test.*"   # React in a node suite
 ```
+
+---
+
+Describes: @frondruntime/core 0.3 (checked against .release-please-manifest.json by `bun run skills:check`)
