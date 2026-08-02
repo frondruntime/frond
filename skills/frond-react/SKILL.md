@@ -13,7 +13,8 @@ capabilities, navigation decisions — lives in the graph.
 
 Components and hooks must not:
 
-- run domain work in `useEffect` / `useLayoutEffect`;
+- run domain work in `useEffect` / `useLayoutEffect` (bridge components below
+  are the single exception, and they only execute and acknowledge intents);
 - import `@frondruntime/core` runtime surfaces, `effect`, transports, leaf
   modules, or raw runtime event types;
 - own readiness, retries, timeouts, or liveness (`useEffect`-mounted flags are
@@ -77,15 +78,24 @@ export const NavigationBridge = observer(function NavigationBridge(): null {
   const router = useRouter(); // the one host capability this bridge owns
 
   const intent = nav.pendingIntent;
-  if (intent !== undefined) {
-    void router.navigate(intent.target).then(
+  useEffect(() => {
+    if (intent === undefined) {
+      return;
+    }
+    router.navigate(intent.target).then(
       () => nav.actions.acknowledge({ id: intent.id, outcome: "done" }),
       (error) => nav.actions.acknowledge({ id: intent.id, outcome: describe(error) })
     );
-  }
+  }, [intent?.id]);
+
   return null;
 });
 ```
+
+Execution lives in an effect keyed on the intent's id — never in render, which
+must stay pure (StrictMode double-invokes it). Acknowledging by id makes a
+re-fired effect harmless: the node drops acknowledgments for ids it no longer
+holds.
 
 One bridge per capability; bridges render nothing; the graph never holds the
 host object. See frond-graph-topology for the node side.

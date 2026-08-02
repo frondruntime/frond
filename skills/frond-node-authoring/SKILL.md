@@ -152,6 +152,10 @@ Rules:
   primitives belong there; domain workflows do not.
 - If a result method takes an `AbortSignal` from the caller, the action lane
   has been rebuilt by hand. Move the work into an action.
+- Mutable internals consumers must not touch ride the result envelope:
+  `Frond.withInternal(publicResult, internals)` on commit,
+  `Frond.internalOf(result)` inside the driver. Driver-only machinery stays
+  off the public surface without a second store.
 
 ```ts
 // DON'T: dependency smuggled through a factory, work on the result,
@@ -178,6 +182,27 @@ actions: {
   }),
 }
 ```
+
+## Driver Channels
+
+| Channel | Runs | Result commit | Cleanup |
+|---|---|---|---|
+| `Acquire` | once per incarnation | returned value commits | cleans up its own partial failures |
+| `Refresh` | on demand | returned or staged value commits | — |
+| `Action` | per call, serialized through the node cell | only via `ctx.setResult` / `ctx.patchResult` | — |
+| `Live` | while the node has live demand | none | `stop` disposes what `start` returned |
+| `Release` | end of incarnation | — | tears down the result's capability |
+
+- `Frond.Driver.Live({ start, stop })` is for continuous work — subscriptions,
+  sockets, tick sources — never one-shot fetches. `start` returns the live
+  resource; `stop` receives it and must dispose it. Liveness truth is
+  node-owned demand; React component presence is never a liveness signal.
+- Refresh is on-demand re-derivation. The runtime does not cascade refresh
+  through dependents; a parent refreshing a direct dependency does it
+  deliberately with `ctx.refreshDep("name")`.
+- `ctx.disposers.add(fn)` registers incarnation-scoped cleanup for secondary
+  listeners acquired mid-hook. The result's primary capability still tears
+  down in `release`.
 
 ## Cancellation
 

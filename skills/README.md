@@ -24,6 +24,7 @@ Or copy the directories you need into your repository's skill location
 | `frond-node-testing` | Harness, spec overrides, per-package testing contracts, deterministic operations, coverage by archetype |
 | `frond-react` | Capability-poor React, consumption patterns, bridge components, composition-root bootstrap |
 | `frond-debugging` | Evidence-first diagnosis, read phases, the devtools hub and its MCP tools |
+| `frond-review` | The enforcement half: verdict model, mistake and drift sweeps, per-area gates |
 
 Skills reference each other by name; install the set together.
 

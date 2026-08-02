@@ -34,6 +34,8 @@ check, a cited skill rule), not with intent.
 - A non-`observer` component reading observable getters.
 - Result committed from an action return value instead of `ctx.setResult` /
   `ctx.patchResult`; class result patched without `resultPatch.nonPlainClone`.
+- Live work whose `stop` does not dispose what `start` returned; liveness
+  inferred from component presence.
 - Tests asserting through React what the harness proves directly.
 
 **Drift sweep** — patterns that erode boundaries gradually:
