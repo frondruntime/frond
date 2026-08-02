@@ -24,7 +24,7 @@ type OrdersSpec = Frond.NodeSpec<{
   readonly deps: {
     readonly transport: Frond.Dep<typeof TransportNode>;
   };
-  readonly result: OrdersResult;
+  readonly result: OrdersState; // { readonly byId: Record<string, Order> }
   readonly actions: {
     readonly placeOrder: Frond.ActionContract<OrderInput, Order>;
   };
@@ -39,16 +39,22 @@ export class OrdersNode extends Frond.NodeBase<OrdersSpec> {
     })),
     acquire: Frond.Driver.Acquire(async (ctx) => {
       const orders = await ctx.deps.transport.client.orders.list(ctx.signal);
-      return new OrdersResult(orders);
+      return { byId: indexById(orders) };
     }),
     actions: {
       placeOrder: Frond.Driver.Action(async (ctx, input) => {
         const order = await ctx.deps.transport.client.orders.place(input, ctx.signal);
-        ctx.patchResult((draft) => draft.upsert(order));
+        ctx.patchResult((state) => {
+          state.byId[order.id] = order;
+        });
         return order;
       }),
     },
   });
+
+  get rows(): ReadonlyArray<Order> {
+    return Object.values(this.result.byId);
+  }
 }
 ```
 
@@ -66,8 +72,29 @@ export class OrdersNode extends Frond.NodeBase<OrdersSpec> {
 - Action return values are caller-facing output only. Result changes go
   exclusively through `ctx.setResult`, `ctx.patchResult`,
   `ctx.setResultValidity`.
+- `ctx.patchResult((current) => { ... })` clones plain objects/arrays before
+  running the recipe. A non-plain (class-instance) result requires the
+  spec-level `resultPatch.nonPlainClone` opt-in; without it, patching fails
+  with a typed error. Prefer plain result shapes plus class getters.
+- Prefer inferred action `input` and driver `ctx` types inside the factory
+  input. Annotate only when TypeScript cannot infer.
 - Consumers call `node.actions.*`. Class methods exist only when they add real
   domain semantics — never as pass-through wrappers.
+
+## Pick The Factory By Intent
+
+Kind is descriptor metadata for humans and diagnostics — all four behave
+identically at runtime. Pick for legibility:
+
+| Factory | Use for |
+|---|---|
+| `serviceSpec` | singleton or keyed clients, transports, durable capabilities |
+| `resourceSpec` | a ready result that owns cleanup: subscriptions, caches, handles |
+| `facadeSpec` | a domain-facing API over dependencies (fan-out, coordination) |
+| `nodeSpec` | the fallback when no specific kind fits |
+
+Do not invent product-layer taxonomies on top of these, and never encode kind
+into separate base classes.
 
 ## Sealed Or Leaf — Declare Which
 
@@ -94,7 +121,12 @@ Rules:
 - Optionally the raw touch lives in a separate plain-TS leaf module (no Frond,
   no React imports; returns closed, frozen values) with exactly this node as
   its only importer. Prefer this when the ambient read is shared-shaped or
-  security-relevant.
+  security-relevant. Enforce the one-importer rule mechanically — a boundary
+  check script or lint rule with a per-file allowlist, not a directory-wide
+  exception.
+- A leaf module opens with a short header comment naming its capability, what
+  it exposes, and its fail-safe behavior. The "why is this safe" argument
+  travels with the code.
 - If a node is "mostly sealed but reads one global", it is a leaf. Review it
   as one.
 
@@ -161,6 +193,17 @@ actions: {
   interrupt), and `admission: "join"` when equal inputs should share one
   in-flight run. The default admission queues per node.
 
+## Failures
+
+- Expected domain failures are typed and recoverable: tagged error classes
+  with a stable `_tag`, matched exhaustively. Defects fail loudly — never
+  swallowed into a default branch.
+- No handwritten error base classes, `instanceof` unions, or marker fields
+  (`__isCustomError`, `__type`). No failure classification by message text.
+- Caller-visible action outcomes surface to React as `operationFailure`;
+  render-critical failures throw to the boundary. Never both for one failure.
+- Cancellation is not a failure. It never appears in a domain failure union.
+
 ## Injection Seams And Platform Splits
 
 Graph dependencies and spec overrides are the injection seams. Test-only
@@ -184,7 +227,10 @@ static readonly spec = Frond.serviceSpec.fromDriver<DeviceSpec>({
 ```
 
 The class, spec shape, tests, and consumers stay single; only the touch of the
-platform forks.
+platform forks. When a split driver needs a standalone type, write
+`Frond.NodeDescriptor<XSpec, "async">["driver"]` — the second parameter is
+required; the bare default is the broad driver-mode union and will not satisfy
+a flavored spec.
 
 - A driver factory (`create*Driver(options)`) taking an options bag needs a
   real production caller passing non-default options — a composition-root

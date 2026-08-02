@@ -88,6 +88,9 @@ changes do not re-run your acquire, and the runtime does not cascade refresh.
 - Keying: `Key.singleton()` unless consumers genuinely address instances by
   args; then `Key.structure(...)` over the minimal canonical shape. Never
   encode environment or platform into keys that a spec override should decide.
+- Tags name the domain (`app/orders`, `app/session`), nothing else. Keep
+  organization names, product branding, and legacy system identifiers out of
+  tags, node IDs, and diagnostics.
 
 ## Imperative Host Capabilities: Intent Dispatch
 
@@ -126,6 +129,11 @@ dependency edges, asserted by a whole-graph acceptance test (see
 frond-node-testing). Every vertex or edge change is a reviewed diff of that
 inventory. If explaining why a vertex exists takes more than one sentence of
 domain semantics, it does not belong in the graph.
+
+For repositories with strict boundaries, add an import matrix — a literal
+caller → may-import / must-not-import table next to the code — and a boundary
+check script that enforces it file-by-file. Judgment calls scale badly;
+allowlists do not.
 
 ## Checks
 

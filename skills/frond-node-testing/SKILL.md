@@ -125,6 +125,13 @@ Every package that exports a node also exports `./testing` (from
   a gate or an event predicate.
 - Assert typed failures by `_tag`, never by stringified output.
 
+## Runtime Defects Go Upstream
+
+If a test isolates a defect in `@frondruntime/*` itself, reduce it to a
+minimal reproduction against the published API and report it upstream. Never
+patch, wrap, copy, or adapt runtime internals in application code — a local
+workaround is a fork with extra steps.
+
 ## What To Test, By Archetype
 
 **Sealed node.** The contract through its deps: acquire projection, each
