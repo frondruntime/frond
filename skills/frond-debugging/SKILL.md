@@ -117,4 +117,4 @@ No fix ships on inference alone; validation is part of the diagnosis.
 
 ---
 
-Describes: @frondruntime/core 0.3 (checked against .release-please-manifest.json by `bun run skills:check`)
+Describes: @frondruntime/core 0.4 (checked against .release-please-manifest.json by `bun run skills:check`)
