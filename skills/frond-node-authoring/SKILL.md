@@ -335,6 +335,29 @@ stays sealed and exposes intent as state; a bridge component owned by the
 composition root executes and acknowledges it. See the frond-graph-topology
 and frond-react skills. Bind/unbind host tokens are a migration-only shape.
 
+## Pre-Graph Exceptions
+
+Code that must run before the runtime exists is the narrowest sanctioned
+escape from the graph. Exactly four mechanisms qualify:
+
+1. A platform timing contract — a host API that must be called at module
+   scope or before the first frame.
+2. A runtime prerequisite that must exist before the Frond import itself
+   (a polyfill, a crash-handler bootstrap).
+3. Bootstrap error capture — reporting wired up before graph construction so
+   boot failures land somewhere.
+4. An external SDK that enforces one process-lifetime instance.
+
+Every pre-graph exception, no exceptions to the exceptions: lives in a named
+module; carries a `// Pre-graph exception: <mechanism>` comment; is
+idempotent; reports its own async rejection; holds no domain state; exposes
+its handle to the composition root, which hands it to the graph; cleans up
+after itself; has a test.
+
+These do not qualify: convenience, "it only runs once," current module
+placement, React mount timing, an SDK merely being a singleton, or avoiding
+a driver/cleanup contract. Module scope alone is not evidence.
+
 ## Named Patterns
 
 Reach for these by name when the situation matches; do not reinvent them:

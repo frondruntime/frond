@@ -29,6 +29,24 @@ Or copy the directories you need into your repository's skill location
 
 Skills reference each other by name; install the set together.
 
+## Local Supplements
+
+These skills carry runtime doctrine only. Everything your product owns —
+domain law, vendor-behavior gates, security policy, package naming, file
+layout — belongs in a repo-local supplement skill layered on top, not in a
+fork of these files.
+
+- A supplement may **tighten** official rules (stricter boundaries, extra
+  checks, narrower allowlists). It may never loosen them.
+- On any API-shape disagreement, the official skill plus the installed
+  `@frondruntime/*` source win. If you believe the golden path itself is
+  wrong, open an issue or PR upstream instead of patching locally — a local
+  fork of doctrine is how divergence starts.
+- Give supplements their own checks; `frond-review` runs them under the same
+  verdict model (see its Scope section).
+- When an official skill absorbs a rule your supplement carried, delete the
+  local copy in the same change that adopts the new skill version.
+
 ## Versioning
 
 Skills ship with the release they describe; each `SKILL.md` ends with a

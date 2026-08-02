@@ -19,7 +19,9 @@ check, a cited skill rule), not with intent.
    wiring (deps/keys/tags), React, tests, bootstrap, other.
 2. Load the matching official skills (frond-node-authoring,
    frond-graph-topology, frond-node-testing, frond-react, frond-debugging).
-   Review against those files, not memory.
+   Review against those files, not memory. If the repository ships a local
+   supplement skill, load it too and run its checks under this verdict
+   model — supplements tighten these gates, never loosen them.
 3. Run every `Checks` block from the loaded skills and intersect the hits
    with the diff (`git diff --name-only <base>`). Every hit on a changed
    file is a finding until refuted.
