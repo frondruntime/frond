@@ -48,6 +48,12 @@ const provider = useNode(SupportProviderNode, Frond.Args.none);
 provider.actions.show();
 ```
 
+Scope the ban precisely: forbidden is the node whose result and actions are a
+*verbatim re-export* of one dependency with no owned state and no logic. A
+node that owns a real handle across calls and translates wire failures into
+its own typed dispositions is a leaf-shaped node earning its vertex — do not
+flag it for its name.
+
 **DI-point nodes.** A node inserted so something can be swapped later is
 dependency injection cosplay. Swapping happens through spec overrides at the
 composition root, not through permanent graph vertices.
@@ -74,6 +80,10 @@ changes do not re-run your acquire, and the runtime does not cascade refresh.
   getters over its own observed state) or through a refresh it owns
   deliberately (`ctx.refreshDep` is for a parent intentionally refreshing a
   direct dependency, nothing else).
+- This rule is about *dependency* state. A node keeping two differently
+  shaped views of its **own** state for different readers (a small observable
+  projection for UI, a large plain buffer for tooling) is a deliberate
+  reader split, not a staleness bug.
 
 ## Edges
 
@@ -85,6 +95,11 @@ changes do not re-run your acquire, and the runtime does not cascade refresh.
   future incident.
 - Node-to-node edges are Frond graph edges. Effect services/layers are for
   runtime and driver plumbing — never a replacement for keyed node identity.
+- Recovery flows through re-acquisition, not interception. When an upstream
+  fact changes (a session expires, a credential rotates), the owning node
+  commits the new fact and dependents re-acquire against it. Do not build
+  retry/refresh interceptors inside capability objects to paper over what a
+  graph edge already models.
 - Keying: `Key.singleton()` unless consumers genuinely address instances by
   args; then `Key.structure(...)` over the minimal canonical shape. Never
   encode environment or platform into keys that a spec override should decide.
@@ -101,10 +116,17 @@ Golden path — the node stays sealed and exposes intent:
 
 - The node's result carries pending intents (a queue or current command) plus
   whatever settled state the domain needs (current route, dismissed ids).
+  Intents carry a monotonic sequence id; `acknowledge(id)` removes exactly
+  that intent and commits only when something changed.
+- If the pending queue is bounded, the cap and its overflow behavior are
+  documented on the contract — silent truncation quietly breaks the
+  delivery guarantee under load.
 - Producers dispatch through normal actions (`navigate`, `show`).
 - One bridge component at the composition root — the only imperative consumer
   — observes pending intents, executes them against the host capability it
-  owns, and acknowledges through an action (`acknowledge(id, outcome)`).
+  owns, and acknowledges through an action. Delivery is at-least-once: an
+  intent stays pending until acknowledged, so a bridge remount may re-see
+  it — id-based deduplication in the bridge makes that harmless.
 - Whether a producer awaits the acknowledgment or fires-and-forgets is a
   per-case contract; encode it in the action's output type, not in global
   policy.

@@ -36,6 +36,8 @@ check, a cited skill rule), not with intent.
   `ctx.patchResult`; class result patched without `resultPatch.nonPlainClone`.
 - Live work whose `stop` does not dispose what `start` returned; liveness
   inferred from component presence.
+- A stateful capability result mutating itself without `ctx.setResult` on
+  observable transitions, with no action-only/non-reactive declaration.
 - Tests asserting through React what the harness proves directly.
 
 **Drift sweep** — patterns that erode boundaries gradually:
@@ -49,6 +51,10 @@ check, a cited skill rule), not with intent.
   capability; a leaf imported by a second module.
 - Vocabulary or wrappers re-introducing a legacy shape (mode-less specs,
   nested `driver:` in authored specs, bind/unbind host ports in new code).
+- A parallel idiom where a framework primitive exists: hand-rolled result
+  capsules next to `withInternal`, manual signal joins next to
+  `AbortSignal.any`, underscore-prefixed "internal" actions as access
+  control.
 
 ## Per-Area Gates
 

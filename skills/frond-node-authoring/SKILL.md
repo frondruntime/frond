@@ -127,6 +127,10 @@ Rules:
 - A leaf module opens with a short header comment naming its capability, what
   it exposes, and its fail-safe behavior. The "why is this safe" argument
   travels with the code.
+- A leaf holding secrets wipes them on every exit path: a per-use wipe
+  (`finally` / `Effect.ensuring` around the single use site) plus a
+  per-lifetime wipe of any handle held across actions (release / runtime
+  close).
 - If a node is "mostly sealed but reads one global", it is a leaf. Review it
   as one.
 
@@ -152,6 +156,16 @@ Rules:
   primitives belong there; domain workflows do not.
 - If a result method takes an `AbortSignal` from the caller, the action lane
   has been rebuilt by hand. Move the work into an action.
+- Result unions carry only ready facts. No `"unknown"` or `"loading"`
+  members: a probe that cannot determine the fact fails the hook; the
+  runtime already models pending.
+- Commit-then-reveal: a result never claims `complete` until every side
+  effect it implies has been awaited to completion. Await the handoff, then
+  `ctx.setResult` — never concurrently.
+- A stateful capability result still commits: every externally observable
+  transition goes through `ctx.setResult` / `ctx.patchResult`, or the node
+  is explicitly documented action-only/non-reactive. A capability that
+  mutates itself silently is a stale-UI trap for the first reactive consumer.
 - Mutable internals consumers must not touch ride the result envelope:
   `Frond.withInternal(publicResult, internals)` on commit,
   `Frond.internalOf(result)` inside the driver. Driver-only machinery stays
@@ -197,6 +211,9 @@ actions: {
   sockets, tick sources — never one-shot fetches. `start` returns the live
   resource; `stop` receives it and must dispose it. Liveness truth is
   node-owned demand; React component presence is never a liveness signal.
+- Live hygiene: `stop` is idempotent (memoize the cleanup promise), and a
+  live subscription stops accepting events *before* it propagates its own
+  error or completion.
 - Refresh is on-demand re-derivation. The runtime does not cascade refresh
   through dependents; a parent refreshing a direct dependency does it
   deliberately with `ctx.refreshDep("name")`.
@@ -212,11 +229,17 @@ actions: {
 - Abort stays cancellation. Never translate it into a domain failure, and
   never hand-roll `throwIfAborted` / `isAbortError` / synthetic `AbortError`
   plumbing — the runtime owns that.
+- Merge `ctx.signal` with a caller-supplied signal via
+  `AbortSignal.any([ctx.signal, input.signal])` — never by hand-wiring
+  `addEventListener("abort", ...)` into a fresh controller.
 - Actions take options where the contract needs them:
   `Frond.Driver.Action(run, { timeout: 5_000 })` or `timeout: "unbounded"`
   (skips only the deadline — stop, eviction, and caller interruption still
-  interrupt), and `admission: "join"` when equal inputs should share one
-  in-flight run. The default admission queues per node.
+  interrupt). Admission is `"queue"` (default), `"reject"` (a second call
+  fails while one is in flight), or `"join"` (equal inputs share one run).
+- `admission: "reject"` guards one action against itself. Cross-action
+  mutual exclusion (submit while a quote is in flight) is node-private state
+  the colliding actions check — declare both layers when a flow needs them.
 
 ## Failures
 
@@ -294,6 +317,26 @@ stays sealed and exposes intent as state; a bridge component owned by the
 composition root executes and acknowledges it. See the frond-graph-topology
 and frond-react skills. Bind/unbind host tokens are a migration-only shape.
 
+## Named Patterns
+
+Reach for these by name when the situation matches; do not reinvent them:
+
+- **Probe extraction** — the "what is true right now" read lives in one
+  function called identically from `acquire` and every refreshing action, so
+  the two can never drift.
+- **Generation fencing** — a monotonic generation number on a replaceable
+  fact (credential, engine instance); every commit asserts it still owns the
+  current generation, so late settlements and stale reads lose instead of
+  overwriting.
+- **Last-joiner cancellation** — for a shared process-lifetime installation:
+  join each caller's abort signal; cancel the underlying work only when the
+  last joined caller has cancelled.
+- **Uninterruptible commit fences** (effect mode) — wrap each multi-step
+  commit in `Effect.uninterruptible`, then check for interruption
+  immediately after the fence, with an explicit compensating branch per
+  already-committed step. A lost race must never leave a half-committed
+  fact.
+
 ## Avoid
 
 - Mode-less spec shapes and nested `driver:` fields in authored specs (pre-0.2).
@@ -302,7 +345,11 @@ and frond-react skills. Bind/unbind host tokens are a migration-only shape.
   shims over `@frondruntime/core`.
 - Test-only options parameters, `createHost`-style factory chains, DI-point
   indirection of any shape.
-- Hand-rolled abort plumbing.
+- Hand-rolled abort plumbing, including manual dual-signal joins where
+  `AbortSignal.any` exists.
+- Hand-rolled `Symbol()` + `Object.defineProperty` capsules for hidden result
+  state — that is `withInternal` reinvented without its typing or test
+  support.
 - Pass-through class methods over `this.actions.*` / `this.result.*`.
 - Local queues, timeout races, or result wrappers around the action lane.
 - Copying a dependency's result fields into your own result during `acquire`
