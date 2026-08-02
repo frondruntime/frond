@@ -145,7 +145,10 @@ function signalPoliciesFromChannels(
   const policies: Record<string, RuntimeSignalPolicy> = {};
 
   for (const channelDefinition of channels) {
-    if (policies[channelDefinition.channel] !== undefined) {
+    // Own-property test, not a bare lookup: a channel named for an
+    // `Object.prototype` member reads back as the inherited one and would
+    // report a collision against nothing.
+    if (Object.prototype.hasOwnProperty.call(policies, channelDefinition.channel)) {
       throw new FrondRuntimeInvariantViolation({
         message: "Frond runtime channel definitions must be unique by channel.",
         cause: { channel: channelDefinition.channel },
@@ -163,7 +166,7 @@ function assertNoSignalPolicyCollisions(
   policies: Readonly<Record<string, RuntimeSignalPolicy>>
 ): void {
   for (const channel of Object.keys(policies)) {
-    if (channels[channel] !== undefined) {
+    if (Object.prototype.hasOwnProperty.call(channels, channel)) {
       throw new FrondRuntimeInvariantViolation({
         message:
           "Frond runtime signalPolicies must not redefine a channel installed through channels.",

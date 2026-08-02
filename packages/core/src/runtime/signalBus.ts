@@ -150,7 +150,19 @@ function signalPolicy(
   policies: RuntimeSignalPolicyRegistry,
   channel: RuntimeSignal["channel"]
 ): RuntimeSignalPolicyRegistry["defaultPolicy"] {
-  const policy = policies.byChannel[channel];
+  // An own-property test rather than a bare lookup, because `byChannel` is built
+  // by `Object.fromEntries` and so carries `Object.prototype`. A channel named
+  // `toString` or `constructor` would otherwise resolve to the inherited member
+  // instead of `undefined`, skip the `defaultPolicy` fallback below, and arrive
+  // in `store` as a "policy" whose `retention` is undefined and whose
+  // `bufferSize` is undefined — making the trim's `excess` NaN, which is never
+  // `> 0`, so that channel's buffer would grow without bound.
+  //
+  // Spelled through `Object.prototype` rather than as `Object.hasOwn`, which the
+  // lint plugin rejects: Hermes does not have it, and core runs on React Native.
+  const policy = Object.prototype.hasOwnProperty.call(policies.byChannel, channel)
+    ? policies.byChannel[channel]
+    : undefined;
 
   return policy === undefined ? policies.defaultPolicy : policy;
 }

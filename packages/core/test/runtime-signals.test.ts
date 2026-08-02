@@ -281,6 +281,54 @@ describe("runtime signals", () => {
     expect(result._tag === "RuntimeSignals" ? result.records : []).toEqual([]);
   });
 
+  test("a channel named for an Object.prototype member is still bounded", async () => {
+    // `byChannel` is an ordinary object literal, so a bare `byChannel[channel]`
+    // lookup resolves `toString` to the inherited function rather than to
+    // `undefined`. That skips the default-policy fallback and hands `store` a
+    // "policy" with no `bufferSize`, making the trim's `excess` NaN — never
+    // `> 0`, so the buffer grows forever. Names like `constructor` are not
+    // hypothetical for a domain event bus, and `channels` is a public
+    // registration surface now.
+    const runtime = createRuntime();
+    const inherited = Signals.channel("toString");
+
+    for (let index = 0; index < 200; index += 1) {
+      await runtime.publish(Signals.signal({ channel: inherited, name: "tick", payload: index }));
+    }
+
+    const result = await runtime.query({ _tag: "RuntimeSignals", channel: inherited });
+    const retained = result._tag === "RuntimeSignals" ? result.records : [];
+
+    // The default bound, not 200.
+    expect(retained.length).toBe(128);
+  });
+
+  test("prototype-named channels register and collide like any other name", () => {
+    const constructorChannel = Signals.defineChannel({
+      name: "constructor",
+      policy: { retention: "bounded", bufferSize: 4 },
+    });
+
+    // Registering one must not read as a duplicate of the inherited member.
+    expect(() => createRuntime({ channels: [constructorChannel] })).not.toThrow();
+
+    // And a raw policy for a name nothing registered must not read as a
+    // collision with `Object.prototype.valueOf`.
+    expect(() =>
+      createRuntime({
+        signalPolicies: { [Signals.channel("valueOf")]: { retention: "none" } },
+      })
+    ).not.toThrow();
+
+    // The real collision still throws.
+    expect(() =>
+      createRuntime({
+        channels: [constructorChannel],
+        signalPolicies: { [constructorChannel.channel]: { retention: "none" } },
+      })
+    ).toThrow(FrondRuntimeInvariantViolation);
+  });
+
   test("signal retention and query limits fail loudly when malformed", async () => {
     expect(() =>
       createRuntime({
