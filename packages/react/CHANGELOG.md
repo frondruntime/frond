@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.4.0](https://github.com/frondruntime/frond/compare/react-v0.3.0...react-v0.4.0) (2026-08-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* apps on this release require @frondruntime/hub at the matching version. A 0.3.x hub refuses the attachment with a message naming both versions, rather than accepting it and silently dropping the stream.
+
+### Features
+
+* typed signal lane, hub protocol 2, and the lint gate ([#18](https://github.com/frondruntime/frond/issues/18)) ([7363e4e](https://github.com/frondruntime/frond/commit/7363e4e2c1ecc81ac140fff563289d97891cd34b))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @frondruntime/core bumped to 0.4.0
+  * peerDependencies
+    * @frondruntime/core bumped from 0.3.0 to 0.4.0
+
 ## [0.3.0](https://github.com/frondruntime/frond/compare/react-v0.2.0...react-v0.3.0) (2026-07-28)
 
 
