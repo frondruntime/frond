@@ -1,6 +1,6 @@
 {
   "name": "@frondruntime/devtools",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Attach a Frond runtime to the local devtools hub.",
   "license": "MIT",
   "private": false,
@@ -57,7 +57,7 @@
     "test": "bun --conditions=source test"
   },
   "peerDependencies": {
-    "@frondruntime/core": "0.3.0",
+    "@frondruntime/core": "0.4.0",
     "effect": ">=4.0.0-beta.100 <5.0.0"
   },
   "devDependencies": {
