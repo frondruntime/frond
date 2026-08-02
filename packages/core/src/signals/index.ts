@@ -241,6 +241,24 @@ export const channel = (channel: string): RuntimeSignalChannel => channel as Run
  * convention, so the escape hatch stays open for adapters bridging a wire, and
  * the untyped `signal` is where a channel's typing ends rather than where it is
  * enforced.
+ *
+ * Using the narrow constructor is necessary and still not sufficient, because a
+ * channel's identity is its name. Two `defineChannel` calls that share a name are
+ * one channel to the bus however their event maps differ, so
+ * `defineChannel<CheckoutEvents>({ name: "app.checkout" })` in one module and
+ * `defineChannel<SyncEvents>({ name: "app.checkout" })` in another are two typed
+ * views of the same bus, each with a `signal` that builds records the other's
+ * subscriber is handed. Both sites use the narrow constructor, neither writes a
+ * cast, and it compiles. Nothing here can detect it — the maps never meet. Define
+ * a channel once and export the definition, the way two modules cannot own one
+ * route.
+ *
+ * A last limit sits inside the narrow constructor: `K` is inferred from the name,
+ * so a name that is a union infers a union, and `TEvents[K]` widens to the
+ * payloads of every member of it. Forwarding through a
+ * `name: "checkout.started" | "app.opened"` parameter therefore accepts either
+ * event's payload under either name. Narrowing the name first — a `switch`, or a
+ * wrapper generic in the single name — restores the pairing.
  */
 export const defineChannel = <TEvents extends SignalEventMap = Record<string, unknown>>(input: {
   readonly name: string;
