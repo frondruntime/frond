@@ -338,18 +338,26 @@ and frond-react skills. Bind/unbind host tokens are a migration-only shape.
 ## Pre-Graph Exceptions
 
 Code that must run before the runtime exists is the narrowest sanctioned
-escape from the graph. Exactly four mechanisms qualify:
+escape from the graph. Exactly three groups qualify:
 
-1. A platform timing contract — a host API that must be called at module
-   scope or before the first frame.
-2. A runtime prerequisite that must exist before the Frond import itself
-   (a polyfill, a crash-handler bootstrap).
-3. Bootstrap error capture — reporting wired up before graph construction so
-   boot failures land somewhere.
-4. An external SDK that enforces one process-lifetime instance.
+1. **Polyfills and runtime prerequisites** — code that must exist before the
+   Frond import itself evaluates. Examples: a `URL`/`crypto` polyfill on a
+   platform that lacks it, intl data loading.
+2. **Error tracking** — a crash/error SDK (Sentry, PostHog and their class)
+   initialized before `createRuntime`, because graph-construction failure is
+   precisely what it must capture. Error tracking is by definition not a
+   graph node: a node cannot report the failure of the machinery that
+   creates nodes. The pre-graph module owns initialization only; the graph
+   may later mirror it (a runtime sink forwarding events, a passive
+   projection node over the already-initialized SDK) but never
+   re-initializes it.
+3. **Platform module-level calls** — host APIs whose contract demands module
+   scope or before-first-frame timing. Examples:
+   `SplashScreen.preventAutoHideAsync()`, an orientation lock, a first-frame
+   audio-session category.
 
 Every pre-graph exception, no exceptions to the exceptions: lives in a named
-module; carries a `// Pre-graph exception: <mechanism>` comment; is
+module; carries a `// Pre-graph exception: <group>` comment; is
 idempotent; reports its own async rejection; holds no domain state; exposes
 its handle to the composition root, which hands it to the graph; cleans up
 after itself; has a test.
