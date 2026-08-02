@@ -5,6 +5,10 @@ description: Use before finishing coding work or after deterministic check failu
 
 # Agent Self Check
 
+The modeling/boundary/structure checklist below is the self-review twin of
+the one in `code-review`; that skill owns the canonical wording. On any
+conflict, defer to `code-review` and fix both copies in the same change.
+
 Use this skill to close the write-check-fix loop. Deterministic diagnostics are stronger than prompt instructions.
 
 ## Core Rule

@@ -143,6 +143,9 @@ Rules:
 - "React drives it" means async. "It supervises things" means effect.
 - Do not choose effect mode unilaterally. Propose it with the one-line reason
   and get explicit user confirmation before authoring an effect-mode node.
+  Record the confirmation as a comment directly above the spec —
+  `// effect-mode: <reason> — confirmed <who/when>` — so review can verify it
+  mechanically.
 - Cross modes with `Frond.wrapPromise` / `Frond.unwrapEffect`; never by adding
   a second call channel.
 
@@ -206,7 +209,7 @@ actions: {
 | Channel | Runs | Result commit | Cleanup |
 |---|---|---|---|
 | `Acquire` | once per incarnation | returned value commits | cleans up its own partial failures |
-| `Refresh` | on demand | returned or staged value commits | — |
+| `Refresh` | on demand | staged only — the hook returns void | — |
 | `Action` | per call, serialized through the node cell | only via `ctx.setResult` / `ctx.patchResult` | — |
 | `Live` | while the node has live demand | none | `stop` disposes what `start` returned |
 | `Release` | end of incarnation | — | tears down the result's capability |
@@ -226,12 +229,14 @@ actions: {
   down in `release`.
 - Staging precedence: mutations staged through `setResult` /
   `setResultValidity` / `patchResult` commit when the hook succeeds. In
-  `acquire`/`refresh` a defined return value supersedes the staged result
-  (but not explicitly staged validity); action return values are always
+  `acquire` a defined return value supersedes the staged result (but not
+  explicitly staged validity). `refresh` hooks return void — only staged
+  mutations commit there — and action return values are always
   result-neutral.
 - Effect-mode hooks also get `ctx.tryPromise` for promise interop, and both
-  modes get `ctx.signals` for publishing typed runtime signals from drivers
-  (see the signals coverage note — full lane rules are pending).
+  modes get `ctx.signals` for publishing typed runtime signals from drivers.
+  Full signal-lane doctrine is pending a dedicated skill; until it exists,
+  treat signals as fire-and-forget telemetry, never a state channel.
 
 ## Cancellation
 
@@ -311,7 +316,8 @@ A leaf node wrapping a non-critical external capability (analytics, tracking,
 attribution, third-party widgets) must degrade instead of blocking the graph:
 
 - Ordinary startup failure stays an ordinary failure of the leaf, contained
-  behind an internal deadline well under the runtime driver timeout.
+  behind an internal deadline well under the runtime driver timeout — a
+  quarter of it or less (5 seconds is the conventional cap).
 - Cancellation never marks the integration degraded.
 - The result exposes health explicitly: `operational | degraded | unsupported`.
   Consumers must not treat the node as optional; they read health.
@@ -370,6 +376,10 @@ Reach for these by name when the situation matches; do not reinvent them:
   node's carrier.
 
 ## Checks
+
+Run these against the consumer package under review — `src` means that
+package's source directory, not a repo root. In a repo that also contains
+`@frondruntime/*` package source, exclude it (e.g. `--glob '!packages/core/**'`).
 
 ```sh
 rg "NodeDescriptor<[^>]+>\['driver'\]" src

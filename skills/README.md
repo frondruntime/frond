@@ -6,10 +6,11 @@ enumerated deviations, and mechanical checks.
 
 ## Install
 
-With [skills.sh](https://skills.sh):
+With [skills.sh](https://skills.sh) — the CLI auto-discovers the top-level
+`skills/<name>/SKILL.md` layout:
 
 ```sh
-npx skills add <frond-repo>/skills
+npx skills add frondruntime/frond
 ```
 
 Or copy the directories you need into your repository's skill location
@@ -30,6 +31,9 @@ Skills reference each other by name; install the set together.
 
 ## Versioning
 
-Skills ship with the release they describe. When the installed
-`@frondruntime/*` source disagrees with a skill, the source wins — and that
-disagreement is a bug; report it.
+Skills ship with the release they describe; each `SKILL.md` ends with a
+`Describes: @frondruntime/core <major.minor>` stamp. If you vendored these
+skills, compare that stamp against your installed `@frondruntime/core` on
+every upgrade — there is no automated check outside the frond repository.
+When the installed `@frondruntime/*` source disagrees with a skill, the
+source wins — and that disagreement is a bug; report it.

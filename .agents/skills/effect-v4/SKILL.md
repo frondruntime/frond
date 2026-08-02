@@ -35,6 +35,8 @@ Frond-specific boundary: pure description stays outside Effect. `key(args)`,
 `dependencies(args)`, node spec construction, event constructors, and graph
 planning are pure. Runtime execution, scopes, sinks, platform adapters,
 driver hooks, event emission, clocks, generated ids, and persistence are Effect.
+This describes framework-internal execution, not the consumer-facing node `mode`:
+authored nodes default to `mode: "async"` per `skills/frond-node-authoring`.
 Use stable names from `AGENTS.md`, package READMEs, public docs, and current code.
 
 ## Workflow

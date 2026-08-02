@@ -91,6 +91,7 @@ The hub is a terminal dashboard over the live graph and an MCP server on the sam
 - `packages/react` - `@frondruntime/react`.
 - `packages/devtools` - `@frondruntime/devtools`.
 - `apps/hub` - `@frondruntime/hub`.
+- `packages/rootstock` - `@frondruntime/rootstock` (private, unpublished).
 - `.biome/plugins` - local Biome Grit rules.
 - `.agents/skills` - repo-local agent workflows.
 

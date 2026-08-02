@@ -159,11 +159,21 @@ allowlists do not.
 
 ## Checks
 
+Run these against the consumer package under review; `src` means its source
+directory.
+
 ```sh
 rg -B2 -A6 "Driver\.Acquire" src | rg "deps\.\w+\.result\."   # snapshot-at-acquire
 rg "Driver\.Action\(\(ctx[^)]*\) =>\s*ctx\.deps\.\w+\.actions\." src   # 1:1 renames
 rg "bindHost|unbindHost|BindingToken" src   # migration-only shapes in new code
 ```
+
+Every snapshot-at-acquire hit needs one manual judgment: is `result.field` a
+*value being copied* (staleness bug) or a *mutable/observable structure held
+by reference and read lazily* (legitimate)? The grep cannot tell them apart.
+The rename grep matches only single-expression bodies; block-bodied
+equivalents (`(ctx) => { return ctx.deps.x.actions.y(...); }`) evade it —
+sweep those by eye when reviewing a suspected alias node.
 
 ---
 

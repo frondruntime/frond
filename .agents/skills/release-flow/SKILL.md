@@ -16,7 +16,7 @@ Release automation reads Conventional Commit messages from merged history. In no
 - `type!:` or a `BREAKING CHANGE:` footer means SemVer major.
 - `docs:`, `test:`, `chore:`, `refactor:`, `build:`, and `ci:` should not be used for package behavior changes that need a release note.
 - Do not use `fix:` or `feat:` for housekeeping that should not publish.
-- Prefer scopes when they clarify ownership: `core`, `react`, `build`, `ci`, `docs`, `release`.
+- Prefer scopes when they clarify ownership: `core`, `react`, `devtools`, `hub`, `build`, `ci`, `docs`, `release`.
 - Write the subject in imperative present tense and keep it specific.
 
 Examples:

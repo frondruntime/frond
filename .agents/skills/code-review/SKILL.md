@@ -5,6 +5,11 @@ description: Use when reviewing code changes in Frond, especially to find defect
 
 # Code Review
 
+For changes to Frond-consumer-facing surfaces — node authoring, graph shape,
+React adapter behavior, public package APIs — load `skills/frond-review` and
+run its sweeps and Checks first; this skill covers general defect and
+regression review on top of it, and defers to it where they overlap.
+
 Use this skill for review-only passes and PR-style feedback. Lead with findings.
 
 ## Review Stance

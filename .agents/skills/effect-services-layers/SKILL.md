@@ -57,6 +57,7 @@ Rules:
 - Runtime code should avoid ambient `Date.now()`, `new Date()`, `Math.random()`, and direct random UUID generation. Use services/layers or explicit injected providers; boundary adapters and tests may wrap those primitives.
 - Do not call `Effect.runPromise` or `Effect.runSync` inside services. Run effects at process, test, or script edges.
 - For test seams, provide alternate layers instead of conditionals inside production services.
+- Effect layers never replace Frond node dependencies: node test seams are spec overrides (`skills/frond-node-testing`), and merging the two DI mechanisms is banned in `AGENTS.md`.
 
 ## Checks
 

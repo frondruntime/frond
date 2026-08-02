@@ -44,7 +44,7 @@ This repository uses release-please-style release automation. Release notes and 
 - Use `feat:` for minor releases.
 - Use `type!:` or a `BREAKING CHANGE:` footer for major releases.
 - Use `docs:`, `test:`, `chore:`, `refactor:`, `build:`, or `ci:` only when no package release should be produced.
-- Prefer scopes when useful: `core`, `react`, `build`, `ci`, `docs`, `release`.
+- Prefer scopes when useful: `core`, `react`, `devtools`, `hub`, `build`, `ci`, `docs`, `release`.
 - Make PR titles merge-ready Conventional Commit titles.
 - Put release-note context in the PR body when the change should appear in a GitHub release.
 - Release-please creates version/changelog/tag/GitHub-release artifacts; npm publication remains a separate local manual step.
@@ -83,6 +83,9 @@ Frond keeps the MobX-facing public model and runs runtime execution through Effe
 
 - packages/core owns @frondruntime/core.
 - packages/react owns @frondruntime/react.
+- packages/devtools owns @frondruntime/devtools (public hub client).
+- packages/rootstock owns @frondruntime/rootstock (private, unpublished).
+- apps/hub owns @frondruntime/hub (devtools daemon app, workspace member).
 - Keep this repository focused on public runtime packages and their supporting release/test tooling.
 - No package may import from another package private source path.
 - Runtime, graph, driver, node, keys, and MobX core must not import React or React adapter modules.

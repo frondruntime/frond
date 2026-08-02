@@ -20,8 +20,9 @@ check, a cited skill rule), not with intent.
 2. Load the matching official skills (frond-node-authoring,
    frond-graph-topology, frond-node-testing, frond-react, frond-debugging).
    Review against those files, not memory.
-3. Run every `Checks` block from the loaded skills over the changed files.
-   Every hit is a finding until refuted.
+3. Run every `Checks` block from the loaded skills and intersect the hits
+   with the diff (`git diff --name-only <base>`). Every hit on a changed
+   file is a finding until refuted.
 
 ## Two Sweeps
 
@@ -46,7 +47,8 @@ check, a cited skill rule), not with intent.
 - A driver factory or options bag whose only caller is a test.
 - A new `useEffect` doing domain work; a bridge component acquiring a second
   capability; imperative host objects reaching the graph.
-- An effect-mode node without recorded user confirmation.
+- An effect-mode node without its confirmation comment above the spec
+  (`// effect-mode: <reason> — confirmed <who/when>`).
 - A new ambient touch outside a declared leaf; a leaf gaining a second
   capability; a leaf imported by a second module.
 - Vocabulary or wrappers re-introducing a legacy shape (mode-less specs,

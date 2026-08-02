@@ -183,11 +183,15 @@ probe components written to expose node fields.
 
 ## Checks
 
+Run these against the package under review; `src` means its source directory.
+
 ```sh
 rg "setTimeout\(|sleep\(" --glob "*.test.*"
 rg "mock\.module|jest\.mock" --glob "*.test.*"   # only inside the owning leaf's suite
 rg "from ['\"].*\/testing['\"]" src --glob "!*test*" --glob "!*/testing.ts"
-rg "useNode\(|TestFrondProvider|render\(" --glob "*Node.test.*"   # React in a node suite
+# React in a node suite: any file using the harness must not also mount React.
+rg -l "createFrondTestHarness|startNode\(" --glob "*.test.*" \
+  | xargs rg -l "render\(|useNode\(|TestFrondProvider"
 ```
 
 ---

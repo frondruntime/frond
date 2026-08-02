@@ -29,11 +29,12 @@ The two sanctioned imperative places in a React tree are the composition root
 Default: Suspense-throwing reads plus MobX observation.
 
 ```tsx
+import * as Frond from "@frondruntime/core";
+import * as FrondReact from "@frondruntime/react";
 import { observer } from "mobx-react-lite";
-import { useNode } from "@frondruntime/react";
 
 export const Orders = observer(function Orders(): React.ReactNode {
-  const orders = useNode(OrdersNode, Frond.Args.none);
+  const orders = FrondReact.useNode(OrdersNode, Frond.Args.none);
   return <List rows={orders.rows} onPlace={(input) => orders.actions.placeOrder(input)} />;
 });
 ```
@@ -50,8 +51,8 @@ export const Orders = observer(function Orders(): React.ReactNode {
 - `useNodeRead` is the explicit-state escape hatch — boot screens and
   no-boundary contexts that render every phase of the tagged read. Do not
   mix it with Suspense reads of the same node in one component.
-- `useNodeControls` for ensure/refresh/evict without reading the result. It
-  is not a liveness source.
+- `useNodeControls` for `ensureReady`/`refresh`/`evict`/`releaseResources`
+  without reading the result. It is not a liveness source.
 - Every Suspense boundary has an ErrorBoundary; project boundary errors with
   `getErrorReport` and recover with `getErrorRecovery` — do not parse error
   strings.
@@ -73,8 +74,10 @@ tree (navigation container, toast renderer) and acknowledges back through an
 action.
 
 ```tsx
+// Imports elided: useEffect is from "react"; useRouter is your app's own
+// router hook — this fragment is illustrative, not paste-ready.
 export const NavigationBridge = observer(function NavigationBridge(): null {
-  const nav = useNode(NavigationNode, Frond.Args.none);
+  const nav = FrondReact.useNode(NavigationNode, Frond.Args.none);
   const router = useRouter(); // the one host capability this bridge owns
 
   const intent = nav.pendingIntent;
@@ -141,10 +144,13 @@ the raw form.
 
 ## Checks
 
+Run these against the app package's own source directory (substitute its real
+component directories); exclude vendored `@frondruntime/*` source.
+
 ```sh
-rg "useEffect\(" src/components src/surfaces   # each hit: render-scoped or a bridge?
-rg "from ['\"]@frondruntime/core['\"]" src/components src/surfaces
-rg "createRuntime\(" src --glob "!*composition*" --glob "!*bootstrap*"
+rg "useEffect\(" src   # every hit is render-scoped local state or a bridge — nothing else
+rg "from ['\"]@frondruntime/core['\"]" src   # only nodes and the composition root, never components
+rg -l "createRuntime\(" src   # exactly one file: the composition root
 rg "export function use\w+Node\(" src   # alias hooks
 ```
 

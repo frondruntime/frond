@@ -37,7 +37,9 @@ Use only the APIs needed by the test. Keep setup close to the tests unless it is
 
 ## Mocks And Spies
 
-- Use `mock` for small injected functions.
+- Use `mock` for small injected functions. For Frond node suites, module
+  mocks are allowed only for the raw capability inside the owning leaf's own
+  test file - everything else goes through spec overrides (`skills/frond-node-testing`).
 - Use `spyOn` when observing object methods.
 - Restore mocks in `afterEach` when they can leak state.
 - Prefer dependency injection or test layers over module mocking for Effect services.
