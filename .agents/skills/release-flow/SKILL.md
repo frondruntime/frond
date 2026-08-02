@@ -66,12 +66,16 @@ Expected package export paths:
 - `@frondruntime/core/testing` -> `dist/testing/index.js`, `dist/testing/index.d.ts`
 - `@frondruntime/react` -> `dist/index.js`, `dist/index.d.ts`
 - `@frondruntime/react/testing` -> `dist/testing/index.js`, `dist/testing/index.d.ts`
+- `@frondruntime/devtools` -> `dist/index.js`, `dist/index.d.ts`
+- `@frondruntime/devtools/node` -> `dist/node.js`, `dist/node.d.ts`
+
+`@frondruntime/rootstock` is `private: true` in its `package.json`. It is never published to npm and has no expected export-path smoke coverage in the publish rehearsal.
 
 ## Versioning
 
 - Do not republish an existing npm version. npm rejects it and package versions are immutable.
 - `npm publish --dry-run` still consults the registry and fails for an already-published exact version. That is expected after a version has shipped; use the tarball smoke result as the rehearsal signal until release-please bumps the next version.
-- If `0.0.1` already exists, the next patch release is `0.0.2`.
+- If `X.Y.Z` already exists, the next patch release is `X.Y.(Z+1)`. Check `.release-please-manifest.json` for each package's current published version rather than assuming one.
 - Prefer letting release-please create version and changelog changes after merge.
 - Do not hand-bump versions unless the user explicitly chooses a manual release path.
 - Do not add npm tokens or trusted publishing to this repo unless the release policy changes explicitly.

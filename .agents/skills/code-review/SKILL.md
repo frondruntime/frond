@@ -60,7 +60,7 @@ Call out these patterns when they appear in changed code:
 - fallback/default branches that hide unsupported internal variants
 - boolean matrices that should be discriminated unions or explicit state machines
 - correlated optional fields that permit illegal states
-- raw `string` IDs crossing package, persistence, tool, RPC, dispatch, or mission boundaries
+- raw `string` IDs crossing package, persistence, tool, RPC, or dispatch boundaries
 - closed sets widened to `string` when runtime extension is not intended
 - repeated exported `_tag` object literals that should be named constructors
 - public protocol call sites using `as const` where a typed constructor would make intent clearer
@@ -91,7 +91,7 @@ Check that:
 - violated internal contracts fail loudly instead of becoming generic fallback behavior
 - expected failures stay in the Effect error channel instead of becoming thrown exceptions or defects
 - constructors/builders shape values only; they do not perform I/O, allocate resources, read config, call providers, or start fibers
-- runtime services, clocks, random/id generation, stores, language models, and mutable context come from the Effect environment at execution time
+- runtime services, clocks, random/id generation, stores, and mutable context come from the Effect environment at execution time
 - runtime data crossing process, tool, dispatch, RPC, or persistence boundaries stays serializable
 
 ## Structure Review
@@ -118,7 +118,7 @@ Look for missing focused tests around:
 
 - new runtime behavior
 - isolated runtime behavior owners with fake Effect layers/services
-- service behavior: registries, stores, parsers, dispatch loops, satellite rings, tool execution boundaries
+- service behavior: registries, stores, parsers, driver execution boundaries
 - protocol constructors that normalize defaults or enforce invariants
 - boundary adapters that translate external/provider data
 - error-channel behavior and defect behavior
@@ -151,12 +151,11 @@ Back compatibility removal is not cleanup unless the user explicitly authorized 
 
 ## Documentation Review
 
-For docs changes under `docs/`, first inspect the local docs layout.
+For docs changes under `docs/` (currently just `docs/release.md`, the publish checklist) or a package `README.md` / `MIGRATION-*.md`, first read the current file in full before editing.
 
 Call out:
 
-- docs treated like a generated site instead of the repo's docs vault
-- current design guidance buried in dated notes or drafts
-- superseded design material deleted instead of archived when it has future value
-- stale links, stale section indexes, or moved notes without navigation updates
-- relative Markdown link rules or local docs conventions violated
+- `docs/release.md` changes that drift from what `publish.ts` / `build.ts` actually do, or from `release-flow`
+- package README or MIGRATION guidance that no longer matches current exports, package boundaries, or node-authoring shape
+- design guidance left only in a PR description or comment instead of the owning package README
+- stale relative Markdown links between package READMEs, `AGENTS.md`, and `docs/release.md`

@@ -9,9 +9,13 @@ Use this skill for tests run by `bun test`.
 
 ## Repo Facts
 
-- Root test command: `bun run test` -> `bun test`.
-- Runtime tests live under `packages/core/test`.
+- Root test command: `bun run test` -> `bun --conditions=source test packages/core/test packages/react/test packages/rootstock/test packages/devtools/test apps/hub/test`.
+- The `--conditions=source` flag is required, not cosmetic: it activates the `"source"` export condition (declared in `tsconfig.base.json` as `customConditions: ["source"]` and in each package's `package.json` `exports`), which resolves imports to `src/` instead of `dist/`. Drop it and tests silently run against stale/missing build output instead of current source.
+- Runtime tests live under `packages/core/test`, including `packages/core/test/e2e`, `packages/core/test/type-contracts`, and `packages/core/test/typecheck`.
 - React adapter tests live under `packages/react/test`.
+- Rootstock (private, unpublished) tests live under `packages/rootstock/test`.
+- Devtools client tests live under `packages/devtools/test`.
+- Hub app tests live under `apps/hub/test`.
 - Use package-local test scripts when a package owns the behavior.
 
 ## Imports
@@ -41,9 +45,9 @@ Use only the APIs needed by the test. Keep setup close to the tests unless it is
 ## Commands
 
 - Whole repo: `bun run test`.
-- Specific file: `bun test path/to/file.test.ts`.
-- Package scope: run the package script if present.
-- Name filter: `bun test -t "pattern"`.
+- Specific file: `bun --conditions=source test path/to/file.test.ts`. Keep `--conditions=source` for single-file runs too; without it the file resolves workspace imports against `dist/` instead of `src/`.
+- Package scope: run the package script if present (package-local `test` scripts already include `--conditions=source`).
+- Name filter: `bun --conditions=source test -t "pattern"`.
 - Watch mode is for local iteration, not final verification.
 
 ## Anti-Patterns
