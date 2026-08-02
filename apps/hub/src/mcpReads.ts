@@ -246,6 +246,38 @@ export function clampLimit(limit: number | undefined): number {
   return Math.max(1, Math.min(Math.trunc(limit), MAX_LIMIT));
 }
 
+/**
+ * The read options behind one `frond_read_events` call.
+ *
+ * Extracted from the handler for the reason `clampLimit` is: forwarding is a
+ * decision, and the one mistake it can make is silent. A tool that advertises a
+ * `channel` filter and then reads without it answers with a page that is shaped
+ * exactly like a filtered one and is not filtered — no test of {@link page}
+ * catches that, because `page` was never asked to filter in the first place.
+ * Naming the mapping gives the wiring somewhere to be tested.
+ */
+export function eventReadOptions(params: {
+  readonly since?: number | undefined;
+  readonly limit?: number | undefined;
+  readonly tag?: string | undefined;
+  readonly category?: string | undefined;
+  readonly severity?: string | undefined;
+  readonly nodeId?: string | undefined;
+  readonly channel?: string | undefined;
+  readonly name?: string | undefined;
+}): Parameters<EventRing["read"]>[0] {
+  return {
+    since: params.since,
+    limit: clampLimit(params.limit),
+    tag: params.tag,
+    category: params.category,
+    severity: params.severity,
+    nodeId: params.nodeId,
+    channel: params.channel,
+    name: params.name,
+  };
+}
+
 export function page(
   view: AttachmentView,
   ring: EventRing | undefined,

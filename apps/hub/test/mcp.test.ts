@@ -6,6 +6,7 @@ import { Effect, Queue } from "effect";
 import {
   clampLimit,
   coverageOf,
+  eventReadOptions,
   page,
   type Row,
   resolve,
@@ -445,6 +446,46 @@ describe("page", () => {
     expect(
       page(view, ring, { limit: 50, name: "checkout_started" }).records.map((r) => r.channel)
     ).toEqual(["app.analytics", "app.sync"]);
+  });
+
+  /**
+   * The step between the tool's parameters and the reader, which the test above
+   * skips by handing `page` its options directly.
+   *
+   * A filter the tool advertises and the handler forgets to pass on is invisible
+   * from either side: the schema still accepts `channel`, `page` still filters
+   * correctly when asked, and the answer in between is an unfiltered page that
+   * looks exactly like a filtered one. Dropping `channel` and `name` from the
+   * mapping is a mutation the rest of this suite does not notice.
+   */
+  test("the tool's filters reach the reader rather than stopping at the schema", async () => {
+    const hub = await harness();
+    const app = await hub.attach("app");
+    const signal = (channel: string, name: string): EncodedEventRecord =>
+      record({ tag: "RuntimeSignalPublished", category: "signal", channel, name });
+
+    await hub.ingest(app, [
+      signal("app.analytics", "checkout_started"),
+      signal("app.analytics", "cart_cleared"),
+      signal("app.sync", "checkout_started"),
+    ]);
+
+    const [view, ring] = only(hub);
+    const read = (params: Parameters<typeof eventReadOptions>[0]) =>
+      page(view, ring, eventReadOptions(params)).records;
+
+    expect(read({ channel: "app.analytics" }).map((r) => r.name)).toEqual([
+      "checkout_started",
+      "cart_cleared",
+    ]);
+    expect(read({ name: "checkout_started" }).map((r) => r.channel)).toEqual([
+      "app.analytics",
+      "app.sync",
+    ]);
+    // Combined, because the tool documents its filters as AND.
+    expect(read({ channel: "app.analytics", name: "checkout_started" }).length).toBe(1);
+    // And the limit still goes through the clamp on the way.
+    expect(read({ limit: 10_000 }).length).toBe(3);
   });
 
   /**

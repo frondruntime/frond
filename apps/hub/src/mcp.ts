@@ -5,6 +5,7 @@ import type { HttpRouter } from "effect/unstable/http";
 import {
   clampLimit,
   EventPage,
+  eventReadOptions,
   McpReadError,
   page,
   RuntimeSummary,
@@ -165,16 +166,7 @@ export function mcpLayer(options: {
 
     frond_read_events: (params) =>
       Effect.map(resolve(attachments, selfInstanceId, params.attachmentId), ([view, ring]) =>
-        page(view, ring, {
-          since: params.since,
-          limit: clampLimit(params.limit),
-          tag: params.tag,
-          category: params.category,
-          severity: params.severity,
-          nodeId: params.nodeId,
-          channel: params.channel,
-          name: params.name,
-        })
+        page(view, ring, eventReadOptions(params))
       ),
 
     frond_read_work: (params) =>

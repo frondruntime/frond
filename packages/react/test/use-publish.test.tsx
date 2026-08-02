@@ -125,4 +125,70 @@ describe("usePublish", () => {
       retained._tag === "RuntimeSignals" ? retained.records.map((record) => record.signal.name) : []
     ).toEqual(["checkout.started", "app.opened"]);
   });
+
+  /**
+   * The other half of the identity claim above, and the half a stability test
+   * cannot make on its own: `[runtime, channel]` has to be *those* dependencies,
+   * not an empty array. An empty one passes every assertion about one identity —
+   * more convincingly, in fact — while pinning the callback to the runtime that
+   * happened to be mounted first.
+   *
+   * The window is the one `usePublish` documents: `createRuntimeCoordinator`
+   * swaps the runtime on an HMR reload, and a publisher that kept the outgoing
+   * one writes to a runtime nothing is reading anymore. Silent, because
+   * publishing to a live-but-orphaned runtime resolves normally.
+   */
+  test("swapping the runtime repoints the publisher instead of holding the old one", async () => {
+    const first = createRuntime({ channels: [Checkout] });
+    const second = createRuntime({ channels: [Checkout] });
+
+    function Publisher(): ReturnType<typeof createElement> {
+      const publish = usePublish(Checkout);
+
+      return createElement(
+        "button",
+        {
+          type: "button",
+          onClick: () => void publish("checkout.started", { cartId: "cart-1", total: 12 }),
+        },
+        "start"
+      );
+    }
+
+    function Swappable(): ReturnType<typeof createElement> {
+      const [runtime, setRuntime] = useState(first);
+
+      return createElement(
+        FrondProvider,
+        { runtime },
+        createElement(Publisher),
+        createElement("button", { type: "button", onClick: () => setRuntime(second) }, "swap")
+      );
+    }
+
+    const view = render(createElement(StrictMode, null, createElement(Swappable)));
+
+    await act(async () => {
+      fireEvent.click(view.getByText("swap"));
+    });
+    await act(async () => {
+      fireEvent.click(view.getByText("start"));
+    });
+
+    const names = async (runtime: typeof first): Promise<ReadonlyArray<string>> => {
+      const result = await runtime.query({
+        _tag: "RuntimeSignals",
+        channel: Checkout.channel,
+      });
+
+      return result._tag === "RuntimeSignals"
+        ? result.records.map((record) => record.signal.name)
+        : [];
+    };
+
+    expect(await names(second)).toEqual(["checkout.started"]);
+    // The assertion that fails when the dependency array is emptied: the click
+    // happened after the swap, so nothing may have reached the outgoing runtime.
+    expect(await names(first)).toEqual([]);
+  });
 });
