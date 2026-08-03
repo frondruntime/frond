@@ -125,6 +125,56 @@ Every package that exports a node also exports `./testing` (from
   a gate or an event predicate.
 - Assert typed failures by `_tag`, never by stringified output.
 
+### Operation Coverage Checklist
+
+When a node declares one of these behaviors, these are the cases that prove
+it. Each is reachable with a deferred driver plus an event predicate; none
+needs a sleep. Cover what the node actually declares — this is a checklist to
+select from, not a suite to transcribe.
+
+**Admission.** Hold A, submit B, then prove the policy from B's fate before A
+settles: `queue` — B has not entered the driver, and both outcomes land in
+order once A settles; `reject` — B fails without a second driver call; `join`
+— equal inputs produce one driver run and equal outcomes, and a distinct
+admission key produces distinct work.
+
+**Cancellation.** Abort with the signal already aborted (no submission, no
+driver call); while queued (removed before the driver runs); while active
+(the operation's `ctx.signal` aborts); and as one of several joined awaiters
+(the shared run survives for the others). An Effect caller interrupting its
+own fiber follows the same ownership rules.
+
+**Timeouts and late settlement.** Cover the inherited driver timeout, a finite
+per-action override, and `"unbounded"`. Past a deadline, prove all five: the
+driver signal aborted, no staged result committed, the public channel returned
+its documented failure, the runtime emitted the semantic failure event, and the
+late resolve/reject was consumed rather than escaping. `"unbounded"` skips only
+the deadline — stop, eviction, and caller interruption still interrupt.
+
+**Cleanup.** Use at least three disposers to prove reverse registration order.
+Make one reject and one overrun the release deadline, then prove the remaining
+disposers still ran, the timeout and wrapper failures kept their typed
+structure, the late rejection was consumed, and reacquisition gets a fresh
+cleanup scope that runs exactly once.
+
+**Result commit and rollback.** `setResult` commits only on successful
+completion; a plain-data `patchResult` stays staged and rolls back on failure;
+action output stays independent of the node result; validity and `loadedAt`
+project as declared after acquire; `carryInternal` preserves the envelope where
+a bare spread drops it. Shared non-plain patching does not roll back — if the
+node opted into `resultPatch.nonPlainClone`, test the tradeoff rather than
+assuming the plain-data guarantee.
+
+**Liveness.** Zero demand, first demand starting the driver, scope update or
+replacement, and final demand stopping it — plus the stop reason for release,
+eviction, runtime stop, ready invalidation, and update failure. Cover manual
+lease disposal and failed lease acquisition. React mount is never live demand;
+do not prove liveness by rendering.
+
+**Signals.** Retention `"none"` versus `"bounded"`, channel filtering,
+subscriber-failure events, and retained order by `sequence`. Prove that a
+signal never satisfies readiness.
+
 ## Runtime Defects Go Upstream
 
 If a test isolates a defect in `@frondruntime/*` itself, reduce it to a

@@ -6,12 +6,24 @@ enumerated deviations, and mechanical checks.
 
 ## Install
 
-With [skills.sh](https://skills.sh) — the CLI auto-discovers the top-level
-`skills/<name>/SKILL.md` layout:
+Install the six by name. The `skills` CLI scans every known skill location in
+a repository — including `.agents/skills/`, which holds this repo's *internal
+maintainer* workflows — so an unscoped install pulls in far more than the
+official set:
 
 ```sh
-npx skills add frondruntime/frond
+npx skills add frondruntime/frond --skill frond-node-authoring --skill frond-graph-topology --skill frond-node-testing --skill frond-react --skill frond-debugging --skill frond-review
 ```
+
+**Do not run `npx skills add frondruntime/frond --all`.** It installs this
+repository's maintainer skills too — Effect, Bun, release-flow, refactoring,
+generic code-review, and monorepo policy — which are written for people
+developing Frond, not for applications using it. In a consumer repository they
+are at best noise and at worst contradictory guidance.
+
+`frond-node-authoring` is the one name that exists in both locations; the
+internal copy is a stub that defers to the public file, so either resolution
+lands on the same doctrine. Every other overlap is maintainer-only.
 
 Or copy the directories you need into your repository's skill location
 (`.agents/skills/`, `.claude/skills/`, or equivalent).

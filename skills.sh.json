@@ -1,0 +1,43 @@
+{
+  "$schema": "https://skills.sh/schemas/skills.sh.schema.json",
+  "notGrouped": "bottom",
+  "groupings": [
+    {
+      "title": "Official Frond Skills",
+      "description": "The consumer set, for applications building on @frondruntime/*. These six are the supported install; they reference each other and are meant to be installed together.",
+      "skills": [
+        "frond-node-authoring",
+        "frond-graph-topology",
+        "frond-node-testing",
+        "frond-react",
+        "frond-debugging",
+        "frond-review"
+      ]
+    },
+    {
+      "title": "Repository Maintainer Skills (not for consumers)",
+      "description": "Internal workflows for developing the Frond repository itself - Effect, Bun, release, refactoring, and monorepo policy. These are discoverable because the CLI scans .agents/skills, but they are not part of the official set and should not be installed into an application repository.",
+      "skills": [
+        "agent-self-check",
+        "biome-grit-rules",
+        "biome-tooling",
+        "bun-test",
+        "bun-workspace",
+        "cleanup-audit",
+        "code-review",
+        "effect-concurrency-lifecycle",
+        "effect-errors-schema",
+        "effect-observability-time",
+        "effect-services-layers",
+        "effect-testing-runtime",
+        "effect-v4",
+        "frond-architecture-review",
+        "monorepo-maintenance",
+        "refactoring-discipline",
+        "release-flow",
+        "testing-patterns",
+        "typescript-strict"
+      ]
+    }
+  ]
+}
