@@ -177,6 +177,21 @@ Rules:
   `Frond.withInternal(publicResult, internals)` on commit,
   `Frond.internalOf(result)` inside the driver. Driver-only machinery stays
   off the public surface without a second store.
+- The envelope slot is non-enumerable, which is safe in the leak direction and
+  lossy in the carry direction. It never appears in `JSON.stringify`,
+  `Object.keys`, or spread output — so internals cannot escape, and a spread
+  copy silently drops the slot. `internalOf` then throws a `TypeError` on a
+  result that looks identical. Prefer `ctx.patchResult`, which mutates in place
+  and never changes the object reference. When you must replace the whole
+  result, re-attach explicitly:
+
+  ```ts
+  // DON'T: the copy is not enveloped; the next internalOf() throws.
+  ctx.setResult((cur) => ({ ...cur, status: "connected" }));
+
+  // DO: carry the previous internal onto the replacement.
+  ctx.setResult((cur) => Frond.carryInternal(cur, { ...cur, status: "connected" }));
+  ```
 
 ```ts
 // DON'T: dependency smuggled through a factory, work on the result,
@@ -235,8 +250,57 @@ actions: {
   result-neutral.
 - Effect-mode hooks also get `ctx.tryPromise` for promise interop, and both
   modes get `ctx.signals` for publishing typed runtime signals from drivers.
-  Full signal-lane doctrine is pending a dedicated skill; until it exists,
-  treat signals as fire-and-forget telemetry, never a state channel.
+
+## Result Validity
+
+Validity is how a node says "this result is still true", separately from
+whether it exists. Declare the policy on the spec:
+
+| `resultValidity` | Meaning |
+|---|---|
+| `{ _tag: "Static" }` | never goes stale; the default mental model |
+| `{ _tag: "Manual" }` | the driver decides, via `ctx.setResultValidity` or a commit |
+| `{ _tag: "TimeBound", staleAfter, expireAfter }` | the runtime ages it (Effect `Duration.Input`) |
+
+Reads project `Current` / `Stale` / `Expired`. **Stale is not an error and not
+a pending state** — the result is still readable, and consumers decide whether
+to use it or trigger a refresh. Do not encode staleness as a result union
+member; that is the runtime's model reimplemented on your surface.
+
+When `acquire` needs to commit a result *and* its validity or load time in one
+step, return `Frond.resultCommit(result, { validity, loadedAt })` instead of a
+bare value:
+
+```ts
+acquire: Frond.Driver.Acquire(async (ctx) => {
+  const { orders, fetchedAt } = await ctx.deps.transport.client.orders.list(ctx.signal);
+  return Frond.resultCommit({ byId: indexById(orders) }, { loadedAt: fetchedAt });
+}),
+```
+
+`loadedAt` is what a `TimeBound` policy ages from — supply the origin's
+timestamp when the data was fetched earlier than this acquire (a cache, a
+replayed snapshot), or the node reads as fresher than it is.
+
+## Signals
+
+`ctx.signals` publishes typed runtime signals on a channel. A channel is typed
+by an event map (`interface CheckoutEvents { ... }`), names come from that map,
+and payloads are checked at compile time — there is no runtime schema, because
+a signal is built and consumed by the same application and never crosses a
+trust boundary.
+
+The rules that matter:
+
+- **Signals are not a state channel.** They never satisfy readiness, never
+  commit a result, and no consumer may treat a signal as the fact. State goes
+  through the result; a signal announces that something happened.
+- **Retention is a policy, not a guarantee.** `{ retention: "none" }` keeps
+  nothing; `{ retention: "bounded", bufferSize }` keeps a window. An empty
+  retained buffer is not evidence that nothing was published.
+- **A subscriber failure is the subscriber's**. It surfaces as its own event
+  and never fails the publishing driver.
+- Retained records carry `sequence` and `recordedAt`; order by `sequence`.
 
 ## Cancellation
 
@@ -257,6 +321,55 @@ actions: {
 - `admission: "reject"` guards one action against itself. Cross-action
   mutual exclusion (submit while a quote is in flight) is node-private state
   the colliding actions check — declare both layers when a flow needs them.
+- All three admission policies still run through the node cell's serialized
+  lane. Admission decides whether a call is *submitted*, never whether the
+  cell runs two operations at once. It does not.
+
+### Caller-Side Cancellation
+
+Only one action channel accepts caller metadata. The typed facade
+`handle.actions.foo(input)` takes input and nothing else — there is no signal
+parameter on it. Metadata-bearing cancellation goes through the untyped
+`handle.action(name, input, { signal })`, or through an Effect caller
+interrupting its own fiber.
+
+`metadata.signal` interrupts the submission exactly as fiber interruption
+would, and what that means depends on what the call owns at the time:
+
+| Ownership at abort | Outcome |
+|---|---|
+| Signal already aborted | settles as interruption; never submitted, driver never called |
+| Queued, single owner | settles without invoking the driver |
+| Active, single owner | the operation's `ctx.signal` aborts |
+| Joined, another awaiter remains | the shared run continues for the others |
+
+The call settles as Effect interruption; through `unwrapEffect` that is a
+rejection carrying the interrupted `Cause`, distinguishable from a typed
+failure like any other interruption. Cancelling is not a failure and never
+enters a domain failure union.
+
+### Manual Live Leases
+
+Liveness is node-owned demand. React mounting a component is not demand, and
+neither is a handle existing. When something outside MobX field observation
+needs a node live — a background task, a composition-root warmup, a test —
+take an explicit lease:
+
+```ts
+const held = await handle.acquireLiveLease(source, scope);
+if (held._tag === "Held") {
+  await held.lease.dispose(); // removes this demand source
+}
+```
+
+`acquireLiveLease` answers `Held` (carrying a disposable lease and a live
+demand snapshot), `Failure` (typed `GraphFailure`s; no lease was recorded), or
+`NodeMissing`. Handle all three — a lease you assume you hold is a `Live`
+`start` that never ran.
+
+Disposing removes *one* demand source. Driver live resources stop only when
+the combined demand becomes inactive or changes, so a disposed lease stops
+nothing while another lease or an observing consumer still wants the node.
 
 ## Failures
 
