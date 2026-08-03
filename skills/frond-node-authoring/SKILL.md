@@ -338,33 +338,44 @@ and frond-react skills. Bind/unbind host tokens are a migration-only shape.
 ## Pre-Graph Exceptions
 
 Code that must run before the runtime exists is the narrowest sanctioned
-escape from the graph. Exactly three groups qualify:
+escape from the graph. The membership test is one principle: **pre-graph
+code must work when the graph does not — or will never — exist.** Anything
+that merely feeds the graph about to exist is composition-root bootstrap,
+not an exception.
 
-1. **Polyfills and runtime prerequisites** — code that must exist before the
-   Frond import itself evaluates. Examples: a `URL`/`crypto` polyfill on a
-   platform that lacks it, intl data loading.
-2. **Error tracking** — a crash/error SDK (Sentry, PostHog and their class)
+Two closed groups, one open one:
+
+1. **Polyfills and runtime prerequisites** — must exist before the Frond
+   import itself evaluates. Examples: a `URL`/`crypto` polyfill, an
+   import-side-effect library that must load first, intl data.
+2. **Error reporting** — a crash/error SDK (Sentry, PostHog and their class)
    initialized before `createRuntime`, because graph-construction failure is
-   precisely what it must capture. Error tracking is by definition not a
+   precisely what it must capture. Error reporting is by definition not a
    graph node: a node cannot report the failure of the machinery that
    creates nodes. The pre-graph module owns initialization only; the graph
    may later mirror it (a runtime sink forwarding events, a passive
    projection node over the already-initialized SDK) but never
    re-initializes it.
-3. **Platform module-level calls** — host APIs whose contract demands module
-   scope or before-first-frame timing. Examples:
-   `SplashScreen.preventAutoHideAsync()`, an orientation lock, a first-frame
-   audio-session category.
+3. **Everything else the host demands before the graph** — an open set,
+   admitted case by case against the principle above, best judgment plus the
+   checklist below; propose to the user when unsure.
+   - DO: `SplashScreen.preventAutoHideAsync()` at module scope (Expo demands
+     it before the first frame); `AppRegistry.registerHeadlessTask` /
+     background message handlers in the entry file (the OS may invoke them
+     with no graph ever existing); an orientation lock; dev-only tooling
+     behind `__DEV__`.
+   - DON'T: a one-process-lifetime SDK init to survive HMR — that is a leaf
+     whose module holds a process-lifetime registry guard, not pre-graph
+     code; reading config or assembling spec overrides — that is the
+     composition root; anything justified by "the SDK is a singleton,"
+     "it only runs once," React mount timing, current module placement, or
+     avoiding a driver/cleanup contract. Module scope alone is not evidence.
 
 Every pre-graph exception, no exceptions to the exceptions: lives in a named
 module; carries a `// Pre-graph exception: <group>` comment; is
 idempotent; reports its own async rejection; holds no domain state; exposes
 its handle to the composition root, which hands it to the graph; cleans up
 after itself; has a test.
-
-These do not qualify: convenience, "it only runs once," current module
-placement, React mount timing, an SDK merely being a singleton, or avoiding
-a driver/cleanup contract. Module scope alone is not evidence.
 
 ## Named Patterns
 

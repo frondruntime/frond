@@ -17,7 +17,8 @@ frond-node-testing, frond-react, frond-debugging, frond-review.
   (snapshot-at-acquire) forbidden; intent dispatch replaces bind/unbind
   host ports for UI-owned capabilities (bind/unbind is migration-only).
 - Node tests never mount React; dependency replacement is the only seam.
-- Pre-graph exceptions limited to three groups (polyfills, error tracking,
-  platform module-level calls) with a mandatory checklist.
+- Pre-graph exceptions: one membership principle (must work when the graph
+  does not exist), two closed groups (polyfills, error reporting), one open
+  host-demand group with do/don't examples, and a mandatory checklist.
 - Local supplements defined: tighten-only, official-wins-on-API-shape,
   reviewed under the frond-review verdict model.
