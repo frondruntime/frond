@@ -144,14 +144,16 @@ Likely skills:
 - effect-testing-runtime
 - effect-v4
 - frond-architecture-review
-- frond-node-authoring
 - monorepo-maintenance
+- official-skills-routing
 - refactoring-discipline
 - release-flow
 - testing-patterns
 - typescript-strict
 
-The official public Frond skills live under `skills/` (`frond-node-authoring`, `frond-graph-topology`, `frond-node-testing`, `frond-react`, `frond-debugging`, `frond-review`). They MUST be loaded for any Frond-consumer-facing authoring, testing, or review topic (writing/migrating nodes, testing node behavior, reviewing node/graph/React usage as a Frond consumer would). Internal `.agents/skills` entries defer to them where they overlap; treat `.agents/skills` as repo-maintainer-facing (tooling, release, structure, review process) rather than Frond-API-facing.
+The official public Frond skills live under `skills/` (`frond-node-authoring`, `frond-graph-topology`, `frond-node-testing`, `frond-react`, `frond-debugging`, `frond-review`). They MUST be loaded for any Frond-consumer-facing authoring, testing, or review topic (writing/migrating nodes, testing node behavior, reviewing node/graph/React usage as a Frond consumer would). `official-skills-routing` maps topics to those files. Internal `.agents/skills` entries defer to them where they overlap; treat `.agents/skills` as repo-maintainer-facing (tooling, release, structure, review process) rather than Frond-API-facing.
+
+Skill names under `.agents/skills` must never collide with a public skill name under `skills/`: the `skills` CLI scans both, so a duplicate name is ambiguous to anyone installing from this repository.
 
 </skills>
 

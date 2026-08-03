@@ -21,9 +21,8 @@ generic code-review, and monorepo policy — which are written for people
 developing Frond, not for applications using it. In a consumer repository they
 are at best noise and at worst contradictory guidance.
 
-`frond-node-authoring` is the one name that exists in both locations; the
-internal copy is a stub that defers to the public file, so either resolution
-lands on the same doctrine. Every other overlap is maintainer-only.
+No maintainer skill shares a name with one of the six, so the names above
+resolve unambiguously.
 
 Or copy the directories you need into your repository's skill location
 (`.agents/skills/`, `.claude/skills/`, or equivalent).
