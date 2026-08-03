@@ -40,7 +40,9 @@ for (const entry of entries) {
   if (stamp === undefined) {
     failures.push(`${entry.name}: missing "Describes: @frondruntime/core <major.minor>" stamp`);
   } else if (stamp !== expected) {
-    failures.push(`${entry.name}: stamped ${stamp}, released core is ${expected} — re-review and restamp`);
+    failures.push(
+      `${entry.name}: stamped ${stamp}, released core is ${expected} — re-review and restamp`
+    );
   }
 }
 
