@@ -44,7 +44,7 @@ This repository uses release-please-style release automation. Release notes and 
 - Use `feat:` for minor releases.
 - Use `type!:` or a `BREAKING CHANGE:` footer for major releases.
 - Use `docs:`, `test:`, `chore:`, `refactor:`, `build:`, or `ci:` only when no package release should be produced.
-- Prefer scopes when useful: `core`, `react`, `build`, `ci`, `docs`, `release`.
+- Prefer scopes when useful: `core`, `react`, `devtools`, `hub`, `build`, `ci`, `docs`, `release`.
 - Make PR titles merge-ready Conventional Commit titles.
 - Put release-note context in the PR body when the change should appear in a GitHub release.
 - Release-please creates version/changelog/tag/GitHub-release artifacts; npm publication remains a separate local manual step.
@@ -83,6 +83,9 @@ Frond keeps the MobX-facing public model and runs runtime execution through Effe
 
 - packages/core owns @frondruntime/core.
 - packages/react owns @frondruntime/react.
+- packages/devtools owns @frondruntime/devtools (public hub client).
+- packages/rootstock owns @frondruntime/rootstock (private, unpublished).
+- apps/hub owns @frondruntime/hub (devtools daemon app, workspace member).
 - Keep this repository focused on public runtime packages and their supporting release/test tooling.
 - No package may import from another package private source path.
 - Runtime, graph, driver, node, keys, and MobX core must not import React or React adapter modules.
@@ -127,20 +130,28 @@ Before starting work, check whether a repo-local skill under .agents/skills appl
 
 Likely skills:
 
-- bun-workspace
-- typescript-strict
-- frond-node-authoring
-- effect-v4
-- effect-concurrency-lifecycle
-- effect-services-layers
-- effect-errors-schema
-- effect-testing-runtime
-- biome-tooling
-- biome-grit-rules
-- monorepo-maintenance
-- release-flow
-- code-review
 - agent-self-check
+- biome-grit-rules
+- biome-tooling
+- bun-test
+- bun-workspace
+- cleanup-audit
+- code-review
+- effect-concurrency-lifecycle
+- effect-errors-schema
+- effect-observability-time
+- effect-services-layers
+- effect-testing-runtime
+- effect-v4
+- frond-architecture-review
+- frond-node-authoring
+- monorepo-maintenance
+- refactoring-discipline
+- release-flow
+- testing-patterns
+- typescript-strict
+
+The official public Frond skills live under `skills/` (`frond-node-authoring`, `frond-graph-topology`, `frond-node-testing`, `frond-react`, `frond-debugging`, `frond-review`). They MUST be loaded for any Frond-consumer-facing authoring, testing, or review topic (writing/migrating nodes, testing node behavior, reviewing node/graph/React usage as a Frond consumer would). Internal `.agents/skills` entries defer to them where they overlap; treat `.agents/skills` as repo-maintainer-facing (tooling, release, structure, review process) rather than Frond-API-facing.
 
 </skills>
 

@@ -1,11 +1,11 @@
 ---
 name: biome-grit-rules
-description: Use when creating, reviewing, or modifying custom Biome Grit plugins in undefined*.grit, especially deterministic agent-correction rules for stale Effect v3 patterns, local style hazards, and diagnostic messages that tell agents what to do next.
+description: Use when creating, reviewing, or modifying custom Biome Grit plugins in .biome/plugins/*.grit, especially deterministic agent-correction rules for stale Effect v3 patterns, local style hazards, and diagnostic messages that tell agents what to do next.
 ---
 
 # Biome Grit Rules
 
-Use this skill for repo custom lint rules under `undefined*.grit`.
+Use this skill for repo custom lint rules under `.biome/plugins/*.grit`, registered in the `plugins` and per-override `plugins` arrays in `biome.json`.
 
 ## Purpose
 

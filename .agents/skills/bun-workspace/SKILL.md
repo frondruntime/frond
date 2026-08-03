@@ -10,25 +10,35 @@ Use this skill for Bun runtime and workspace operations.
 ## Repo Facts
 
 - Package manager: Bun.
-- Workspace root: `package.json` with `workspaces: ["packages/*"]`.
+- Workspace root: `package.json` with `workspaces: ["apps/*", "packages/*"]`.
 - Lockfile: `bun.lock`; do not hand-edit it.
 - Root scripts:
-  - `bun run lint`
-  - `bun run test`
+  - `bun run build`
+  - `bun run publish:npm`
+  - `bun run publish:npm:dry-run`
+  - `bun run verify:pack`
   - `bun run typecheck`
   - `bun run effect:diagnostics`
   - `bun run effect:ls:check`
   - `bun run effect:ls:patch`
-- Package-local scripts exist under `packages/*/package.json`.
+  - `bun run test`
+  - `bun run format`
+  - `bun run lint`
+- Package-local scripts exist under `packages/*/package.json` and `apps/*/package.json`.
 
 ## Root Scripts
 
+- `bun run build` - runs `build.ts` to build package output.
+- `bun run publish:npm` - runs `publish.ts` to publish packages to npm (local, interactive only).
+- `bun run publish:npm:dry-run` - runs `publish.ts --dry-run`, the full publish rehearsal without the real `npm publish`.
+- `bun run verify:pack` - runs `publish.ts --smoke-only`, the tarball/pack smoke test only.
+- `bun run typecheck` - TypeScript checks for the configured packages.
 - `bun run effect:diagnostics` - Effect language-service diagnostics for configured non-web packages.
 - `bun run effect:ls:check` - check whether local TypeScript is patched for Effect diagnostics.
 - `bun run effect:ls:patch` - patch local TypeScript so Effect diagnostics surface through build-time checks.
-- `bun run lint` - Biome check.
-- `bun run test` - Bun tests.
-- `bun run typecheck` - TypeScript checks for the configured packages.
+- `bun run test` - `bun --conditions=source test packages/core/test packages/react/test packages/rootstock/test packages/devtools/test apps/hub/test`.
+- `bun run format` - `bunx biome format . --write`.
+- `bun run lint` - `bunx biome check .`.
 
 ## Command Rules
 

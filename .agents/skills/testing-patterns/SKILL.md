@@ -12,9 +12,11 @@ Do not use this skill for app/UI testing unless the user explicitly asks to cove
 ## Placement
 
 - Put tests near the package that owns the behavior.
-- Prefer package-local `src/**/*.test.ts` or `src/**/*.test.tsx` patterns already used by the package.
-- Keep reusable test helpers under a package-local test utility module. Do not leak helpers into public exports unless they are intended public test utilities.
-- Cross-package behavior should be tested at the lowest package that can observe it. Use server-level tests only for real wiring, persistence, transport, or runtime assembly.
+- Tests live in `packages/*/test` and `apps/hub/test`, not alongside source under `src/`. Match the `*.test.ts` / `*.test.tsx` naming already used in the owning package's `test` directory.
+- Keep reusable test helpers under a package-local test utility module inside that package's `test` directory (for example `packages/core/test/graphTestFixtures.ts`). Do not leak helpers into public exports unless they are intended public test utilities.
+- Cross-package behavior should be tested at the lowest package that can observe it. Use `apps/hub/test` only for real wiring, persistence, transport, or runtime assembly at the devtools-hub app level.
+
+Frond node testing rules (spec/driver/action test shape) live in `skills/frond-node-testing` (the public skill). This skill covers repo-generic test placement and style only.
 
 ## What Needs Tests
 
@@ -22,11 +24,10 @@ Do not use this skill for app/UI testing unless the user explicitly asks to cove
 - Runtime tests should prove the bad frontend state cannot happen, not only that the happy path works: stale commits, impossible pending states, hidden retries, unowned liveness, duplicate ownership, and operation admission races are first-class test targets.
 - Runtime behavior owners need isolated tests by default. Effect DI should be
   used to cut the graph and replace dependencies with fake layers/services.
-- Services with behavior need direct tests: registries, stores, parsers, dispatch loops, satellite rings, tool execution boundaries, persistence adapters, and protocol serializers.
+- Services with behavior need direct tests: registries, stores, parsers, driver execution boundaries, persistence adapters, and protocol serializers.
 - Systems should test command/control/event/lifecycle behavior.
 - Projections should test derivation from stored events.
 - Sinks should test curation and side effects.
-- Tool/model catalog modules should test selection and hydration.
 - Codecs should test `_tag` round trips and unknown boundary handling.
 - Constructors for exported protocol variants need tests when they apply defaults, normalize input, or enforce invariants.
 - Boundary adapters that translate external/provider data into internal data need focused tests for the translation shape.
@@ -39,7 +40,7 @@ Do not use this skill for app/UI testing unless the user explicitly asks to cove
 - Prefer test layers and fake services over global mutation.
 - Keep typed expected failures in the error channel when that is the contract being tested.
 - Test defect paths separately from expected domain failures.
-- When a service requires time, randomness, IDs, storage, or a language model, inject a deterministic test service instead of relying on ambient behavior.
+- When a service requires time, randomness, IDs, or storage, inject a deterministic test service instead of relying on ambient behavior.
 
 ## Bun Test Style
 

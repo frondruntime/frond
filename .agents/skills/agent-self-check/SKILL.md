@@ -5,6 +5,10 @@ description: Use before finishing coding work or after deterministic check failu
 
 # Agent Self Check
 
+The modeling/boundary/structure checklist below is the self-review twin of
+the one in `code-review`; that skill owns the canonical wording. On any
+conflict, defer to `code-review` and fix both copies in the same change.
+
 Use this skill to close the write-check-fix loop. Deterministic diagnostics are stronger than prompt instructions.
 
 ## Core Rule
@@ -38,7 +42,7 @@ For each issue you find, name the mechanism before fixing it. Do not patch sympt
 - correlated optional fields that permit illegal states
 - unsupported internal variants hidden behind fallback/default branches instead of failing loudly
 - repeated exported `_tag` object literals that should use named constructors
-- raw `string` IDs crossing package, persistence, tool, RPC, dispatch, or mission boundaries where a branded/schema-backed ID is expected
+- raw `string` IDs crossing package, persistence, tool, RPC, or dispatch boundaries where a branded/schema-backed ID is expected
 - closed sets widened to `string` when runtime extension is not intended
 - ordering hidden in object key order, import order, registration order, or incidental array order instead of encoded in the API
 
@@ -54,7 +58,7 @@ For each issue you find, name the mechanism before fixing it. Do not patch sympt
 ### Effect And Runtime
 
 - constructors/builders that perform I/O, allocate runtime resources, read config, call providers, or start fibers
-- runtime services, clocks, random/id generation, stores, language models, or mutable context accessed ambiently instead of from the Effect environment at execution time
+- runtime services, clocks, random/id generation, stores, or mutable context accessed ambiently instead of from the Effect environment at execution time
 - expected failures thrown or defected instead of kept in the Effect error channel
 - `Effect.runPromise` / `Effect.runSync` used inside services or domain functions instead of at process/test boundaries
 
@@ -75,7 +79,7 @@ For each issue you find, name the mechanism before fixing it. Do not patch sympt
 ### Cleanup And Docs
 
 - generated `dist/` or build output hand-edited instead of source
-- docs changed under `docs/` without respecting vault structure, note ownership, links, and archive rules
+- docs changed under `docs/` (currently just `docs/release.md`) or a package README/MIGRATION file without checking the change against current `publish.ts`/`build.ts` behavior, package exports, and relative Markdown links
 - stale comments, TODOs, old names, or compatibility notes left by the change
 
 Do not preserve weak code because checks pass. Do not add TODO decorations for obvious gaps; either fix them or report the explicit deferral.

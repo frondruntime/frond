@@ -9,11 +9,12 @@ Use this skill for TypeScript mechanics that are not specific to Effect.
 
 ## Repo Facts
 
-- Root `tsconfig.json` is strict and no-emit.
+- There is no root `tsconfig.json`. The shared base is `tsconfig.base.json`; package `tsconfig.json` files extend it.
+- `tsconfig.base.json` is strict. `noEmit` is not set in the config; it is passed as a CLI flag (`tsc ... --noEmit`, `tsgo ... --noEmit`) by package/root scripts. The base config sets `declaration: true` (plus `declarationMap` and `sourceMap`).
 - Module mode: `Preserve`; module resolution: `bundler`.
 - TS extension imports are allowed.
 - `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, and `noPropertyAccessFromIndexSignature` are enabled.
-- `@effect/language-service` is configured in root `tsconfig.json`.
+- `@effect/language-service` is configured as a `compilerOptions.plugins` entry in `tsconfig.base.json`.
 - Root typecheck runs package configs explicitly.
 
 ## Type Rules

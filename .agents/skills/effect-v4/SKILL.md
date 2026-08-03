@@ -35,6 +35,8 @@ Frond-specific boundary: pure description stays outside Effect. `key(args)`,
 `dependencies(args)`, node spec construction, event constructors, and graph
 planning are pure. Runtime execution, scopes, sinks, platform adapters,
 driver hooks, event emission, clocks, generated ids, and persistence are Effect.
+This describes framework-internal execution, not the consumer-facing node `mode`:
+authored nodes default to `mode: "async"` per `skills/frond-node-authoring`.
 Use stable names from `AGENTS.md`, package READMEs, public docs, and current code.
 
 ## Workflow
@@ -43,7 +45,7 @@ Effect APIs move. Before using an unfamiliar API:
 
 1. Search current repo usage.
 2. Resolve the installed `effect` package from the lockfile or package manager layout, then inspect its local type declarations.
-3. Prefer patterns already used in `packages/core`; if none exist, inspect `../theseus` for Effect v4 examples before using external material.
+3. Prefer patterns already used in `packages/core`; if none exist, inspect `packages/core/src` and `packages/core/test` for Effect v4 examples before using external material.
 4. Treat web examples as v3 unless verified against local v4 types.
 
 Useful searches:
@@ -54,7 +56,7 @@ find node_modules -path '*effect*/dist/Effect.d.ts' -o -path '*effect*/dist/Sche
 rg "export declare const catch|forkDetach|TaggedErrorClass" node_modules
 ```
 
-The repo already has `@effect/language-service` configured in root `tsconfig.json`. Trust its diagnostics when Effect types look strange.
+The repo already has `@effect/language-service` configured as a compiler plugin in `tsconfig.base.json`. Trust its diagnostics when Effect types look strange.
 
 Effect language-service commands:
 

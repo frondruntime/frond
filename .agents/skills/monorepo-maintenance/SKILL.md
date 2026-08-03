@@ -17,8 +17,12 @@ Use this skill for structural changes: package ownership, file shape, public API
 
 ## Package Ownership
 
-- `packages/core` owns the public Frond runtime package.
-- Future packages must have one clear reason to exist: runtime, testing, React adapter, devtools, or node packages.
+- `packages/core` owns `@frondruntime/core`, the public Frond runtime package.
+- `packages/react` owns `@frondruntime/react`, the public React adapter.
+- `packages/devtools` owns `@frondruntime/devtools`, the public hub client that attaches a runtime to the local devtools hub.
+- `packages/rootstock` owns `@frondruntime/rootstock`, a private, unpublished (`private: true`) experimental Effect-first backend-contract scaffold.
+- `apps/hub` is the devtools daemon app: a workspace member, not a published package.
+- New packages must have one clear reason to exist beyond these five: runtime, testing, adapter, devtools client, or backend-contract scaffolding.
 - Cross-package contracts belong in the lowest package that can own them without importing implementation concerns.
 - Effect services and layers that are runtime internals belong with the runtime package that executes them.
 - React adapter code must not own runtime orchestration.
