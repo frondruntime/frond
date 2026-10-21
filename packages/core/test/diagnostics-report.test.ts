@@ -10,9 +10,11 @@ import {
 import { classify, failures, nodeIds } from "../src/events";
 import {
   AcquireFailed,
+  ActionFailed,
   CycleDetected,
   DependencyFailed,
   DependencyFailures,
+  DependencyResultExpired,
   DisposerFailed,
   DriverPromiseFailed,
   EffectBoundaryFailed,
@@ -235,6 +237,110 @@ describe("Frond diagnostics report", () => {
       readonly tag?: string;
     }>;
     expect(aggregateFrame.map((frame) => frame.tag)).toContain("AcquireFailed");
+  });
+
+  test("a mixed dependency aggregate reports only the members no attempt reported", () => {
+    const parentNodeId = 'diagnostics/mixed-parent:v1:"singleton"' as NodeId;
+    const leftNodeId = 'diagnostics/mixed-left:v1:"singleton"' as NodeId;
+    const rightNodeId = 'diagnostics/mixed-right:v1:"singleton"' as NodeId;
+    const leftFailure = new AcquireFailed({
+      nodeId: leftNodeId,
+      tag: "diagnostics/mixed-left",
+      cause: new Error("left failed"),
+    });
+    const rightMember = new DependencyFailed({
+      nodeId: parentNodeId,
+      tag: "diagnostics/mixed-parent",
+      dependency: "right",
+      dependencyNodeId: rightNodeId,
+      cause: new DependencyResultExpired({
+        nodeId: rightNodeId,
+        tag: "diagnostics/mixed-right",
+        resultValidity: { _tag: "Expired", loadedAt: 100, staleAt: 150, expiredAt: 200 },
+      }),
+    });
+    const aggregate = new DependencyFailures({
+      nodeId: parentNodeId,
+      tag: "diagnostics/mixed-parent",
+      failures: [
+        new DependencyFailed({
+          nodeId: parentNodeId,
+          tag: "diagnostics/mixed-parent",
+          dependency: "left",
+          dependencyNodeId: leftNodeId,
+          cause: leftFailure,
+        }),
+        rightMember,
+      ],
+    });
+    // Only the left member's own attempt failed (and reported) first; the
+    // right member expired without an attempt.
+    recordSourceFailure(leftFailure);
+    const [leftReport] = createRuntimeEventReports(
+      makeRuntimeEventRecord({
+        _tag: "GraphNodeReadinessFailed",
+        nodeId: leftNodeId,
+        error: leftFailure,
+        at: 100,
+      })
+    );
+    const parentReports = createRuntimeEventReports(
+      makeRuntimeEventRecord({
+        _tag: "GraphNodeReadinessFailed",
+        nodeId: parentNodeId,
+        error: aggregate,
+        at: 100,
+      })
+    );
+    const actionReports = createRuntimeEventReports(
+      makeRuntimeEventRecord({
+        _tag: "GraphActionFailed",
+        nodeId: parentNodeId,
+        action: "save",
+        input: undefined,
+        error: new ActionFailed({
+          nodeId: parentNodeId,
+          tag: "diagnostics/mixed-parent",
+          action: "save",
+          input: undefined,
+          cause: aggregate,
+        }),
+        at: 100,
+      })
+    );
+
+    expect(parentReports.map((report) => report.message)).toEqual([
+      "[diagnostics/mixed-right] dependency result expired",
+    ]);
+    expect(parentReports[0]?.error).toBe(createErrorReport(rightMember).error);
+    expect(parentReports[0]?.error).not.toBe(leftReport?.error);
+    // The same aggregate observed by an action fans out the same way.
+    expect(actionReports.map((report) => report.error)).toEqual([parentReports[0]?.error]);
+  });
+
+  test("an action on a node whose own attempt failed resolves to that attempt's report", () => {
+    const nodeId = 'diagnostics/not-ready:v1:"singleton"' as NodeId;
+    const source = new AcquireFailed({
+      nodeId,
+      tag: "diagnostics/not-ready",
+      cause: new Error("acquire exploded"),
+    });
+    recordSourceFailure(source);
+    const sourceReport = createErrorReport(source);
+    const actionReport = createErrorReport(
+      new ActionFailed({
+        nodeId,
+        tag: "diagnostics/not-ready",
+        action: "touch",
+        input: undefined,
+        cause: source,
+      })
+    );
+
+    expect(actionReport.message).toBe("[diagnostics/not-ready acquire] acquire exploded");
+    expect(actionReport.fingerprint).toEqual(sourceReport.fingerprint);
+    expect(actionReport.error).toBe(sourceReport.error);
+    expect(actionReport.contexts.frond).toMatchObject({ kind: "readiness", operation: "acquire" });
   });
 
   test("a dependency wrapper of a failure no attempt reported stays reportable", () => {

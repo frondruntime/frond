@@ -1,6 +1,6 @@
 import { Match } from "effect";
 import type { NodeId, NodeStatus } from "../graph";
-import { isSourceFailure } from "../graph/readiness/sourceFailures";
+import { isSourceFailure, wrapsReportedDependency } from "../graph/readiness/sourceFailures";
 import type { RuntimeEvent } from "../runtime/types";
 
 export type RuntimeEventCategory =
@@ -277,60 +277,11 @@ function ensuredClassification(status: NodeStatus): RuntimeEventClassification {
 }
 
 /**
- * True when the failure is the node failing *because of* dependencies whose
- * own attempts already reported the cause: the failure itself, or its direct
- * cause, is a `DependencyFailed(s)` wrapper and every wrapped cause is a
- * source-reported failure. A wrapper of anything else (an invariant
- * violation, an expired result, a planning failure) was never reported and
- * stays reportable here.
- */
-function wrapsReportedDependency(error: unknown): boolean {
-  return isReportedDependencyWrapper(error) || isReportedDependencyWrapper(readCause(error));
-}
-
-/**
  * Action and refresh failures that only observe an already-reported failure:
  * a reported dependency failure, or the node's own failed implicit acquire.
  */
 function observesReportedFailure(error: unknown): boolean {
-  return wrapsReportedDependency(error) || isSourceFailure(readCause(error));
-}
-
-function isReportedDependencyWrapper(
-  value: unknown,
-  visited: WeakSet<object> = new WeakSet()
-): boolean {
-  // Guard: a cyclic cause chain is not a reported dependency wrapper.
-  if (typeof value !== "object" || value === null || visited.has(value)) {
-    return false;
-  }
-
-  visited.add(value);
-  const tag = readTag(value);
-
-  if (tag === "DependencyFailed") {
-    const cause = readCause(value);
-    return isSourceFailure(cause) || isReportedDependencyWrapper(cause, visited);
-  }
-
-  if (tag === "DependencyFailures") {
-    const failures = readField(value, "failures");
-    return (
-      Array.isArray(failures) &&
-      failures.length > 0 &&
-      failures.every((failure) => isReportedDependencyWrapper(failure, visited))
-    );
-  }
-
-  return false;
-}
-
-function readTag(value: unknown): unknown {
-  return readField(value, "_tag");
-}
-
-function readCause(value: unknown): unknown {
-  return readField(value, "cause");
+  return wrapsReportedDependency(error) || isSourceFailure(readField(error, "cause"));
 }
 
 function readField(value: unknown, field: string): unknown {

@@ -14,6 +14,7 @@ import {
   type DriverOperationTimeouts,
   GraphInvariantViolation,
   type NodeRead,
+  type NodeStatus,
   type RefreshResult,
   type RefreshSubmission,
 } from "../types";
@@ -114,7 +115,7 @@ function readyDependencyValue(
         cell,
         dependencyName,
         dependencyNodeId,
-        dependencyStatusCause(dependencyHandle)
+        nodeStatusCause(dependencyHandle.status)
       );
     }
 
@@ -148,16 +149,20 @@ function readyDependencyValue(
   });
 }
 
-function dependencyStatusCause(dependencyHandle: NodeRead): unknown {
-  if (dependencyHandle.status._tag === "Invalid") {
-    return dependencyHandle.status.error;
+/**
+ * The failure a not-ready status carries, so a dependent wraps the dependency's
+ * own failure object (the one its attempt reported) rather than the status.
+ */
+function nodeStatusCause(status: NodeStatus): unknown {
+  if (status._tag === "Invalid") {
+    return status.error;
   }
 
-  if (dependencyHandle.status._tag === "Wired" && dependencyHandle.status.run._tag === "Error") {
-    return dependencyHandle.status.run.error;
+  if (status._tag === "Wired" && status.run._tag === "Error") {
+    return status.run.error;
   }
 
-  return dependencyHandle.status;
+  return status;
 }
 
 export function collectDependencyValues(
@@ -326,7 +331,9 @@ function currentDependencyValue(
         cell,
         dependencyName,
         dependencyNodeId,
-        dependencyProjection._tag === "Removed" ? { _tag: "Unwired" } : dependencyProjection.status
+        dependencyProjection._tag === "Removed"
+          ? { _tag: "Unwired" }
+          : nodeStatusCause(dependencyProjection.status)
       );
     }
 

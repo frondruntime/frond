@@ -1,5 +1,6 @@
 import { Data, Effect } from "effect";
 import type { RuntimeEventClassification } from "../events";
+import { unreportedFailures } from "../graph/readiness/sourceFailures";
 import type { RuntimeEvent, RuntimeEventRecord, RuntimeSink } from "../runtime/types";
 import { diagnosticsProjectionFailure, projectError, unclassifiedCauseType } from "./projection";
 import { normalizeOptions, safePreview } from "./safe";
@@ -62,9 +63,11 @@ function reportErrorFor(projection: FrondErrorProjection, message: string): Erro
  * Creates diagnostic reports for reportable failures carried by one runtime event.
  *
  * Non-failure and non-reportable events produce an empty array: a failure is
- * reported once, by the event at its source. The original runtime event
- * remains available through report contexts for Sentry-like sinks; the report
- * shares `error` with every other report of the same failure.
+ * reported once, by the event at its source. A dependency aggregate that
+ * mixes reported and unreported members reports only the latter, one each.
+ * The original runtime event remains available through report contexts for
+ * Sentry-like sinks; the report shares `error` with every other report of the
+ * same failure.
  */
 export function createRuntimeEventReports(
   record: RuntimeEventRecord
@@ -74,9 +77,9 @@ export function createRuntimeEventReports(
   }
 
   try {
-    return record.failures.map((failure) =>
-      enrichRuntimeEventReport(createErrorReport(failure), record)
-    );
+    return record.failures
+      .flatMap(unreportedFailures)
+      .map((failure) => enrichRuntimeEventReport(createErrorReport(failure), record));
   } catch (cause) {
     return [
       enrichRuntimeEventReport(

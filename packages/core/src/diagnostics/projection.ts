@@ -1,4 +1,5 @@
 import { Match } from "effect";
+import { isSourceFailure } from "../graph/readiness/sourceFailures";
 import { isKeyError } from "../keys";
 import { safeGet, safeMessage, safeString } from "./safe";
 import { serializeCauseChain, type WalkedCauseFrame, walkProjectionChain } from "./serialize";
@@ -243,13 +244,23 @@ function isNodeFrame(frame: ClassifiedFrame): boolean {
   );
 }
 
-/** Outermost index of the contiguous Frond frames sharing the failing node id. */
+/**
+ * Outermost index of the contiguous Frond frames sharing the failing node id,
+ * never above the failure a readiness attempt reported at its source.
+ */
 function failingBlockStart(frames: ReadonlyArray<ClassifiedFrame>, failingIndex: number): number {
   const nodeId = frames[failingIndex]?.frame.nodeId;
   let start = failingIndex;
 
   while (start > 0) {
     const previous = frames[start - 1];
+
+    // An action or refresh on a node whose implicit acquire failed wraps that
+    // attempt's failure; the attempt already reported it, so the wrapper is
+    // the requester's view and resolves to the same failure object.
+    if (isSourceFailure(frames[start]?.raw)) {
+      break;
+    }
 
     // A reader's `FrondRuntimeReadError` is the requester's view, even when it
     // reads the failing node itself; it never belongs to the failure, so the
