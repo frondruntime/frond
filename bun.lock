@@ -1,5 +1,6 @@
 {
   "lockfileVersion": 1,
+  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "@frondruntime/monorepo",
@@ -28,9 +29,9 @@
       },
       "dependencies": {
         "@effect/platform-bun": "4.0.0-beta.90",
-        "@frondruntime/core": "0.3.0",
-        "@frondruntime/devtools": "0.3.0",
-        "@frondruntime/react": "0.3.0",
+        "@frondruntime/core": "0.4.0",
+        "@frondruntime/devtools": "0.4.0",
+        "@frondruntime/react": "0.4.0",
         "@pppp606/ink-chart": "0.2.7",
         "effect": "4.0.0-beta.102",
         "ink": "7.1.1",
