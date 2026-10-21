@@ -112,6 +112,7 @@ function materializeCellIfFresh(
     notifyOperationStarted: state.notifyOperationStarted,
     notifyActionCompleted: state.notifyActionCompleted,
     notifyResultValidityChanged: state.notifyResultValidityChanged,
+    notifyReadinessFailed: state.notifyReadinessFailed,
   });
 }
 

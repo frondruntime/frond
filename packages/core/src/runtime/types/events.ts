@@ -86,6 +86,16 @@ export type RuntimeEvent =
       readonly at: number;
     }
   | {
+      /**
+       * A readiness attempt of this node ended in `Error`. Emitted once per
+       * attempt, at the source; `error` is the failure the attempt committed.
+       */
+      readonly _tag: "GraphNodeReadinessFailed";
+      readonly nodeId: NodeRead["nodeId"];
+      readonly error: unknown;
+      readonly at: number;
+    }
+  | {
       readonly _tag: "GraphNodeChanged";
       readonly nodeId: NodeRead["nodeId"];
       readonly at: number;

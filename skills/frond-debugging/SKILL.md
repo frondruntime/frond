@@ -23,7 +23,11 @@ question.
 4. **Whole-runtime snapshot.** `runtime.getSnapshot()` last, not first.
 5. **Diagnostics projection.** `Frond.Diagnostics.projectError` on any
    captured error before reasoning about it; read cause chains structurally,
-   never by message substring.
+   never by message substring. `failingNode` is where it broke, `requester`
+   and `path` are who asked, `causeType` is the app error the driver threw.
+   A readiness failure is reported once, at its source
+   (`GraphNodeReadinessFailed`); dependents' failures and ensures that
+   observe it are not reportable.
 6. **Source.** The installed `@frondruntime/*` source is the authority over
    every document, including this one.
 

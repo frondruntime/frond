@@ -30,13 +30,20 @@ describe("React error report", () => {
 
     expect(report.headline).toBe("Readiness failed");
     expect(report.summary).toBe("Mock market data is offline.");
-    expect(report.message).toBe("Frond readiness failed: MarketOffline");
+    expect(report.message).toBe("[expo/quote acquire] Mock market data is offline.");
+    expect(report.causeType).toBe("MarketOffline");
+    expect(report.causeMessage).toBe("Mock market data is offline.");
+    expect(report.failingNode).toEqual({ id: quoteNodeId, tag: "expo/quote" });
+    expect(report.requester).toEqual({ id: quoteNodeId, tag: "expo/quote" });
+    expect(report.path).toEqual(["expo/quote"]);
     expect(report.kind).toBe("readiness");
     expect(report.retryable).toBe(true);
     expect(report.rootTag).toBe("MarketOffline");
     expect(report.rootMessage).toBe("Mock market data is offline.");
     expect(report.nodeId).toBe(quoteNodeId);
     expect(report.nodeTag).toBe("expo/quote");
-    expect(report.diagnostic.message).toBe("Frond readiness failed: MarketOffline");
+    expect(report.diagnostic.message).toBe("[expo/quote acquire] Mock market data is offline.");
+    expect(report.diagnostic.error.name).toBe("FrondDiagnostic.MarketOffline");
+    expect(getErrorReport(error).diagnostic.error).toBe(report.diagnostic.error);
   });
 });

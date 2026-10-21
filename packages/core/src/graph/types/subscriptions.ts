@@ -28,6 +28,16 @@ export type GraphLiveFailureObserver = (
   failures: ReadonlyArray<GraphFailure>
 ) => Effect.Effect<void>;
 
+/**
+ * Notified once per readiness attempt that ends in `Error`, with the failure
+ * the attempt committed. This is the source of a readiness failure: ensures
+ * that later observe the stored failure do not notify again.
+ */
+export type GraphReadinessFailureObserver = (
+  nodeId: NodeId,
+  failure: unknown
+) => Effect.Effect<void>;
+
 export type GraphCleanupFailureReason =
   | "acquire"
   | "action"
@@ -94,6 +104,7 @@ export type GraphObserverChannel =
   | "result-validity"
   | "live-demand"
   | "live-failure"
+  | "readiness-failure"
   | "cleanup-failure"
   | "operation-start"
   | "action-completion";

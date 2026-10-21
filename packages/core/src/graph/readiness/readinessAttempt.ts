@@ -43,6 +43,9 @@ export function failAttempt(
       failReadinessAttemptState({ latest, cause, resultValidity }),
     ]);
     yield* cell.notifyChanged(cell.nodeId);
+    // Source: this attempt produced the failure. Ensures that later observe
+    // the stored failure read it from the cell and do not notify again.
+    yield* cell.notifyReadinessFailed(cell.nodeId, cause);
 
     const latest = yield* cell.state.get;
     const handle = failedReadFromPhase(cell, latest.phase, cause, status);

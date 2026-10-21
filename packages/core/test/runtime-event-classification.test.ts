@@ -34,6 +34,7 @@ describe("runtime event classification", () => {
       "GraphSystemInputObserved",
       "GraphNodeEnsured",
       "GraphNodeReadyEnsured",
+      "GraphNodeReadinessFailed",
       "GraphNodeChanged",
       "GraphActionStarted",
       "GraphActionSucceeded",
@@ -65,6 +66,7 @@ describe("runtime event classification", () => {
       "GraphNodeEnsured",
       "GraphNodeReadyEnsured",
       "GraphNodeReadyEnsured",
+      "GraphNodeReadinessFailed",
       "GraphActionFailed",
       "GraphRefreshFailed",
       "GraphNodeArgsUpdateFailed",
@@ -74,7 +76,11 @@ describe("runtime event classification", () => {
       "GraphNodeCleanupFailed",
       "GraphNodeLiveFailed",
     ]);
-    expect(failureEvents.every(isReportable)).toBe(true);
+    // A readiness `Error` observed by an ensure was already reported at its
+    // source by `GraphNodeReadinessFailed`; the ensure only carries it.
+    expect(
+      failureEvents.filter((event) => !isReportable(event)).map((event) => event._tag)
+    ).toEqual(["GraphNodeReadyEnsured"]);
   });
 
   test("state noise is not reportable", () => {
@@ -253,6 +259,7 @@ function runtimeEventSamples(): ReadonlyArray<RuntimeEvent> {
       status: { _tag: "Wired", run: { _tag: "Error", error: readinessError } },
       at,
     },
+    { _tag: "GraphNodeReadinessFailed", nodeId, error: readinessError, at },
     { _tag: "GraphNodeChanged", nodeId, at },
     { _tag: "GraphActionStarted", nodeId, action: "save", input: {}, at },
     {

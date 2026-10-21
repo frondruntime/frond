@@ -32,6 +32,7 @@ import type {
   GraphNodeChangeObserver,
   GraphObserverFailureObserver,
   GraphOperationStartObserver,
+  GraphReadinessFailureObserver,
   GraphResultValidityObserver,
   GraphSubscription,
 } from "./subscriptions";
@@ -109,6 +110,9 @@ export interface GraphSystemService {
   ) => Effect.Effect<GraphSubscription>;
   readonly observeLiveFailures: (
     observer: GraphLiveFailureObserver
+  ) => Effect.Effect<GraphSubscription>;
+  readonly observeReadinessFailures: (
+    observer: GraphReadinessFailureObserver
   ) => Effect.Effect<GraphSubscription>;
   readonly observeCleanupFailures: (
     observer: GraphCleanupFailureObserver

@@ -64,7 +64,11 @@ describe("Frond diagnostics projection", () => {
     expect(projection.summary).toContain("cycle-first -> cycle-second -> cycle-first");
     expect(projection.kind).toBe("invalid");
     expect(projection.retryable).toBe(false);
-    expect(projection.path).toEqual([cycleFirst, cycleSecond, cycleFirst]);
+    // `path` is the requester-to-failing-node tag path; the cycle itself is in
+    // the summary and the CycleDetected frame.
+    expect(projection.path).toEqual(["diagnostics/cycle-first"]);
+    expect(projection.causeType).toBe("CycleDetected");
+    expect(projection.causeMessage).toBe("Dependency cycle detected");
   });
 
   test("invalid key projects to invalid node key with key error detail", () => {
@@ -88,8 +92,9 @@ describe("Frond diagnostics projection", () => {
     const projection = projectError(error);
 
     expect(projection.headline).toBe("Invalid node key");
-    expect(projection.rootTag).toBe("KeyNonFiniteNumberError");
-    expect(projection.rootMessage).toBe("Invalid key input at $.value: non-finite number.");
+    expect(projection.causeType).toBe("KeyNonFiniteNumberError");
+    expect(projection.causeMessage).toBe("Invalid key input at $.value: non-finite number.");
+    expect(projection.operation).toBe("key");
   });
 
   test("readiness failure projects to root backend error", () => {
@@ -152,9 +157,16 @@ describe("Frond diagnostics projection", () => {
     });
     const projection = projectError(failure);
 
+    // An aggregate is not a failure of its own: it resolves to its first
+    // member's failing node. Each member is reported at its own source.
     expect(projection.kind).toBe("readiness");
     expect(projection.headline).toBe("Readiness failed");
-    expect(projection.rootTag).toBe("DependencyFailures");
+    expect(projection.failingNode).toEqual({ id: leftNodeId, tag: "diagnostics/left" });
+    expect(projection.requester).toEqual({ id: parentNodeId, tag: "diagnostics/parent" });
+    expect(projection.path).toEqual(["diagnostics/parent", "diagnostics/left"]);
+    expect(projection.causeType).toBe("Error");
+    expect(projection.causeMessage).toBe("left failed");
+    expect(projection.failingFailure).toBe(failure.failures[0]?.cause);
   });
 
   test("Effect boundary failures walk through to the actionable cause", () => {

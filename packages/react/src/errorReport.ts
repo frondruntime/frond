@@ -6,9 +6,18 @@ export interface FrondReactErrorReport {
   readonly message: string;
   readonly kind: Frond.Diagnostics.FrondErrorProjectionKind;
   readonly retryable: boolean;
+  readonly causeType: string;
+  readonly causeMessage: string;
+  readonly failingNode?: Frond.Diagnostics.FrondErrorNodeRef | undefined;
+  readonly requester?: Frond.Diagnostics.FrondErrorNodeRef | undefined;
+  readonly path: ReadonlyArray<string>;
+  /** @deprecated Use `causeType`. */
   readonly rootTag: string;
+  /** @deprecated Use `causeMessage`. */
   readonly rootMessage: string;
+  /** @deprecated Use `failingNode.id`. */
   readonly nodeId?: string | undefined;
+  /** @deprecated Use `failingNode.tag`. */
   readonly nodeTag?: string | undefined;
   readonly operation?: string | undefined;
   readonly dependency?: string | undefined;
@@ -22,6 +31,11 @@ export interface FrondReactErrorReport {
  * sinks while keeping common UI fields at the top level. Capture
  * `diagnostic.error` plus its fingerprint/tags/contexts/extra; do not report
  * the raw React boundary error if you want graph-aware grouping.
+ *
+ * `diagnostic` is memoized on the failing node's failure: a boundary error and
+ * the runtime report sink resolve to the same report object and the same
+ * `diagnostic.error`, so identity-based tracker dedupe skips the second
+ * capture.
  */
 export function getErrorReport(error: unknown): FrondReactErrorReport {
   const projection = Frond.Diagnostics.projectError(error);
@@ -33,6 +47,11 @@ export function getErrorReport(error: unknown): FrondReactErrorReport {
     message: diagnostic.message,
     kind: projection.kind,
     retryable: projection.retryable,
+    causeType: projection.causeType,
+    causeMessage: projection.causeMessage,
+    failingNode: projection.failingNode,
+    requester: projection.requester,
+    path: projection.path,
     rootTag: projection.rootTag,
     rootMessage: projection.rootMessage,
     nodeId: projection.nodeId,

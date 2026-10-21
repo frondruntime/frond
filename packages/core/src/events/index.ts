@@ -68,34 +68,39 @@ const runtimeEventMetadata = {
   GraphSystemStarted: fixed(lifecycle("info", "system")),
   GraphSystemStopped: fixed(lifecycle("info", "state")),
   GraphSystemInputObserved: fixed(input("debug", "system")),
+  // Ensures observe the node's stored status. A readiness `Error` was already
+  // reported at its source by `GraphNodeReadinessFailed`, so only planning
+  // failures (`Invalid`), which have no attempt to report them, are reportable.
   GraphNodeEnsured: metadata({
-    classify: ({ status }) =>
-      nodeStatusFailure(status) === undefined
-        ? command("debug", "state")
-        : operation("error", "state", true),
+    classify: ({ status }) => ensuredClassification(status),
     failures: ({ status }) => maybeFailure(nodeStatusFailure(status)),
     nodeIds: ({ nodeId }) => [nodeId],
   }),
   GraphNodeReadyEnsured: metadata({
-    classify: ({ status }) =>
-      nodeStatusFailure(status) === undefined
-        ? command("debug", "state")
-        : operation("error", "state", true),
+    classify: ({ status }) => ensuredClassification(status),
     failures: ({ status }) => maybeFailure(nodeStatusFailure(status)),
+    nodeIds: ({ nodeId }) => [nodeId],
+  }),
+  // Source of a readiness failure: one event per failed attempt. A node that
+  // failed because a dependency failed is not reportable; the dependency's own
+  // attempt reported the cause.
+  GraphNodeReadinessFailed: metadata({
+    classify: ({ error }) => operation("error", "state", !isDependencyCaused(error)),
+    failures: ({ error }) => [error],
     nodeIds: ({ nodeId }) => [nodeId],
   }),
   GraphNodeChanged: nodeEvent(state("debug", "state")),
   GraphActionStarted: nodeEvent(operation("info", "work")),
   GraphActionSucceeded: nodeEvent(operation("info", "work")),
   GraphActionFailed: metadata({
-    classification: operation("error", "work", true),
+    classify: ({ error }) => operation("error", "work", !isDependencyCaused(error)),
     failures: ({ error }) => [error],
     nodeIds: ({ nodeId }) => [nodeId],
   }),
   GraphRefreshStarted: nodeEvent(operation("info", "work")),
   GraphRefreshSucceeded: nodeEvent(operation("info", "work")),
   GraphRefreshFailed: metadata({
-    classification: operation("error", "work", true),
+    classify: ({ error }) => operation("error", "work", !isDependencyCaused(error)),
     failures: ({ error }) => [error],
     nodeIds: ({ nodeId }) => [nodeId],
   }),
@@ -260,6 +265,40 @@ function nodeRunFailure(
     Match.tag("Error", ({ error }) => error),
     Match.exhaustive
   );
+}
+
+function ensuredClassification(status: NodeStatus): RuntimeEventClassification {
+  if (nodeStatusFailure(status) === undefined) {
+    return command("debug", "state");
+  }
+
+  return operation("error", "state", status._tag === "Invalid");
+}
+
+const dependencyFailureTags: ReadonlySet<string> = new Set([
+  "DependencyFailed",
+  "DependencyFailures",
+]);
+
+/**
+ * True when the failure is the node failing *because of* a dependency: the
+ * failure itself, or its direct cause, is a `DependencyFailed(s)` wrapper.
+ * Each failing dependency reports its own attempt failure at its source.
+ */
+function isDependencyCaused(error: unknown): boolean {
+  return hasDependencyFailureTag(error) || hasDependencyFailureTag(readCause(error));
+}
+
+function hasDependencyFailureTag(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || !("_tag" in value)) {
+    return false;
+  }
+
+  return typeof value._tag === "string" && dependencyFailureTags.has(value._tag);
+}
+
+function readCause(value: unknown): unknown {
+  return typeof value === "object" && value !== null && "cause" in value ? value.cause : undefined;
 }
 
 function maybeFailure(failure: unknown | undefined): ReadonlyArray<unknown> {

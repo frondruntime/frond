@@ -215,7 +215,7 @@ export function createFrondTestHarness(options: FrondTestHarnessOptions = {}): F
           const projection = projectError(read.error);
 
           throw new Error(
-            `Expected Frond test node read Ready, received Error: ${projection.rootTag}: ${projection.rootMessage}.`,
+            `Expected Frond test node read Ready, received Error: ${projection.causeType}: ${projection.causeMessage}.`,
             { cause: read.error }
           );
         }

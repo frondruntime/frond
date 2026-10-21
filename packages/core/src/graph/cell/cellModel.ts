@@ -8,6 +8,7 @@ import type {
   GraphLiveFailureObserver,
   GraphNodeChangeObserver,
   GraphOperationStartObserver,
+  GraphReadinessFailureObserver,
   GraphResultValidityObserver,
   NodeId,
   NodeLiveDemandSnapshot,
@@ -42,6 +43,7 @@ export interface GraphPlanState {
   readonly notifyOperationStarted: GraphOperationStartObserver;
   readonly notifyActionCompleted: GraphActionCompletionObserver;
   readonly notifyResultValidityChanged: GraphResultValidityObserver;
+  readonly notifyReadinessFailed: GraphReadinessFailureObserver;
   readonly notifyLiveDemandChanged: (
     nodeId: NodeId,
     liveDemand: NodeLiveDemandSnapshot
@@ -83,6 +85,7 @@ export interface GraphNodeCell extends GraphNodeCellView {
   readonly notifyOperationStarted: GraphOperationStartObserver;
   readonly notifyActionCompleted: GraphActionCompletionObserver;
   readonly notifyResultValidityChanged: GraphResultValidityObserver;
+  readonly notifyReadinessFailed: GraphReadinessFailureObserver;
 }
 
 export interface GraphNodeState {

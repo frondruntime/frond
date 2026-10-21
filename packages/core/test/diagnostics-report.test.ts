@@ -89,12 +89,13 @@ describe("Frond diagnostics report", () => {
     });
     const report = createErrorReport(error);
 
-    expect(report.message).toBe("Frond invalid graph: CycleDetected");
+    expect(report.error.name).toBe("FrondDiagnostic.CycleDetected");
+    expect(report.message).toBe("[diagnostics/cycle-first] Dependency cycle detected");
     expect(report.fingerprint).toEqual([
       "frond",
       "invalid",
-      "CycleDetected",
       "diagnostics/cycle-first",
+      "CycleDetected",
     ]);
   });
 
@@ -118,13 +119,19 @@ describe("Frond diagnostics report", () => {
     });
     const report = createErrorReport(error);
 
+    expect(report.error.name).toBe("FrondDiagnostic.KeyNonFiniteNumberError");
+    expect(report.message).toBe(
+      "[diagnostics/invalid-key key] Invalid key input at $.value: non-finite number."
+    );
     expect(report.fingerprint).toEqual([
       "frond",
       "invalid",
-      "KeyNonFiniteNumberError",
       "diagnostics/invalid-key",
+      "key",
+      "KeyNonFiniteNumberError",
     ]);
     expect(report.fingerprint.join(" ")).not.toContain("__invalid__");
+    expect(report.message).not.toContain("__invalid__");
   });
 
   test("readiness report uses actionable root backend error", () => {
@@ -148,19 +155,30 @@ describe("Frond diagnostics report", () => {
     });
     const report = createErrorReport(error);
 
-    expect(report.message).toBe("Frond readiness failed: DiagnosticsBackendError");
-    expect(report.error.name).toBe("FrondDiagnosticError");
+    expect(report.message).toBe("[diagnostics/request acquire] Backend returned HTTP 500");
+    expect(report.error.name).toBe("FrondDiagnostic.DiagnosticsBackendError");
+    expect(report.error.cause).toBe(failure);
     expect(report.error.stack?.split("\n")[0]).toBe(
-      "FrondDiagnosticError: Frond readiness failed: DiagnosticsBackendError"
+      "FrondDiagnostic.DiagnosticsBackendError: [diagnostics/request acquire] Backend returned HTTP 500"
     );
     expect(report.error.stack).toContain("diagnostics-report.test.ts");
     expect(report.error.stack).not.toContain("createErrorReportFromProjection");
   });
 
-  test("dependency aggregate event report includes every sibling failure", () => {
+  test("dependency aggregate reports nothing itself; each member reports at its source", () => {
     const parentNodeId = 'diagnostics/parent:v1:"singleton"' as NodeId;
     const leftNodeId = 'diagnostics/left:v1:"singleton"' as NodeId;
     const rightNodeId = 'diagnostics/right:v1:"singleton"' as NodeId;
+    const leftFailure = new AcquireFailed({
+      nodeId: leftNodeId,
+      tag: "diagnostics/left",
+      cause: new Error("left failed"),
+    });
+    const rightFailure = new AcquireFailed({
+      nodeId: rightNodeId,
+      tag: "diagnostics/right",
+      cause: new TypeError("right failed"),
+    });
     const aggregate = new DependencyFailures({
       nodeId: parentNodeId,
       tag: "diagnostics/parent",
@@ -170,75 +188,62 @@ describe("Frond diagnostics report", () => {
           tag: "diagnostics/parent",
           dependency: "left",
           dependencyNodeId: leftNodeId,
-          cause: new AcquireFailed({
-            nodeId: leftNodeId,
-            tag: "diagnostics/left",
-            cause: new Error("left failed"),
-          }),
+          cause: leftFailure,
         }),
         new DependencyFailed({
           nodeId: parentNodeId,
           tag: "diagnostics/parent",
           dependency: "right",
           dependencyNodeId: rightNodeId,
-          cause: new AcquireFailed({
-            nodeId: rightNodeId,
-            tag: "diagnostics/right",
-            cause: new Error("right failed"),
-          }),
+          cause: rightFailure,
         }),
       ],
     });
-    const record = makeRuntimeEventRecord({
-      _tag: "GraphNodeReadyEnsured",
+    const parentRecord = makeRuntimeEventRecord({
+      _tag: "GraphNodeReadinessFailed",
       nodeId: parentNodeId,
-      status: { _tag: "Wired", run: { _tag: "Error", error: aggregate } },
+      error: aggregate,
       at: 100,
     });
-    const [report] = createRuntimeEventReports(record);
-    const aggregateContext = report?.contexts.dependencyFailures as
-      | {
-          readonly failureCount: number;
-          readonly nodeTag: string;
-          readonly failures: ReadonlyArray<{
-            readonly dependency: string;
-            readonly dependencyNodeId: NodeId;
-            readonly causeChain: ReadonlyArray<{ readonly tag?: string }>;
-          }>;
-        }
-      | undefined;
-
-    expect(report?.message).toBe("Frond readiness failed: DependencyFailures");
-    expect(report?.fingerprint).toEqual([
-      "frond",
-      "readiness",
-      "DependencyFailures",
-      "diagnostics/parent",
-    ]);
-    expect(aggregateContext).toMatchObject({
-      failureCount: 2,
-      nodeTag: "diagnostics/parent",
-    });
-    expect(aggregateContext?.failures.map((failure) => failure.dependency).sort()).toEqual([
-      "left",
-      "right",
-    ]);
-    expect(aggregateContext?.failures.map((failure) => failure.dependencyNodeId).sort()).toEqual(
-      [leftNodeId, rightNodeId].sort()
-    );
-    expect(
-      aggregateContext?.failures.every((failure) =>
-        failure.causeChain.some((frame) => frame.tag === "DependencyFailed")
+    const sourceReports = [leftFailure, rightFailure].flatMap((error, index) =>
+      createRuntimeEventReports(
+        makeRuntimeEventRecord({
+          _tag: "GraphNodeReadinessFailed",
+          nodeId: index === 0 ? leftNodeId : rightNodeId,
+          error,
+          at: 100,
+        })
       )
-    ).toBe(true);
+    );
+
+    expect(parentRecord.classification.reportable).toBe(false);
+    expect(createRuntimeEventReports(parentRecord)).toEqual([]);
+    expect(sourceReports.map((report) => report.message)).toEqual([
+      "[diagnostics/left acquire] left failed",
+      "[diagnostics/right acquire] right failed",
+    ]);
+    // A direct projection of the aggregate resolves to its first member.
+    expect(createErrorReport(aggregate).error).toBe(sourceReports[0]?.error);
+    // Members stay visible in the aggregate frame of the serialized chain.
+    const aggregateFrame = createErrorReport(aggregate).contexts.causeChain as ReadonlyArray<{
+      readonly tag?: string;
+    }>;
+    expect(aggregateFrame.map((frame) => frame.tag)).toContain("AcquireFailed");
   });
 
   test("unexpected values produce explicit fallback reports", () => {
-    expect(createErrorReport(new TypeError("broken")).message).toBe(
-      "Frond unexpected error: TypeError"
-    );
-    expect(createErrorReport("broken").message).toBe("Frond unexpected string");
-    expect(createErrorReport(null).message).toBe("Frond unexpected null");
+    const typeError = createErrorReport(new TypeError("broken"));
+    const thrownString = createErrorReport("broken");
+    const thrownNull = createErrorReport(null);
+
+    expect(typeError.error.name).toBe("FrondDiagnostic.TypeError");
+    expect(typeError.message).toBe("broken");
+    expect(typeError.fingerprint).toEqual(["frond", "unexpected", "TypeError"]);
+    expect(thrownString.error.name).toBe("FrondDiagnostic.ThrownString");
+    expect(thrownString.message).toBe("broken");
+    expect(thrownString.fingerprint).toEqual(["frond", "unexpected", "ThrownString", "broken"]);
+    expect(thrownNull.error.name).toBe("FrondDiagnostic.ThrownNull");
+    expect(thrownNull.message).toBe("Unexpected thrown value");
   });
 
   test("runtime event reports add envelope context without changing fingerprint", () => {
@@ -258,13 +263,16 @@ describe("Frond diagnostics report", () => {
     const record = makeRuntimeEventRecord(runtimeFailureEvent);
     const [report] = createRuntimeEventReports(record);
 
-    expect(report?.message).toBe("Frond operation failed: DiagnosticsBackendError");
+    expect(report?.message).toBe("[diagnostics/request refresh] Backend returned HTTP 500");
     expect(report?.fingerprint).toEqual([
       "frond",
       "operation",
-      "DiagnosticsBackendError",
       "diagnostics/request",
+      "refresh",
+      "DiagnosticsBackendError",
     ]);
+    expect(report?.error).toBe(createErrorReport(runtimeFailureEvent.error).error);
+    expect(report?.fingerprint).toEqual(createErrorReport(runtimeFailureEvent.error).fingerprint);
     expect(report?.fingerprint.join(" ")).not.toContain("runtime-test");
     expect(report?.fingerprint.join(" ")).not.toContain("123");
     expect(report?.tags).toMatchObject({
@@ -310,12 +318,13 @@ describe("Frond diagnostics report", () => {
     });
     const [report] = createRuntimeEventReports(record);
 
-    expect(report?.message).toBe("Frond operation failed: ResultExpired");
+    expect(report?.message).toBe("[diagnostics/request refresh] result expired");
     expect(report?.fingerprint).toEqual([
       "frond",
       "operation",
-      "ResultExpired",
       "diagnostics/request",
+      "refresh",
+      "ResultExpired",
     ]);
     expect(report?.fingerprint.join(" ")).not.toContain("runtime-test");
     expect(report?.fingerprint.join(" ")).not.toContain("123");
@@ -352,7 +361,17 @@ describe("Frond diagnostics report", () => {
     expect(sink.name).toBe("diagnostics-report-test-sink");
     expect(inputs).toHaveLength(1);
     expect(inputs[0]?.record).toBe(record);
-    expect(inputs[0]?.report.message).toBe("Frond operation failed: Error");
+    expect(inputs[0]?.report.message).toBe(
+      "[diagnostics/request refresh] Backend returned HTTP 500"
+    );
+    expect(inputs[0]?.report.fingerprint).toEqual([
+      "frond",
+      "operation",
+      "diagnostics/request",
+      "refresh",
+      "Error",
+      "Backend returned HTTP <n>",
+    ]);
   });
 
   test("runtime report sink ignores events without generated reports", async () => {
@@ -446,8 +465,14 @@ describe("Frond diagnostics report", () => {
     });
     const [report] = createRuntimeEventReports(record);
 
-    expect(report?.message).toBe("Frond operation failed: TypeError");
-    expect(report?.fingerprint).toEqual(["frond", "operation", "TypeError", "diagnostics/release"]);
+    expect(report?.message).toBe("[diagnostics/release dispose] release died");
+    expect(report?.fingerprint).toEqual([
+      "frond",
+      "operation",
+      "diagnostics/release",
+      "dispose",
+      "TypeError",
+    ]);
   });
 });
 
