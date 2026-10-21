@@ -8,6 +8,7 @@ import {
 } from "../cell/cellPhase";
 import { beginReadinessAttemptState, failReadinessAttemptState } from "../cell/cellTransitions";
 import { GraphInvariantViolation, type NodeRead, type ResultValidity } from "../types";
+import { recordSourceFailure } from "./sourceFailures";
 
 export function runReadinessAttempt(
   cell: GraphNodeCell,
@@ -45,6 +46,7 @@ export function failAttempt(
     yield* cell.notifyChanged(cell.nodeId);
     // Source: this attempt produced the failure. Ensures that later observe
     // the stored failure read it from the cell and do not notify again.
+    recordSourceFailure(cause);
     yield* cell.notifyReadinessFailed(cell.nodeId, cause);
 
     const latest = yield* cell.state.get;

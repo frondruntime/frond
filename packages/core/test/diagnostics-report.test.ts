@@ -4,6 +4,7 @@ import {
   createErrorReport,
   createRuntimeEventReports,
   createRuntimeReportSink,
+  projectError,
   type RuntimeReportSinkInput,
 } from "../src/diagnostics";
 import { classify, failures, nodeIds } from "../src/events";
@@ -13,12 +14,14 @@ import {
   DependencyFailed,
   DependencyFailures,
   DisposerFailed,
+  DriverPromiseFailed,
   EffectBoundaryFailed,
   KeyBuildFailed,
   type NodeId,
   RefreshFailed,
   ResultExpired,
 } from "../src/graph";
+import { recordSourceFailure } from "../src/graph/readiness/sourceFailures";
 import { KeyNonFiniteNumberError } from "../src/keys";
 import { FrondRuntimeReadError, type RuntimeEvent, type RuntimeEventRecord } from "../src/runtime";
 import { Signals } from "../src/signals";
@@ -199,6 +202,9 @@ describe("Frond diagnostics report", () => {
         }),
       ],
     });
+    // Each member's own readiness attempt failed (and reported) first.
+    recordSourceFailure(leftFailure);
+    recordSourceFailure(rightFailure);
     const parentRecord = makeRuntimeEventRecord({
       _tag: "GraphNodeReadinessFailed",
       nodeId: parentNodeId,
@@ -229,6 +235,69 @@ describe("Frond diagnostics report", () => {
       readonly tag?: string;
     }>;
     expect(aggregateFrame.map((frame) => frame.tag)).toContain("AcquireFailed");
+  });
+
+  test("a dependency wrapper of a failure no attempt reported stays reportable", () => {
+    const parentNodeId = 'diagnostics/unreported-parent:v1:"singleton"' as NodeId;
+    const childNodeId = 'diagnostics/unreported-child:v1:"singleton"' as NodeId;
+    const record = makeRuntimeEventRecord({
+      _tag: "GraphNodeReadinessFailed",
+      nodeId: parentNodeId,
+      error: new DependencyFailed({
+        nodeId: parentNodeId,
+        tag: "diagnostics/unreported-parent",
+        dependency: "child",
+        dependencyNodeId: childNodeId,
+        cause: new KeyBuildFailed({
+          nodeId: childNodeId,
+          tag: "diagnostics/unreported-child",
+          cause: new Error("key exploded"),
+        }),
+      }),
+      at: 100,
+    });
+
+    expect(record.classification.reportable).toBe(true);
+    expect(createRuntimeEventReports(record)).toHaveLength(1);
+  });
+
+  test("a deep dependency chain projects to the same source report as the failure itself", () => {
+    const leafNodeId = 'diagnostics/deep-leaf:v1:"singleton"' as NodeId;
+    const source = new AcquireFailed({
+      nodeId: leafNodeId,
+      tag: "diagnostics/deep-leaf",
+      cause: new DriverPromiseFailed({
+        nodeId: leafNodeId,
+        tag: "diagnostics/deep-leaf",
+        operation: "acquire",
+        cause: new TypeError("leaf exploded"),
+      }),
+    });
+    let reader: unknown = source;
+    let dependencyNodeId = leafNodeId;
+
+    // Seven dependency edges above the source: ten frames, past the eight the
+    // serialized chain keeps.
+    for (let depth = 0; depth < 7; depth += 1) {
+      const nodeId = `diagnostics/deep-${depth}:v1:"singleton"` as NodeId;
+      reader = new DependencyFailed({
+        nodeId,
+        tag: `diagnostics/deep-${depth}`,
+        dependency: "next",
+        dependencyNodeId,
+        cause: reader,
+      });
+      dependencyNodeId = nodeId;
+    }
+
+    const sourceReport = createErrorReport(source);
+    const readerReport = createErrorReport(reader);
+
+    expect(readerReport.message).toBe("[diagnostics/deep-leaf acquire] leaf exploded");
+    expect(readerReport.fingerprint).toEqual(sourceReport.fingerprint);
+    expect(readerReport.error).toBe(sourceReport.error);
+    // The serialized chain stays bounded; only source resolution walks past it.
+    expect(projectError(reader).causeChain).toHaveLength(8);
   });
 
   test("unexpected values produce explicit fallback reports", () => {

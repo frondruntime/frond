@@ -1,5 +1,6 @@
 import { Match } from "effect";
 import type { NodeId, NodeStatus } from "../graph";
+import { isSourceFailure } from "../graph/readiness/sourceFailures";
 import type { RuntimeEvent } from "../runtime/types";
 
 export type RuntimeEventCategory =
@@ -82,10 +83,10 @@ const runtimeEventMetadata = {
     nodeIds: ({ nodeId }) => [nodeId],
   }),
   // Source of a readiness failure: one event per failed attempt. A node that
-  // failed because a dependency failed is not reportable; the dependency's own
+  // failed because a dependency's attempt failed is not reportable; that
   // attempt reported the cause.
   GraphNodeReadinessFailed: metadata({
-    classify: ({ error }) => operation("error", "state", !isDependencyCaused(error)),
+    classify: ({ error }) => operation("error", "state", !wrapsReportedDependency(error)),
     failures: ({ error }) => [error],
     nodeIds: ({ nodeId }) => [nodeId],
   }),
@@ -93,14 +94,14 @@ const runtimeEventMetadata = {
   GraphActionStarted: nodeEvent(operation("info", "work")),
   GraphActionSucceeded: nodeEvent(operation("info", "work")),
   GraphActionFailed: metadata({
-    classify: ({ error }) => operation("error", "work", !isDependencyCaused(error)),
+    classify: ({ error }) => operation("error", "work", !observesReportedFailure(error)),
     failures: ({ error }) => [error],
     nodeIds: ({ nodeId }) => [nodeId],
   }),
   GraphRefreshStarted: nodeEvent(operation("info", "work")),
   GraphRefreshSucceeded: nodeEvent(operation("info", "work")),
   GraphRefreshFailed: metadata({
-    classify: ({ error }) => operation("error", "work", !isDependencyCaused(error)),
+    classify: ({ error }) => operation("error", "work", !observesReportedFailure(error)),
     failures: ({ error }) => [error],
     nodeIds: ({ nodeId }) => [nodeId],
   }),
@@ -275,30 +276,67 @@ function ensuredClassification(status: NodeStatus): RuntimeEventClassification {
   return operation("error", "state", status._tag === "Invalid");
 }
 
-const dependencyFailureTags: ReadonlySet<string> = new Set([
-  "DependencyFailed",
-  "DependencyFailures",
-]);
-
 /**
- * True when the failure is the node failing *because of* a dependency: the
- * failure itself, or its direct cause, is a `DependencyFailed(s)` wrapper.
- * Each failing dependency reports its own attempt failure at its source.
+ * True when the failure is the node failing *because of* dependencies whose
+ * own attempts already reported the cause: the failure itself, or its direct
+ * cause, is a `DependencyFailed(s)` wrapper and every wrapped cause is a
+ * source-reported failure. A wrapper of anything else (an invariant
+ * violation, an expired result, a planning failure) was never reported and
+ * stays reportable here.
  */
-function isDependencyCaused(error: unknown): boolean {
-  return hasDependencyFailureTag(error) || hasDependencyFailureTag(readCause(error));
+function wrapsReportedDependency(error: unknown): boolean {
+  return isReportedDependencyWrapper(error) || isReportedDependencyWrapper(readCause(error));
 }
 
-function hasDependencyFailureTag(value: unknown): boolean {
-  if (typeof value !== "object" || value === null || !("_tag" in value)) {
+/**
+ * Action and refresh failures that only observe an already-reported failure:
+ * a reported dependency failure, or the node's own failed implicit acquire.
+ */
+function observesReportedFailure(error: unknown): boolean {
+  return wrapsReportedDependency(error) || isSourceFailure(readCause(error));
+}
+
+function isReportedDependencyWrapper(
+  value: unknown,
+  visited: WeakSet<object> = new WeakSet()
+): boolean {
+  // Guard: a cyclic cause chain is not a reported dependency wrapper.
+  if (typeof value !== "object" || value === null || visited.has(value)) {
     return false;
   }
 
-  return typeof value._tag === "string" && dependencyFailureTags.has(value._tag);
+  visited.add(value);
+  const tag = readTag(value);
+
+  if (tag === "DependencyFailed") {
+    const cause = readCause(value);
+    return isSourceFailure(cause) || isReportedDependencyWrapper(cause, visited);
+  }
+
+  if (tag === "DependencyFailures") {
+    const failures = readField(value, "failures");
+    return (
+      Array.isArray(failures) &&
+      failures.length > 0 &&
+      failures.every((failure) => isReportedDependencyWrapper(failure, visited))
+    );
+  }
+
+  return false;
+}
+
+function readTag(value: unknown): unknown {
+  return readField(value, "_tag");
 }
 
 function readCause(value: unknown): unknown {
-  return typeof value === "object" && value !== null && "cause" in value ? value.cause : undefined;
+  return readField(value, "cause");
+}
+
+function readField(value: unknown, field: string): unknown {
+  return typeof value === "object" && value !== null && field in value
+    ? (value as Record<string, unknown>)[field]
+    : undefined;
 }
 
 function maybeFailure(failure: unknown | undefined): ReadonlyArray<unknown> {

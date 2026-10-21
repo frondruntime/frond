@@ -4,6 +4,7 @@ import { tag } from "../src";
 import { createErrorReport, createRuntimeEventReports, projectError } from "../src/diagnostics";
 import { classify, failures, nodeIds } from "../src/events";
 import type { NodeId } from "../src/graph";
+import { recordSourceFailure } from "../src/graph/readiness/sourceFailures";
 import { FrondRuntimeReadError, type RuntimeEvent, type RuntimeEventRecord } from "../src/runtime";
 import { createFrondTestHarness } from "../src/testing";
 import {
@@ -101,9 +102,7 @@ describe("error report worked examples (review §4)", () => {
     const report = createErrorReport(readThroughSession(failure));
 
     expect(report.error.name).toBe("FrondDiagnostic.WalletInitializationFailure");
-    expect(report.message).toBe(
-      "[app/wallet acquire] Wallet SDK initialization exceeded 10000ms."
-    );
+    expect(report.message).toBe("[app/wallet acquire] Wallet SDK initialization exceeded 10000ms.");
     expect(report.fingerprint).toEqual([
       "frond",
       "readiness",
@@ -209,9 +208,7 @@ describe("error report worked examples (review §4)", () => {
   });
 
   test("#6 a tagged error without message reports only type and node", () => {
-    const report = createErrorReport(
-      acquireFailure("app/rates", new HttpFailure({ status: 503 }))
-    );
+    const report = createErrorReport(acquireFailure("app/rates", new HttpFailure({ status: 503 })));
 
     expect(report.error.name).toBe("FrondDiagnostic.HttpFailure");
     expect(report.message).toBe("[app/rates acquire]");
@@ -314,6 +311,9 @@ describe("error report worked examples (review §4)", () => {
         }),
       ],
     });
+    // Each dependency's own readiness attempt failed (and reported) first.
+    recordSourceFailure(wallet);
+    recordSourceFailure(prices);
     const reports = [
       readinessFailedRecord(walletTag, wallet),
       readinessFailedRecord("app/prices", prices),
@@ -484,7 +484,9 @@ describe("error reports from the real graph (review §5)", () => {
     );
     const sourceErrors = reports.map(({ report }) => report.error);
     const [source] = reports;
-    expect(source?.report.message).toBe("[spec5/wallet acquire] Wallet SDK initialization exceeded.");
+    expect(source?.report.message).toBe(
+      "[spec5/wallet acquire] Wallet SDK initialization exceeded."
+    );
 
     // Every surface resolves to a source's tracker error and the one
     // fingerprint; contexts stay per surface.
@@ -539,7 +541,9 @@ describe("error reports from the real graph (review §5)", () => {
     ]);
     const [first, second] = reports;
     for (const source of [first, second]) {
-      expect(source?.report.message).toBe("[spec5/wallet acquire] Wallet SDK initialization exceeded.");
+      expect(source?.report.message).toBe(
+        "[spec5/wallet acquire] Wallet SDK initialization exceeded."
+      );
       expect(source?.report.error.name).toBe("FrondDiagnostic.WalletInitializationFailure");
       expect(source?.report.fingerprint).toEqual(first?.report.fingerprint ?? []);
     }

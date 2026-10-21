@@ -51,11 +51,19 @@ const aggregateTags: ReadonlySet<string> = new Set([
 /** Nested aggregates serialize their members one level deep only. */
 const maxAggregateNesting = 1;
 
+/**
+ * Frame bound for the projection walk. The failing node and its cause sit at
+ * the bottom of the chain, so the walk must reach the end however many
+ * wrappers sit above it; `maxDepth` only bounds the serialized `causeChain`.
+ * A visited set stops cycles; this bound stops pathological chains.
+ */
+const projectionMaxDepth = 256;
+
 function serializeCauseChainUnsafe(
   error: unknown,
   options: NormalizedCauseSerializationOptions
 ): ReadonlyArray<SerializedCauseFrame> {
-  return walkFrames(error, options, "cause", 0).map(({ frame }) => frame);
+  return walkFrames(error, options, "cause", 0, options.maxDepth).map(({ frame }) => frame);
 }
 
 /**
@@ -68,24 +76,30 @@ export function walkProjectionChain(
   error: unknown,
   options: CauseSerializationOptions = {}
 ): ReadonlyArray<WalkedCauseFrame> {
-  return walkFrames(error, normalizeOptions(options), "first-member", 0);
+  return walkFrames(error, normalizeOptions(options), "first-member", 0, projectionMaxDepth);
 }
 
 function walkFrames(
   error: unknown,
   options: NormalizedCauseSerializationOptions,
   aggregate: "cause" | "first-member",
-  nesting: number
+  nesting: number,
+  maxDepth: number
 ): ReadonlyArray<WalkedCauseFrame> {
   const frames: Array<WalkedCauseFrame> = [];
+  const visited = new WeakSet<object>();
   let current: unknown = error;
 
-  for (let index = 0; index < options.maxDepth; index += 1) {
+  for (let index = 0; index < maxDepth; index += 1) {
     frames.push({ frame: frameFromValue(current, index, options, nesting), raw: current });
+
+    if (typeof current === "object" && current !== null) {
+      visited.add(current);
+    }
 
     const next = nextFrameValue(current, aggregate);
 
-    if (next === undefined) {
+    if (next === undefined || (typeof next === "object" && next !== null && visited.has(next))) {
       break;
     }
 
@@ -182,7 +196,9 @@ function aggregateFailures(
 
   return failures
     .slice(0, options.maxObjectKeys)
-    .map((failure) => walkFrames(failure, options, "cause", nesting + 1).map(({ frame }) => frame));
+    .map((failure) =>
+      walkFrames(failure, options, "cause", nesting + 1, options.maxDepth).map(({ frame }) => frame)
+    );
 }
 
 function cancellationFromValue(
