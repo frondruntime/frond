@@ -32,9 +32,9 @@ import {
 // Node ids carry args; they must never reach the message or the fingerprint.
 const nodeId = (tag: string) => `${tag}:v1:{"account":"0xabc123"}` as NodeId;
 
-const walletTag = "brvx/reference/wallet";
-const sessionTag = "brvx/reference/session";
-const connectTag = "brvx/reference/connect";
+const walletTag = "app/wallet";
+const sessionTag = "app/session";
+const connectTag = "app/connect";
 
 class WalletInitializationFailure extends Data.TaggedError("WalletInitializationFailure")<{
   readonly cause: unknown;
@@ -97,12 +97,12 @@ function expectNoNodeId(report: ReturnType<typeof createErrorReport>): void {
 
 describe("error report worked examples (review §4)", () => {
   test("#1 app classification wraps an anonymous message carrier", () => {
-    const failure = walletAcquireFailure(new Error("AppKit initialization exceeded 10000ms."));
+    const failure = walletAcquireFailure(new Error("Wallet SDK initialization exceeded 10000ms."));
     const report = createErrorReport(readThroughSession(failure));
 
     expect(report.error.name).toBe("FrondDiagnostic.WalletInitializationFailure");
     expect(report.message).toBe(
-      "[brvx/reference/wallet acquire] AppKit initialization exceeded 10000ms."
+      "[app/wallet acquire] Wallet SDK initialization exceeded 10000ms."
     );
     expect(report.fingerprint).toEqual([
       "frond",
@@ -131,14 +131,14 @@ describe("error report worked examples (review §4)", () => {
 
   test("#2 an inner type shows in the message, not the fingerprint", () => {
     const first = createErrorReport(
-      readThroughSession(walletAcquireFailure(new Error("AppKit initialization exceeded.")))
+      readThroughSession(walletAcquireFailure(new Error("Wallet SDK initialization exceeded.")))
     );
     const second = createErrorReport(
       readThroughSession(walletAcquireFailure(new TypeError("Failed to fetch")))
     );
 
     expect(second.error.name).toBe("FrondDiagnostic.WalletInitializationFailure");
-    expect(second.message).toBe("[brvx/reference/wallet acquire] TypeError: Failed to fetch");
+    expect(second.message).toBe("[app/wallet acquire] TypeError: Failed to fetch");
     expect(second.contexts.frond).toMatchObject({ messageType: "TypeError" });
     expect(second.fingerprint).toEqual(first.fingerprint);
   });
@@ -146,10 +146,10 @@ describe("error report worked examples (review §4)", () => {
   test("#3 an untagged JS bug in acquire is typed by its Error subclass", () => {
     const report = createErrorReport(
       acquireFailure(
-        "brvx/reference/balances",
+        "app/balances",
         new DriverPromiseFailed({
-          nodeId: nodeId("brvx/reference/balances"),
-          tag: "brvx/reference/balances",
+          nodeId: nodeId("app/balances"),
+          tag: "app/balances",
           operation: "acquire",
           cause: new TypeError("Cannot read properties of undefined (reading 'amount')"),
         })
@@ -158,12 +158,12 @@ describe("error report worked examples (review §4)", () => {
 
     expect(report.error.name).toBe("FrondDiagnostic.TypeError");
     expect(report.message).toBe(
-      "[brvx/reference/balances acquire] Cannot read properties of undefined (reading 'amount')"
+      "[app/balances acquire] Cannot read properties of undefined (reading 'amount')"
     );
     expect(report.fingerprint).toEqual([
       "frond",
       "readiness",
-      "brvx/reference/balances",
+      "app/balances",
       "acquire",
       "TypeError",
     ]);
@@ -172,8 +172,8 @@ describe("error report worked examples (review §4)", () => {
   test("#4 an unclassified action Error adds the masked message", () => {
     const report = createErrorReport(
       new ActionFailed({
-        nodeId: nodeId("brvx/dex/quote"),
-        tag: "brvx/dex/quote",
+        nodeId: nodeId("app/quote"),
+        tag: "app/quote",
         action: "refreshQuote",
         input: { amount: 1 },
         cause: new Error("Quote 8f26-74e9 expired"),
@@ -181,11 +181,11 @@ describe("error report worked examples (review §4)", () => {
     );
 
     expect(report.error.name).toBe("FrondDiagnostic.Error");
-    expect(report.message).toBe("[brvx/dex/quote refreshQuote] Quote 8f26-74e9 expired");
+    expect(report.message).toBe("[app/quote refreshQuote] Quote 8f26-74e9 expired");
     expect(report.fingerprint).toEqual([
       "frond",
       "operation",
-      "brvx/dex/quote",
+      "app/quote",
       "refreshQuote",
       "Error",
       "Quote <hex> expired",
@@ -196,7 +196,7 @@ describe("error report worked examples (review §4)", () => {
   test("#5 the tryPromise carrier and its boilerplate are skipped", () => {
     const report = createErrorReport(
       acquireFailure(
-        "brvx/reference/prices",
+        "app/prices",
         new Cause.UnknownError(
           new TypeError("fetch failed"),
           "An error occurred in Effect.tryPromise"
@@ -205,24 +205,24 @@ describe("error report worked examples (review §4)", () => {
     );
 
     expect(report.error.name).toBe("FrondDiagnostic.TypeError");
-    expect(report.message).toBe("[brvx/reference/prices acquire] fetch failed");
+    expect(report.message).toBe("[app/prices acquire] fetch failed");
   });
 
   test("#6 a tagged error without message reports only type and node", () => {
     const report = createErrorReport(
-      acquireFailure("brvx/reference/rates", new HttpFailure({ status: 503 }))
+      acquireFailure("app/rates", new HttpFailure({ status: 503 }))
     );
 
     expect(report.error.name).toBe("FrondDiagnostic.HttpFailure");
-    expect(report.message).toBe("[brvx/reference/rates acquire]");
+    expect(report.message).toBe("[app/rates acquire]");
     expect(report.message).not.toContain("503");
   });
 
   test("#7 a domain action failure groups by its tag", () => {
     const report = createErrorReport(
       new ActionFailed({
-        nodeId: nodeId("brvx/dex/swap"),
-        tag: "brvx/dex/swap",
+        nodeId: nodeId("app/swap"),
+        tag: "app/swap",
         action: "submit",
         input: {},
         cause: new SwapRejected({ message: "Slippage exceeded" }),
@@ -230,11 +230,11 @@ describe("error report worked examples (review §4)", () => {
     );
 
     expect(report.error.name).toBe("FrondDiagnostic.SwapRejected");
-    expect(report.message).toBe("[brvx/dex/swap submit] Slippage exceeded");
+    expect(report.message).toBe("[app/swap submit] Slippage exceeded");
     expect(report.fingerprint).toEqual([
       "frond",
       "operation",
-      "brvx/dex/swap",
+      "app/swap",
       "submit",
       "SwapRejected",
     ]);
@@ -255,7 +255,7 @@ describe("error report worked examples (review §4)", () => {
     );
 
     expect(report.error.name).toBe("FrondDiagnostic.DriverOperationTimedOut");
-    expect(report.message).toBe("[brvx/reference/wallet acquire] acquire timed out after 10000ms");
+    expect(report.message).toBe("[app/wallet acquire] acquire timed out after 10000ms");
   });
 
   test("#9 a thrown string is ThrownString and adds the masked message", () => {
@@ -276,19 +276,19 @@ describe("error report worked examples (review §4)", () => {
   test("#10 the outermost app frame classifies, not a wrapped library tag", () => {
     const report = createErrorReport(
       acquireFailure(
-        "brvx/dex/quote",
+        "app/quote",
         new QuoteFailed({ message: "Quote service unavailable", cause: new TimeoutException() })
       )
     );
 
     expect(report.error.name).toBe("FrondDiagnostic.QuoteFailed");
-    expect(report.message).toBe("[brvx/dex/quote acquire] Quote service unavailable");
+    expect(report.message).toBe("[app/quote acquire] Quote service unavailable");
   });
 
   test("#11 two failing dependencies give two source reports and none for the aggregate", () => {
-    const wallet = walletAcquireFailure(new Error("AppKit initialization exceeded 10000ms."));
+    const wallet = walletAcquireFailure(new Error("Wallet SDK initialization exceeded 10000ms."));
     const prices = acquireFailure(
-      "brvx/reference/prices",
+      "app/prices",
       new Cause.UnknownError(
         new TypeError("fetch failed"),
         "An error occurred in Effect.tryPromise"
@@ -309,20 +309,20 @@ describe("error report worked examples (review §4)", () => {
           nodeId: nodeId(sessionTag),
           tag: sessionTag,
           dependency: "prices",
-          dependencyNodeId: nodeId("brvx/reference/prices"),
+          dependencyNodeId: nodeId("app/prices"),
           cause: prices,
         }),
       ],
     });
     const reports = [
       readinessFailedRecord(walletTag, wallet),
-      readinessFailedRecord("brvx/reference/prices", prices),
+      readinessFailedRecord("app/prices", prices),
       readinessFailedRecord(sessionTag, aggregate),
     ].flatMap(createRuntimeEventReports);
 
     expect(reports.map((report) => report.message)).toEqual([
-      "[brvx/reference/wallet acquire] AppKit initialization exceeded 10000ms.",
-      "[brvx/reference/prices acquire] fetch failed",
+      "[app/wallet acquire] Wallet SDK initialization exceeded 10000ms.",
+      "[app/prices acquire] fetch failed",
     ]);
   });
 
@@ -368,7 +368,7 @@ describe("error report worked examples (review §4)", () => {
   });
 
   test("one failure object resolves to one tracker error across surfaces", () => {
-    const failure = walletAcquireFailure(new Error("AppKit initialization exceeded 10000ms."));
+    const failure = walletAcquireFailure(new Error("Wallet SDK initialization exceeded 10000ms."));
     const viaReader = createErrorReport(readThroughSession(failure));
     const viaSource = createRuntimeEventReports(readinessFailedRecord(walletTag, failure))[0];
 
@@ -417,7 +417,7 @@ describe("error reports from the real graph (review §5)", () => {
   function spec5Graph() {
     const { FailingLeaf: WalletNode, attempts: walletAttempts } = failingLeaf(
       "spec5/wallet",
-      new WalletInitializationFailure({ cause: new Error("AppKit initialization exceeded.") })
+      new WalletInitializationFailure({ cause: new Error("Wallet SDK initialization exceeded.") })
     );
 
     type SessionSpec = NodeSpec<{
@@ -484,7 +484,7 @@ describe("error reports from the real graph (review §5)", () => {
     );
     const sourceErrors = reports.map(({ report }) => report.error);
     const [source] = reports;
-    expect(source?.report.message).toBe("[spec5/wallet acquire] AppKit initialization exceeded.");
+    expect(source?.report.message).toBe("[spec5/wallet acquire] Wallet SDK initialization exceeded.");
 
     // Every surface resolves to a source's tracker error and the one
     // fingerprint; contexts stay per surface.
@@ -539,7 +539,7 @@ describe("error reports from the real graph (review §5)", () => {
     ]);
     const [first, second] = reports;
     for (const source of [first, second]) {
-      expect(source?.report.message).toBe("[spec5/wallet acquire] AppKit initialization exceeded.");
+      expect(source?.report.message).toBe("[spec5/wallet acquire] Wallet SDK initialization exceeded.");
       expect(source?.report.error.name).toBe("FrondDiagnostic.WalletInitializationFailure");
       expect(source?.report.fingerprint).toEqual(first?.report.fingerprint ?? []);
     }
