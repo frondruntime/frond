@@ -340,6 +340,8 @@ The testing subpath includes runtime harnesses, deferred drivers, and spec helpe
 
 ## Migrating
 
+Upgrading from 0.4.0? Error reports changed shape; see [MIGRATION-0.5.md](./MIGRATION-0.5.md).
+
 Upgrading from 0.1.0? The complete breaking-change list with before/after snippets is in [MIGRATION-0.2.md](./MIGRATION-0.2.md).
 
 ## Docs

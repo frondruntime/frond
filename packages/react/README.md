@@ -102,6 +102,8 @@ The testing subpath exports `TestFrondProvider` for React tests that need an iso
 
 ## Migrating
 
+Upgrading from 0.4.0? See the core package's [MIGRATION-0.5.md](../core/MIGRATION-0.5.md) for the error-report changes, including the deprecated projection fields.
+
 Upgrading from 0.1.0? See the core package's [MIGRATION-0.2.md](../core/MIGRATION-0.2.md) - it covers the shared authoring changes and the React-facing type shifts.
 
 ## Docs
