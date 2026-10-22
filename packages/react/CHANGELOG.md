@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.5.0](https://github.com/frondruntime/frond/compare/react-v0.4.0...react-v0.5.0) (2026-10-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* report message, name, fingerprint, tags, and contexts change shape; createRuntimeEventReports returns [] for non-reportable records; dependency-caused failures no longer produce their own reports.
+
+### Features
+
+* report errors by failing node, once at the source ([#24](https://github.com/frondruntime/frond/issues/24)) ([b98e22e](https://github.com/frondruntime/frond/commit/b98e22eec5717dff958920935bf741f02cf5416c))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @frondruntime/core bumped to 0.5.0
+  * peerDependencies
+    * @frondruntime/core bumped from 0.4.0 to 0.5.0
+
 ## [0.4.0](https://github.com/frondruntime/frond/compare/react-v0.3.0...react-v0.4.0) (2026-08-02)
 
 
