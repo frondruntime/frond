@@ -1,0 +1,9 @@
+engine biome(1.0)
+language js
+
+or {
+  `Schema.TaggedErrorClass`,
+  `Schema.ErrorClass`
+} as $m where {
+  register_diagnostic(span=$m, message="Effect 4 stable: the beta Schema.TaggedErrorClass / Schema.ErrorClass were renamed to Schema.TaggedError / Schema.Error. Use `class Foo extends Schema.TaggedError<Foo>()(\"Foo\", { field: Schema.String }) {}`. Load skill: effect-errors-schema.", severity="error")
+}

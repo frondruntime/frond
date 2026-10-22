@@ -9,6 +9,7 @@ export {
 export { serializeCauseChain } from "./serialize";
 export type {
   CauseSerializationOptions,
+  FrondErrorNodeRef,
   FrondErrorProjection,
   FrondErrorProjectionKind,
   FrondErrorReport,

@@ -213,6 +213,7 @@ const graphObserverEventTag = {
   "result-validity": () => "GraphNodeResultValidityChanged",
   "live-demand": () => "GraphNodeLiveDemandChanged",
   "live-failure": () => "GraphNodeLiveFailed",
+  "readiness-failure": () => "GraphNodeReadinessFailed",
   "cleanup-failure": () => "GraphNodeCleanupFailed",
   "operation-start": operationStartFailureEventTag,
   "action-completion": actionCompletionFailureEventTag,

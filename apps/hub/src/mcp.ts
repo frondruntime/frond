@@ -1,7 +1,7 @@
 import { GraphSnapshot, type StateQuery, ValuePolicy } from "@frondruntime/devtools";
 import { Effect, Layer, Schema } from "effect";
-import { type McpSchema, McpServer, Tool, Toolkit } from "effect/unstable/ai";
-import type { HttpRouter } from "effect/unstable/http";
+import { McpProtocol, type McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
+import type { HttpRouter } from "effect/http";
 import {
   clampLimit,
   EventPage,
@@ -219,7 +219,23 @@ export function mcpLayer(options: {
   });
 
   return Layer.merge(
-    McpServer.layerHttp({ name: "frond-hub", version, path: MCP_PATH }),
+    McpServer.layerHttp({
+      name: "frond-hub",
+      version,
+      path: MCP_PATH,
+      // Every sessionful revision Effect ships, newest first; the first is what
+      // a client offering an unlisted version gets. The sessionless 2026-07-28
+      // revision is left out to keep the session-based behavior.
+      protocols: [
+        McpProtocol.v2025_11_25,
+        McpProtocol.v2025_06_18,
+        McpProtocol.v2025_03_26,
+        McpProtocol.v2024_11_05,
+      ],
+    }).pipe(
+      // Only fails on a malformed `protocols` list, which is fixed above.
+      Layer.orDie
+    ),
     McpServer.toolkit(HubTools).pipe(Layer.provide(handlers))
   );
 }

@@ -116,6 +116,13 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
           yield* eventBus.emit({ _tag: "GraphNodeLiveFailed", nodeId, failures, at });
         })
     );
+    const graphReadinessFailureSubscription = yield* graphSystem.observeReadinessFailures(
+      (nodeId, error) =>
+        Effect.gen(function* () {
+          const at = yield* Clock.currentTimeMillis;
+          yield* eventBus.emit({ _tag: "GraphNodeReadinessFailed", nodeId, error, at });
+        })
+    );
     const graphCleanupFailureSubscription = yield* graphSystem.observeCleanupFailures(
       (nodeId, reason, failures) =>
         Effect.gen(function* () {
@@ -403,6 +410,7 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
       graphResultValiditySubscription.unsubscribe();
       graphLiveDemandSubscription.unsubscribe();
       graphLiveFailureSubscription.unsubscribe();
+      graphReadinessFailureSubscription.unsubscribe();
       graphCleanupFailureSubscription.unsubscribe();
     }
 

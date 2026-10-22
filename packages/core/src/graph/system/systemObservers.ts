@@ -8,6 +8,7 @@ import type {
   GraphObserverFailure,
   GraphObserverFailureObserver,
   GraphOperationStartObserver,
+  GraphReadinessFailureObserver,
   GraphResultValidityObserver,
   GraphSubscription,
 } from "../types";
@@ -26,6 +27,9 @@ export interface GraphSystemObservers {
   readonly observeLiveFailures: (
     observer: GraphLiveFailureObserver
   ) => Effect.Effect<GraphSubscription>;
+  readonly observeReadinessFailures: (
+    observer: GraphReadinessFailureObserver
+  ) => Effect.Effect<GraphSubscription>;
   readonly observeCleanupFailures: (
     observer: GraphCleanupFailureObserver
   ) => Effect.Effect<GraphSubscription>;
@@ -42,6 +46,7 @@ export interface GraphSystemObservers {
   readonly notifyResultValidityChanged: GraphResultValidityObserver;
   readonly notifyLiveDemandChanged: GraphLiveDemandObserver;
   readonly notifyLiveFailures: GraphLiveFailureObserver;
+  readonly notifyReadinessFailed: GraphReadinessFailureObserver;
   readonly notifyCleanupFailures: GraphCleanupFailureObserver;
   readonly notifyOperationStarted: GraphOperationStartObserver;
   readonly notifyActionCompleted: GraphActionCompletionObserver;
@@ -82,6 +87,13 @@ export function makeGraphSystemObservers(): GraphSystemObservers {
     channel: "live-failure",
     reportFailure: reportObserverFailure,
   });
+  const readinessFailures = makeObserverChannel<
+    GraphReadinessFailureObserver,
+    Parameters<GraphReadinessFailureObserver>
+  >({
+    channel: "readiness-failure",
+    reportFailure: reportObserverFailure,
+  });
   const cleanupFailures = makeObserverChannel<
     GraphCleanupFailureObserver,
     Parameters<GraphCleanupFailureObserver>
@@ -109,6 +121,7 @@ export function makeGraphSystemObservers(): GraphSystemObservers {
     observeResultValidityChanges: resultValidity.subscribe,
     observeLiveDemandChanges: liveDemandChanges.subscribe,
     observeLiveFailures: liveFailures.subscribe,
+    observeReadinessFailures: readinessFailures.subscribe,
     observeCleanupFailures: cleanupFailures.subscribe,
     observeOperationStarts: operationStarts.subscribe,
     observeActionCompletions: actionCompletions.subscribe,
@@ -117,6 +130,7 @@ export function makeGraphSystemObservers(): GraphSystemObservers {
     notifyResultValidityChanged: resultValidity.notifyAll,
     notifyLiveDemandChanged: liveDemandChanges.notifyAll,
     notifyLiveFailures: liveFailures.notifyAll,
+    notifyReadinessFailed: readinessFailures.notifyAll,
     notifyCleanupFailures: cleanupFailures.notifyAll,
     notifyOperationStarted: operationStarts.notifyAll,
     notifyActionCompleted: actionCompletions.notifyAll,

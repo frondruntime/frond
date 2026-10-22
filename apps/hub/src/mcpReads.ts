@@ -105,7 +105,7 @@ export const EventPage = Schema.Struct({
  * carries the full candidate list, which turns "you must pass an id" into
  * something answerable without a second round trip.
  */
-export class McpReadError extends Schema.ErrorClass<McpReadError>("McpReadError")({
+export class McpReadError extends Schema.Error<McpReadError>("McpReadError")({
   _tag: Schema.tag("McpReadError"),
   message: Schema.String,
 }) {}

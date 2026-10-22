@@ -11,8 +11,8 @@ import {
   HubRejection,
 } from "@frondruntime/devtools";
 import { Effect, Exit, Layer, Scope, Stream } from "effect";
-import { HttpRouter } from "effect/unstable/http";
-import { RpcClient, RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import { HttpRouter } from "effect/http";
+import { RpcClient, RpcSerialization, RpcServer } from "effect/rpc";
 import { HubServerNode } from "../src/nodes/hubServer.ts";
 
 const HOST = "127.0.0.1";

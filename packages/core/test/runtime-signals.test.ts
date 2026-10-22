@@ -493,7 +493,7 @@ describe("runtime signals", () => {
 
     expect(cause).toBeInstanceOf(EffectBoundaryFailed);
     expect(cause).toMatchObject({ boundary: "runtime-signal-subscriber" });
-    expect(createErrorReport(cause).message).toBe("Frond unexpected error: TypeError");
+    expect(createErrorReport(cause).message).toBe("subscriber died");
     expect(failure?.work).toMatchObject({
       source: "signal",
       reason: "signal",

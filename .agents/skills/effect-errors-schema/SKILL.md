@@ -1,6 +1,6 @@
 ---
 name: effect-errors-schema
-description: Use when modeling Effect errors, defects, Cause handling, Schema contracts, Schema.TaggedErrorClass, boundary decoding/encoding, runtime boundary validation, and typed failure recovery in Frond.
+description: Use when modeling Effect errors, defects, Cause handling, Schema contracts, Schema.TaggedError, boundary decoding/encoding, runtime boundary validation, and typed failure recovery in Frond.
 ---
 
 # Effect Errors And Schema
@@ -16,7 +16,7 @@ Recovery is for expected external uncertainty: user input, network, filesystem, 
 Rules:
 
 - Use `Data.TaggedError` for plain runtime/domain errors.
-- Use `Schema.TaggedErrorClass` when the error must be schema-backed or serialized.
+- Use `Schema.TaggedError` when the error must be schema-backed or serialized.
 - Use `Effect.catchTag` / `Effect.catchTags` for known tagged failures.
 - Use `Effect.catch` for all typed failures only when deliberately collapsing the union.
 - Use `Effect.catchCause` when interrupts or defects must be inspected.
@@ -52,7 +52,7 @@ import { Schema } from "effect"
 export const UserId = Schema.String.pipe(Schema.brand("UserId"))
 export type UserId = Schema.Schema.Type<typeof UserId>
 
-export class RpcError extends Schema.TaggedErrorClass<RpcError>()("RpcError", {
+export class RpcError extends Schema.TaggedError<RpcError>()("RpcError", {
   code: Schema.String,
   message: Schema.String,
 }) {}

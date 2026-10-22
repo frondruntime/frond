@@ -8,7 +8,7 @@ Core Frond runtime package: node authoring, graph execution, lifecycle, diagnost
 bun add @frondruntime/core effect mobx
 ```
 
-`effect` is a peer dependency for Effect-facing driver and runtime APIs. `mobx` is a peer dependency because Frond node state is MobX-backed and must share the app's MobX runtime.
+`effect` (stable 4.x) is a peer dependency for Effect-facing driver and runtime APIs. `mobx` is a peer dependency because Frond node state is MobX-backed and must share the app's MobX runtime.
 
 ## What It Owns
 
@@ -339,6 +339,8 @@ import * as FrondTest from "@frondruntime/core/testing";
 The testing subpath includes runtime harnesses, deferred drivers, and spec helpers used to test node behavior without React.
 
 ## Migrating
+
+Upgrading from 0.4.0? Error reports changed shape; see [MIGRATION-0.5.md](./MIGRATION-0.5.md).
 
 Upgrading from 0.1.0? The complete breaking-change list with before/after snippets is in [MIGRATION-0.2.md](./MIGRATION-0.2.md).
 

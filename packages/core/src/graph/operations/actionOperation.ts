@@ -57,7 +57,7 @@ function runActionDriver(
 ): Effect.Effect<ActionResult> {
   return Effect.gen(function* () {
     if (readyHandle.status._tag !== "Wired" || readyHandle.status.run._tag !== "Ready") {
-      return makeActionFailure(cell, request, readyHandle.status);
+      return makeActionFailure(cell, request, notReadyCause(readyHandle));
     }
 
     const action = cell.descriptor.driver.actions.read(request.action);
@@ -135,4 +135,22 @@ function runActionDriver(
         }) satisfies ActionResult,
     });
   });
+}
+
+/**
+ * The readiness failure itself when the implicit acquire failed, so the action
+ * failure wraps the error that attempt already reported instead of a status.
+ */
+function notReadyCause(readyHandle: NodeRead): unknown {
+  const { status } = readyHandle;
+
+  if (status._tag === "Invalid") {
+    return status.error;
+  }
+
+  if (status._tag === "Wired" && status.run._tag === "Error") {
+    return status.run.error;
+  }
+
+  return status;
 }

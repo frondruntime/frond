@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { projectError } from "../src/diagnostics";
+import { classify } from "../src/events";
 import { createRuntime } from "../src/runtime";
 import {
   type ActionContract,
@@ -428,6 +429,11 @@ describe("result validity", () => {
     expect(projection.rootTag).toBe("DependencyResultExpired");
     expect(projection.causeChain.some((frame) => frame.tag === "DependencyFailed")).toBe(true);
     expect(clockExpiredDependencyRefreshRuns).toBe(0);
+    // No readiness attempt reported the expiry, so the refresh failure does.
+    expect(
+      classify({ _tag: "GraphRefreshFailed", nodeId: handle.nodeId, error: refresh.error, at: 0 })
+        .reportable
+    ).toBe(true);
   });
 
   test("action fails typed when a time-bound dependency is clock-expired", async () => {
@@ -449,6 +455,17 @@ describe("result validity", () => {
 
     expect(projection.rootTag).toBe("DependencyResultExpired");
     expect(clockExpiredDependencyActionRuns).toBe(0);
+    // No readiness attempt reported the expiry, so the action failure does.
+    expect(
+      classify({
+        _tag: "GraphActionFailed",
+        nodeId: handle.nodeId,
+        action: "touch",
+        input: undefined,
+        error: action.error,
+        at: 0,
+      }).reportable
+    ).toBe(true);
   });
 
   test("invalid result commit metadata fails loudly with typed diagnostics", async () => {

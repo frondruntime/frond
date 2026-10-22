@@ -33,19 +33,73 @@ export function serializeCauseChain(
   }
 }
 
+/**
+ * One walked cause frame plus the raw value it was serialized from. Internal:
+ * the projection needs raw identity (memo key, synthetic error cause) next to
+ * the serialized fields.
+ */
+export type WalkedCauseFrame = {
+  readonly frame: SerializedCauseFrame;
+  readonly raw: unknown;
+};
+
+const aggregateTags: ReadonlySet<string> = new Set([
+  "DependencyDefinitionFailures",
+  "DependencyFailures",
+]);
+
+/** Nested aggregates serialize their members one level deep only. */
+const maxAggregateNesting = 1;
+
+/**
+ * Frame bound for the projection walk. The failing node and its cause sit at
+ * the bottom of the chain, so the walk must reach the end however many
+ * wrappers sit above it; `maxDepth` only bounds the serialized `causeChain`.
+ * A visited set stops cycles; this bound stops pathological chains.
+ */
+const projectionMaxDepth = 256;
+
 function serializeCauseChainUnsafe(
   error: unknown,
   options: NormalizedCauseSerializationOptions
 ): ReadonlyArray<SerializedCauseFrame> {
-  const frames: Array<SerializedCauseFrame> = [];
+  return walkFrames(error, options, "cause", 0, options.maxDepth).map(({ frame }) => frame);
+}
+
+/**
+ * Walks the chain for projection. Follows `cause`; an aggregate without a
+ * cause (`DependencyFailures`) continues into its first member, so the walk
+ * always reaches a failing node. Every member stays visible through the
+ * aggregate frame's `failures`.
+ */
+export function walkProjectionChain(
+  error: unknown,
+  options: CauseSerializationOptions = {}
+): ReadonlyArray<WalkedCauseFrame> {
+  return walkFrames(error, normalizeOptions(options), "first-member", 0, projectionMaxDepth);
+}
+
+function walkFrames(
+  error: unknown,
+  options: NormalizedCauseSerializationOptions,
+  aggregate: "cause" | "first-member",
+  nesting: number,
+  maxDepth: number
+): ReadonlyArray<WalkedCauseFrame> {
+  const frames: Array<WalkedCauseFrame> = [];
+  const visited = new WeakSet<object>();
   let current: unknown = error;
 
-  for (let index = 0; index < options.maxDepth; index += 1) {
-    frames.push(frameFromValue(current, index, options));
+  for (let index = 0; index < maxDepth; index += 1) {
+    frames.push({ frame: frameFromValue(current, index, options, nesting), raw: current });
 
-    const next = safeGet(current, "cause");
+    if (typeof current === "object" && current !== null) {
+      visited.add(current);
+    }
 
-    if (next === undefined) {
+    const next = nextFrameValue(current, aggregate);
+
+    if (next === undefined || (typeof next === "object" && next !== null && visited.has(next))) {
       break;
     }
 
@@ -55,10 +109,29 @@ function serializeCauseChainUnsafe(
   return frames;
 }
 
+function nextFrameValue(value: unknown, aggregate: "cause" | "first-member"): unknown {
+  const cause = safeGet(value, "cause");
+
+  if (cause !== undefined || aggregate === "cause" || !isAggregate(value)) {
+    return cause;
+  }
+
+  const failures = safeGet(value, "failures");
+
+  return Array.isArray(failures) ? failures[0] : undefined;
+}
+
+function isAggregate(value: unknown): boolean {
+  const tag = safeGet(value, "_tag");
+
+  return typeof tag === "string" && aggregateTags.has(tag);
+}
+
 function frameFromValue(
   value: unknown,
   index: number,
-  options: NormalizedCauseSerializationOptions
+  options: NormalizedCauseSerializationOptions,
+  nesting: number
 ): SerializedCauseFrame {
   const tag = safeString(safeGet(value, "_tag"), options.maxStringLength);
   const kind = safeString(safeGet(value, "kind"), options.maxStringLength);
@@ -68,6 +141,8 @@ function frameFromValue(
   const nodeId = safeString(safeGet(value, "nodeId"), options.maxStringLength);
   const nodeTag = safeString(safeGet(value, "tag"), options.maxStringLength);
   const operation = safeString(safeGet(value, "operation"), options.maxStringLength);
+  const action = safeString(safeGet(value, "action"), options.maxStringLength);
+  const stage = safeString(safeGet(value, "stage"), options.maxStringLength);
   const dependency = safeString(safeGet(value, "dependency"), options.maxStringLength);
   const invariant = safeString(safeGet(value, "invariant"), options.maxStringLength);
   const boundary = safeString(safeGet(value, "boundary"), options.maxStringLength);
@@ -78,6 +153,7 @@ function frameFromValue(
     options.maxStringLength,
     options.maxObjectKeys
   );
+  const failures = aggregateFailures(value, options, nesting);
 
   return {
     index,
@@ -90,14 +166,39 @@ function frameFromValue(
     nodeId,
     nodeTag,
     operation,
+    action,
+    stage,
     dependency,
     invariant,
     boundary,
     cancellation,
     path,
     timeout,
+    failures,
     preview: safePreview(value, options),
   };
+}
+
+function aggregateFailures(
+  value: unknown,
+  options: NormalizedCauseSerializationOptions,
+  nesting: number
+): SerializedCauseFrame["failures"] {
+  if (nesting >= maxAggregateNesting || !isAggregate(value)) {
+    return undefined;
+  }
+
+  const failures = safeGet(value, "failures");
+
+  if (!Array.isArray(failures)) {
+    return undefined;
+  }
+
+  return failures
+    .slice(0, options.maxObjectKeys)
+    .map((failure) =>
+      walkFrames(failure, options, "cause", nesting + 1, options.maxDepth).map(({ frame }) => frame)
+    );
 }
 
 function cancellationFromValue(

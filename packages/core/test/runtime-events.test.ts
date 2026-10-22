@@ -663,6 +663,7 @@ describe("runtime events", () => {
     expect(pendingEvents.map((record) => record.event._tag)).toEqual([
       "GraphNodeChanged",
       "GraphNodeChanged",
+      "GraphNodeReadinessFailed",
       "GraphNodeReadyEnsured",
       "GraphNodeChanged",
     ]);
@@ -1192,8 +1193,8 @@ describe("runtime events", () => {
       },
     });
 
-    expect(reports).toEqual(["Frond operation failed: DiagnosticsRefreshRejected"]);
-    expect(createErrorReport("sink primitive").message).toBe("Frond unexpected string");
+    expect(reports).toEqual(["[resources/runtime-refresh-diagnostics refresh]"]);
+    expect(createErrorReport("sink primitive").message).toBe("sink primitive");
   });
 
   test("refresh burst emits lifecycle events only for actual refresh work", async () => {
@@ -1500,7 +1501,7 @@ describe("runtime events", () => {
     expect(
       createErrorReport(failure?._tag === "RuntimeSinkFailureObserved" ? failure.cause : undefined)
         .message
-    ).toBe("Frond unexpected error: Error");
+    ).toBe("sink rejected");
   });
 
   test("runtime report sink handler failure is observed as a sink failure", async () => {

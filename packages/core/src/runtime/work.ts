@@ -41,12 +41,15 @@ export type RuntimeWorkMetadata = {
    * Caller-cancellation `AbortSignal` (unrelated to the `"signal"` work
    * source/reason, which name runtime pub/sub signals).
    *
-   * Honored today by `handle.action` only; other metadata-bearing surfaces
-   * ignore it. When the signal fires, the submission is interrupted exactly as
-   * if the caller's Effect fiber were interrupted: queued work settles without
+   * Honored by `handle.action`, `ensureReady`, `ensureReadyNode`, and `boot`;
+   * other metadata-bearing surfaces ignore it. When the signal fires, the
+   * submission is interrupted exactly as if the caller's Effect fiber were
+   * interrupted: queued work settles without
    * invoking the driver, active single-owner work aborts its operation
    * `ctx.signal`, and join-admission work keeps running for its other awaiters
-   * (the leaving caller just stops waiting). An already-aborted signal settles
+   * (the leaving caller just stops waiting). A readiness attempt is owned by
+   * the graph, not by its awaiters: aborting an awaiter never aborts the
+   * attempt. An already-aborted signal settles
    * as interruption without submitting at all.
    *
    * The cancelled call settles with Effect interruption, so a Promise caller

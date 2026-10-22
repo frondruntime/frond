@@ -117,12 +117,20 @@ function createRuntimeNodeHandle<TArgs, TResult, TNode extends object = object>(
       reason: "readiness",
       priority: "visible",
     }
-  ): Promise<NodeRead> =>
-    submit(
+  ): Promise<NodeRead> => {
+    const effect = submitEffect(
+      host,
       { _tag: "GraphEnsureReadyNode", request: request(), metadata },
       "GraphNodeReadyEnsured",
       ({ read }) => read
     );
+
+    const signal = metadata?.signal;
+
+    // A non-AbortSignal `signal` is left for the host's metadata validation to
+    // reject, as before.
+    return runner.run(signal instanceof AbortSignal ? interruptOnSignal(effect, signal) : effect);
+  };
 
   // Ready-or-throw projection of the same sync read `read()` performs: Ready
   // yields the typed node, Error rethrows the read's error, and the remaining

@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { Rpc, RpcGroup } from "effect/unstable/rpc";
+import { Rpc, RpcGroup } from "effect/rpc";
 
 /**
  * Wire contract between an attached Frond runtime and the hub.
@@ -425,10 +425,9 @@ export type HubCommand = typeof HubCommand.Type;
  * caller learns nothing here it could not learn by dialing and observing, and
  * vagueness would cost only the developer who is actually trying to attach.
  */
-export class HubRejection extends Schema.TaggedErrorClass<HubRejection>("HubRejection")(
-  "HubRejection",
-  { reason: Schema.String }
-) {}
+export class HubRejection extends Schema.TaggedError<HubRejection>()("HubRejection", {
+  reason: Schema.String,
+}) {}
 
 /**
  * Opens the attachment and holds it open.

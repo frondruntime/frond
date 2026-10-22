@@ -1,23 +1,11 @@
-import { Data, Effect, Match } from "effect";
+import { Data, Effect } from "effect";
 import type { RuntimeEventClassification } from "../events";
+import { unreportedFailures } from "../graph/readiness/sourceFailures";
 import type { RuntimeEvent, RuntimeEventRecord, RuntimeSink } from "../runtime/types";
-import { diagnosticsProjectionFailure, frameTag, projectError } from "./projection";
-import { normalizeOptions, safeGet, safePreview, safeString, valueKind } from "./safe";
+import { diagnosticsProjectionFailure, projectError, unclassifiedCauseType } from "./projection";
+import { normalizeOptions, safePreview } from "./safe";
 import { serializeCauseChain } from "./serialize";
-import type { FrondErrorProjection, FrondErrorReport, SerializedCauseFrame } from "./types";
-
-type ReportMessageInput =
-  | { readonly _tag: "UnexpectedError"; readonly rootTag: string }
-  | { readonly _tag: "UnexpectedValue"; readonly valueLabel: string }
-  | { readonly _tag: "Invalid"; readonly rootTag: string }
-  | { readonly _tag: "Readiness"; readonly rootTag: string }
-  | { readonly _tag: "Operation"; readonly rootTag: string }
-  | { readonly _tag: "Live"; readonly rootTag: string }
-  | { readonly _tag: "Runtime"; readonly rootTag: string };
-
-type ErrorReportContexts = Record<string, unknown> & {
-  dependencyFailures?: DependencyAggregateReportContext | undefined;
-};
+import type { FrondErrorProjection, FrondErrorReport } from "./types";
 
 class RuntimeReportSinkHandlerFailed extends Data.TaggedError("RuntimeReportSinkHandlerFailed")<{
   readonly message: string;
@@ -39,18 +27,59 @@ export function createErrorReport(error: unknown): FrondErrorReport {
 }
 
 /**
+ * One tracker error per failure object. Every value that resolves to the same
+ * failing node failure (the sink's source event, a reader's
+ * `FrondRuntimeReadError`, a dependent's `DependencyFailed`) gets the same
+ * `report.error`, so identity-based tracker dedupe works across surfaces.
+ * Message and fingerprint depend only on the failure; contexts (requester,
+ * path) stay per surface.
+ */
+const errorsByFailure = new WeakMap<object, Error>();
+
+function reportErrorFor(projection: FrondErrorProjection, message: string): Error {
+  const key = projection.failingFailure;
+  const memoizable = typeof key === "object" && key !== null;
+  const existing = memoizable ? errorsByFailure.get(key) : undefined;
+
+  if (existing !== undefined) {
+    return existing;
+  }
+
+  // This synthetic error is the tracker-facing object: named by the cause type
+  // and caused by the failing node's own failure, not by the requester's
+  // wrappers. The requester path lives in contexts.
+  const error = new Error(message, { cause: key });
+  error.name = `FrondDiagnostic.${projection.causeType}`;
+  useProjectedRootStack(error, projection, message);
+
+  if (memoizable) {
+    errorsByFailure.set(key, error);
+  }
+
+  return error;
+}
+
+/**
  * Creates diagnostic reports for reportable failures carried by one runtime event.
  *
- * Non-failure events produce an empty array. The original runtime event remains
- * available through report contexts for Sentry-like sinks.
+ * Non-failure and non-reportable events produce an empty array: a failure is
+ * reported once, by the event at its source. A dependency aggregate that
+ * mixes reported and unreported members reports only the latter, one each.
+ * The original runtime event remains available through report contexts for
+ * Sentry-like sinks; the report shares `error` with every other report of the
+ * same failure.
  */
 export function createRuntimeEventReports(
   record: RuntimeEventRecord
 ): ReadonlyArray<FrondErrorReport> {
+  if (!record.classification.reportable) {
+    return [];
+  }
+
   try {
-    return record.failures.map((failure) =>
-      enrichRuntimeEventReport(createErrorReport(failure), record)
-    );
+    return record.failures
+      .flatMap(unreportedFailures)
+      .map((failure) => enrichRuntimeEventReport(createErrorReport(failure), record));
   } catch (cause) {
     return [
       enrichRuntimeEventReport(
@@ -98,43 +127,34 @@ export function createRuntimeReportSink(options: RuntimeReportSinkOptions): Runt
 
 function createErrorReportFromProjection(projection: FrondErrorProjection): FrondErrorReport {
   const message = reportMessage(projection);
-  // This synthetic error is the tracker-facing object. The raw Frond/runtime
-  // error stays as `cause` and in structured contexts so integrations can group
-  // by the projected root cause instead of by wrapper classes like
-  // FrondRuntimeReadError, AcquireFailed, ActionFailed, or RefreshFailed.
-  const reportError = new Error(message, { cause: projection.raw });
-  reportError.name = "FrondDiagnosticError";
-  useProjectedRootStack(reportError, projection, message);
-  const contexts: ErrorReportContexts = {
-    frond: {
-      headline: projection.headline,
-      summary: projection.summary,
-      kind: projection.kind,
-      retryable: projection.retryable,
-      rootTag: projection.rootTag,
-      rootMessage: projection.rootMessage,
-      nodeId: projection.nodeId,
-      nodeTag: projection.nodeTag,
-      operation: projection.operation,
-      dependency: projection.dependency,
-      path: projection.path,
-    },
-    causeChain: projection.causeChain,
-  };
-  const aggregate = dependencyAggregateContext(projection.raw);
-
-  if (aggregate !== undefined) {
-    contexts.dependencyFailures = aggregate;
-  }
 
   return {
-    error: reportError,
+    error: reportErrorFor(projection, message),
     message,
     fingerprint: reportFingerprint(projection),
     tags: reportTags(projection),
-    contexts,
+    contexts: {
+      frond: {
+        headline: projection.headline,
+        summary: projection.summary,
+        kind: projection.kind,
+        retryable: projection.retryable,
+        causeType: projection.causeType,
+        causeMessage: projection.causeMessage,
+        messageType: projection.messageType,
+        failingNode: projection.failingNode,
+        requester: projection.requester,
+        path: projection.path,
+        operation: projection.operation,
+        dependency: projection.dependency,
+      },
+      causeChain:
+        projection.failingFailure === projection.raw
+          ? projection.causeChain
+          : serializeCauseChain(projection.failingFailure),
+    },
     extra: {
-      rawPreview: safePreview(projection.raw, normalizeOptions({})),
+      rawPreview: safePreview(projection.failingFailure, normalizeOptions({})),
     },
   };
 }
@@ -144,40 +164,18 @@ function useProjectedRootStack(
   projection: FrondErrorProjection,
   message: string
 ): void {
-  const rootStack = projectedRootStack(projection);
+  const stack = projection.stack;
 
-  if (rootStack === undefined) {
+  if (stack === undefined) {
     return;
   }
 
   try {
-    error.stack = rewriteStackHeader(rootStack, error.name, message);
+    error.stack = rewriteStackHeader(stack, error.name, message);
   } catch {
     // Error.stack is non-standard. If the host refuses assignment, keep the
     // synthetic construction stack and rely on structured causeChain context.
   }
-}
-
-function projectedRootStack(projection: FrondErrorProjection): string | undefined {
-  const reversed = [...projection.causeChain].reverse();
-  const exactRootFrame = reversed.find(
-    (frame) =>
-      frame.stack !== undefined &&
-      frameTag(frame) === projection.rootTag &&
-      frameRootMessage(frame) === projection.rootMessage
-  );
-
-  if (exactRootFrame?.stack !== undefined) {
-    return exactRootFrame.stack;
-  }
-
-  return reversed.find(
-    (frame) => frame.stack !== undefined && frameTag(frame) === projection.rootTag
-  )?.stack;
-}
-
-function frameRootMessage(frame: SerializedCauseFrame): string {
-  return frame.invariant ?? frame.message ?? frameTag(frame);
 }
 
 function rewriteStackHeader(stack: string, name: string, message: string): string {
@@ -188,85 +186,6 @@ function rewriteStackHeader(stack: string, name: string, message: string): strin
   }
 
   return [`${name}: ${message}`, ...rest].join("\n");
-}
-
-type DependencyAggregateReportContext = {
-  readonly tag: string;
-  readonly nodeId?: string | undefined;
-  readonly nodeTag?: string | undefined;
-  readonly failureCount: number;
-  readonly failures: ReadonlyArray<{
-    readonly tag?: string | undefined;
-    readonly nodeId?: string | undefined;
-    readonly nodeTag?: string | undefined;
-    readonly dependency?: string | undefined;
-    readonly dependencyNodeId?: string | undefined;
-    readonly rootTag: string;
-    readonly rootMessage: string;
-    readonly causeChain: ReadonlyArray<SerializedCauseFrame>;
-  }>;
-};
-
-function dependencyAggregateContext(raw: unknown): DependencyAggregateReportContext | undefined {
-  const aggregate = findDependencyAggregate(raw);
-
-  if (aggregate === undefined) {
-    return undefined;
-  }
-
-  const failures = safeGet(aggregate, "failures");
-
-  if (!Array.isArray(failures) || failures.length === 0) {
-    return undefined;
-  }
-
-  return {
-    tag: safeString(safeGet(aggregate, "_tag")) ?? "DependencyFailures",
-    nodeId: safeString(safeGet(aggregate, "nodeId")),
-    nodeTag: safeString(safeGet(aggregate, "tag")),
-    failureCount: failures.length,
-    failures: failures.map(dependencyFailureContext),
-  };
-}
-
-function findDependencyAggregate(raw: unknown): unknown | undefined {
-  let current: unknown = raw;
-
-  for (let depth = 0; depth < 8; depth += 1) {
-    const tag = safeString(safeGet(current, "_tag"));
-
-    if (tag === "DependencyFailures" || tag === "DependencyDefinitionFailures") {
-      return current;
-    }
-
-    const cause = safeGet(current, "cause");
-
-    if (cause === undefined) {
-      return undefined;
-    }
-
-    current = cause;
-  }
-
-  return undefined;
-}
-
-function dependencyFailureContext(
-  failure: unknown
-): DependencyAggregateReportContext["failures"][number] {
-  const causeChain = serializeCauseChain(failure);
-  const root = causeChain.at(-1);
-
-  return {
-    tag: safeString(safeGet(failure, "_tag")),
-    nodeId: safeString(safeGet(failure, "nodeId")),
-    nodeTag: safeString(safeGet(failure, "tag")),
-    dependency: safeString(safeGet(failure, "dependency")),
-    dependencyNodeId: safeString(safeGet(failure, "dependencyNodeId")),
-    rootTag: root?.tag ?? root?.name ?? root?.valueKind ?? "Unknown",
-    rootMessage: root?.message ?? "Unknown",
-    causeChain,
-  };
 }
 
 function enrichRuntimeEventReport(
@@ -374,64 +293,91 @@ function runtimeEventSignal(event: RuntimeEvent): RuntimeEventReportEnvelope["si
   };
 }
 
+/** `[<failing node tag> <operation>] <cause message>`; no prefix without a node. */
 function reportMessage(projection: FrondErrorProjection): string {
-  return Match.value(reportMessageInput(projection)).pipe(
-    Match.tag("UnexpectedError", ({ rootTag }) => `Frond unexpected error: ${rootTag}`),
-    Match.tag("UnexpectedValue", ({ valueLabel }) => `Frond unexpected ${valueLabel}`),
-    Match.tag("Invalid", ({ rootTag }) => `Frond invalid graph: ${rootTag}`),
-    Match.tag("Readiness", ({ rootTag }) => `Frond readiness failed: ${rootTag}`),
-    Match.tag("Operation", ({ rootTag }) => `Frond operation failed: ${rootTag}`),
-    Match.tag("Live", ({ rootTag }) => `Frond live work failed: ${rootTag}`),
-    Match.tag("Runtime", ({ rootTag }) => `Frond runtime: ${rootTag}`),
-    Match.exhaustive
-  );
-}
+  const nodeTag = projection.failingNode?.tag;
 
-function reportMessageInput(projection: FrondErrorProjection): ReportMessageInput {
-  if (projection.kind === "unexpected" && projection.raw instanceof Error) {
-    return { _tag: "UnexpectedError", rootTag: projection.rootTag };
+  if (nodeTag === undefined) {
+    return projection.causeMessage.length > 0 ? projection.causeMessage : projection.headline;
   }
 
-  if (projection.kind === "unexpected") {
-    return {
-      _tag: "UnexpectedValue",
-      valueLabel: projection.raw === null ? "null" : typeof projection.raw,
-    };
-  }
+  const location =
+    projection.operation === undefined ? nodeTag : `${nodeTag} ${projection.operation}`;
 
-  return Match.value(projection.kind).pipe(
-    Match.when("invalid", () => ({ _tag: "Invalid", rootTag: projection.rootTag }) as const),
-    Match.when("readiness", () => ({ _tag: "Readiness", rootTag: projection.rootTag }) as const),
-    Match.when("operation", () => ({ _tag: "Operation", rootTag: projection.rootTag }) as const),
-    Match.when("live", () => ({ _tag: "Live", rootTag: projection.rootTag }) as const),
-    Match.when("runtime", () => ({ _tag: "Runtime", rootTag: projection.rootTag }) as const),
-    Match.exhaustive
-  );
+  return projection.causeMessage.length > 0
+    ? `[${location}] ${projection.causeMessage}`
+    : `[${location}]`;
 }
 
+/**
+ * `["frond", kind, failingNode?, operation?, causeType]`, plus the masked
+ * message for unclassified causes. The node id (args, keys) never enters it.
+ */
 function reportFingerprint(projection: FrondErrorProjection): ReadonlyArray<string> {
-  return Match.value(projection).pipe(
-    Match.when(
-      { kind: "unexpected" },
-      ({ raw, rootTag }) => ["frond", "unexpected", valueKind(raw), rootTag] as const
-    ),
-    Match.orElse(({ kind, rootTag, nodeTag }) => {
-      const parts = ["frond", kind, rootTag];
+  const parts = ["frond", projection.kind];
 
-      if (nodeTag !== undefined) {
-        parts.push(nodeTag);
-      }
+  if (projection.failingNode?.tag !== undefined) {
+    parts.push(projection.failingNode.tag);
+  }
 
-      return parts;
-    })
-  );
+  if (projection.operation !== undefined) {
+    parts.push(projection.operation);
+  }
+
+  parts.push(projection.causeType);
+
+  if (isUnclassified(projection.causeType)) {
+    const masked = maskMessage(projection.causeMessage);
+
+    if (masked.length > 0) {
+      parts.push(masked);
+    }
+  }
+
+  return parts;
+}
+
+function isUnclassified(causeType: string): boolean {
+  return causeType === unclassifiedCauseType || causeType.startsWith("Thrown");
+}
+
+const maskedMessageLength = 120;
+const uuidPattern = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+const tokenPattern = /[0-9a-z]+(?:-[0-9a-z]+)*/gi;
+
+/**
+ * Replaces UUIDs, hex runs (dash-joined groups count as one), and numbers with
+ * placeholders so unclassified messages group by what they say, not by ids.
+ */
+export function maskMessage(message: string): string {
+  const masked = message.replace(uuidPattern, "<uuid>").replace(tokenPattern, maskToken).trim();
+
+  return masked.length > maskedMessageLength ? masked.slice(0, maskedMessageLength) : masked;
+}
+
+function maskToken(token: string): string {
+  if (!/\d/.test(token)) {
+    return token;
+  }
+
+  if (/^\d+$/.test(token)) {
+    return "<n>";
+  }
+
+  if (/^(?:0x)?[0-9a-f]+(?:-[0-9a-f]+)*$/i.test(token)) {
+    return "<hex>";
+  }
+
+  return token.replace(/\d+/g, "<n>");
 }
 
 function reportTags(projection: FrondErrorProjection): Record<string, string> {
   return {
     "frond.kind": projection.kind,
     "frond.retryable": String(projection.retryable),
-    "frond.root_tag": projection.rootTag,
-    "frond.node_tag": projection.nodeTag ?? "unknown",
+    "frond.cause_type": projection.causeType,
+    "frond.failing_node": projection.failingNode?.tag ?? "unknown",
+    "frond.operation": projection.operation ?? "none",
+    "frond.requester": projection.requester?.tag ?? "unknown",
   };
 }
