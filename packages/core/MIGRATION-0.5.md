@@ -71,8 +71,8 @@ const properties = {
 
 Other changes on the report:
 
-- `report.contexts.causeChain` starts at the failing node's failure. Serialization now includes `ActionFailed.action` and walks into `DependencyFailures.failures`.
-- `report.contexts.dependencyFailures` is removed. Aggregate members appear as `causeChain[i].failures`.
+- `report.contexts.causeChain` starts at the failing node's failure, so it never includes a dependency aggregate frame.
+- `report.contexts.dependencyFailures` is removed. When several dependencies fail together, the runtime sink sends one report per unreported member, each with its own chain. A report built from the aggregate (for example `getErrorReport(error)` in an error boundary) describes one selected member. For every member's chain, use `Diagnostics.projectError(error).causeChain`: projection serialization now walks into `DependencyFailures.failures` and includes `ActionFailed.action`.
 - `report.error.cause` is the failing node's own failure, not the raw value passed in. Trackers that walk `cause` see a shorter chain.
 - `report.extra.rawPreview` previews that same failure.
 
