@@ -9,7 +9,7 @@ Use this skill for repo custom lint rules under `.biome/plugins/*.grit`, registe
 
 ## Purpose
 
-Custom rules turn repeated implementation mistakes into deterministic feedback. In this repo, Effect v3 patterns are a primary target because they are common in generated code while Frond uses Effect v4 beta patterns.
+Custom rules turn repeated implementation mistakes into deterministic feedback. In this repo, Effect v3 patterns are a primary target because they are common in generated code while Frond uses Effect v4 patterns.
 
 ## Before Adding A Rule
 

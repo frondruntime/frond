@@ -22,8 +22,8 @@ import {
   type ValuePolicy,
 } from "@frondruntime/devtools";
 import { Clock, Effect, Exit, Layer, Queue, Scope, Stream } from "effect";
-import { HttpRouter } from "effect/unstable/http";
-import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import { HttpRouter } from "effect/http";
+import { RpcSerialization, RpcServer } from "effect/rpc";
 import { mcpLayer } from "../mcp.ts";
 import { HUB_MCP_VERSION } from "../version.ts";
 import { AttachmentsNode } from "./attachments.ts";
@@ -85,7 +85,7 @@ export type HubServerResult = {
    * reads the result and nothing else: the node's own teardown is the only
    * thing allowed to close it.
    */
-  readonly serverScope: Scope.Scope;
+  readonly serverScope: Scope.Closeable;
 };
 
 type HubServerDeps = {

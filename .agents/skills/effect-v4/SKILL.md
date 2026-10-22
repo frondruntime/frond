@@ -1,6 +1,6 @@
 ---
 name: effect-v4
-description: Use when writing, reviewing, or debugging Effect v4 beta code in Frond, especially core Effect composition, Effect.gen, v3-to-v4 API translation, typed Effect signatures, and deciding which narrower Effect skill applies.
+description: Use when writing, reviewing, or debugging Effect v4 code in Frond, especially core Effect composition, Effect.gen, v3-to-v4 API translation, typed Effect signatures, and deciding which narrower Effect skill applies.
 ---
 
 # Effect v4
@@ -53,7 +53,7 @@ Useful searches:
 ```bash
 rg "Context.Service|Layer.mergeAll|Layer.provideMerge|Effect.catchTag|Effect.forkDetach" packages
 find node_modules -path '*effect*/dist/Effect.d.ts' -o -path '*effect*/dist/Schema.d.ts'
-rg "export declare const catch|forkDetach|TaggedErrorClass" node_modules
+rg "export declare const catch|forkDetach|TaggedError" node_modules
 ```
 
 The repo already has `@effect/language-service` configured as a compiler plugin in `tsconfig.base.json`. Trust its diagnostics when Effect types look strange.
@@ -152,7 +152,7 @@ Common v3 or stale examples need translation:
 | `Context.Tag` for services | `Context.Service<Service, Shape>()("Name")` |
 | uncurried `Layer.effect(Tag, effect)` | `Layer.effect(Tag)(effect)` |
 | `ServiceMap.Service` | removed; use `Context.Service` |
-| `Schema.TaggedError` | `Schema.TaggedErrorClass` for schema-backed failures |
+| `Schema.TaggedError` (v3) | `Schema.TaggedError<Self>()(tag, fields)` for schema-backed failures (the beta name `TaggedErrorClass` is gone in stable) |
 | bare millisecond numbers for time | `Duration.millis`, `Duration.seconds`, or accepted duration strings when verified |
 | `throw` in `Effect.gen` | `return yield* Effect.fail(error)` or `return yield* error` for yieldable errors |
 

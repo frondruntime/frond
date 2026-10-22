@@ -2,7 +2,7 @@
 
 0.5.0 changes what an error report describes. A report is now about the node whose driver failed and the error it threw, not the requester that observed it, and each failure is reported once, at its source. Node authoring, specs, and runtime APIs are unchanged.
 
-Applies to `@frondruntime/core` and `@frondruntime/react`. If you forward Frond reports to an error tracker (Sentry, PostHog, or a custom sink), read sections 1-5. If you only render errors, the [Deprecated](#deprecated) section covers the renamed projection fields.
+Applies to `@frondruntime/core` and `@frondruntime/react`. If you forward Frond reports to an error tracker (Sentry, PostHog, or a custom sink), read sections 1-5. Everyone upgrading needs section 6. If you only render errors, the [Deprecated](#deprecated) section covers the renamed projection fields.
 
 ## Breaking changes
 
@@ -104,6 +104,13 @@ Reports are memoized per failure. For one failure, these are the same `Error` ob
 - `getErrorReport(error).diagnostic.error` in `@frondruntime/react`.
 
 Trackers that dedupe by error identity send one event.
+
+### 6. Effect 4 stable
+
+The `effect` peer dependency of `@frondruntime/core`, `@frondruntime/react`, and `@frondruntime/devtools` is now `^4.0.0`. Effect 4 betas and release candidates no longer satisfy it, so upgrade `effect` to a stable 4.x release along with Frond. Effect's own beta-to-stable changes that may reach app code include:
+
+- `effect/unstable/*` modules moved to `effect/*`, for example `effect/unstable/rpc` → `effect/rpc`.
+- `Schema.TaggedErrorClass` → `Schema.TaggedError`.
 
 ## Deprecated
 

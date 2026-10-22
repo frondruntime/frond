@@ -111,7 +111,7 @@
     "./.biome/plugins/no-effect-v3-fork.grit",
     "./.biome/plugins/no-effect-v3-gen-adapter.grit",
     "./.biome/plugins/no-effect-v3-schema-import.grit",
-    "./.biome/plugins/no-effect-v3-schema-tagged-error.grit",
+    "./.biome/plugins/no-effect-beta-schema-error-class.grit",
     "./.biome/plugins/no-effect-v3-service-map.grit",
     "./.biome/plugins/no-effect-v3-service-map-import.grit",
     "./.biome/plugins/no-conditional-object-spread.grit",

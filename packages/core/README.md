@@ -8,7 +8,7 @@ Core Frond runtime package: node authoring, graph execution, lifecycle, diagnost
 bun add @frondruntime/core effect mobx
 ```
 
-`effect` is a peer dependency for Effect-facing driver and runtime APIs. `mobx` is a peer dependency because Frond node state is MobX-backed and must share the app's MobX runtime.
+`effect` (stable 4.x) is a peer dependency for Effect-facing driver and runtime APIs. `mobx` is a peer dependency because Frond node state is MobX-backed and must share the app's MobX runtime.
 
 ## What It Owns
 

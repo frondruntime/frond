@@ -60,14 +60,14 @@
   },
   "peerDependencies": {
     "mobx": ">=6 <7",
-    "effect": ">=4.0.0-beta.100 <5.0.0"
+    "effect": "^4.0.0"
   },
   "author": {
     "name": "Roman Dubinin",
     "url": "https://romanonthego.dev"
   },
   "devDependencies": {
-    "effect": "4.0.0-beta.102",
+    "effect": "4.0.5",
     "mobx": "6.15.3"
   }
 }

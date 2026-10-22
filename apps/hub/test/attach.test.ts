@@ -9,7 +9,7 @@ import {
   HUB_PROTOCOL_VERSION,
 } from "@frondruntime/devtools";
 import { Effect, Fiber, Stream } from "effect";
-import { RpcClient } from "effect/unstable/rpc";
+import { RpcClient } from "effect/rpc";
 import { isHubInternal } from "../src/hubInternal.ts";
 import type { AttachmentView } from "../src/nodes/attachments.ts";
 import { AttachmentsNode } from "../src/nodes/attachments.ts";

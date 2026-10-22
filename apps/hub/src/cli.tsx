@@ -4,7 +4,7 @@ import { createRuntime } from "@frondruntime/core";
 import { attachDevtools, HUB_DEFAULT_HOST, HUB_DEFAULT_PORT } from "@frondruntime/devtools";
 import { FrondProvider } from "@frondruntime/react";
 import { Effect } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
+import { Command, Flag } from "effect/cli";
 import { render } from "ink";
 import { isHubInternal } from "./hubInternal.ts";
 import { HubServerNode } from "./nodes/hubServer.ts";
@@ -86,11 +86,11 @@ const runHub = Effect.fnUntraced(function* (config: {
 const hub = Command.make(
   "frond-hub",
   {
-    host: Flag.string("host").pipe(
+    host: Flag.String("host").pipe(
       Flag.withDefault(HUB_DEFAULT_HOST),
       Flag.withDescription("Interface to bind. Leave on loopback unless you mean it.")
     ),
-    port: Flag.integer("port").pipe(
+    port: Flag.Int("port").pipe(
       Flag.withDefault(HUB_DEFAULT_PORT),
       Flag.withDescription("Port to listen on for attaching runtimes.")
     ),

@@ -3,7 +3,7 @@
 <repo>
   <name>frond</name>
   <purpose>Public publishing surface for the Effect-powered Frond runtime packages.</purpose>
-  <stack>Bun, TypeScript, Effect v4 beta, MobX, React, Biome.</stack>
+  <stack>Bun, TypeScript, Effect v4, MobX, React, Biome.</stack>
   <package-manager>bun</package-manager>
 </repo>
 
