@@ -95,8 +95,10 @@ export function runOperation<O extends RunningOperation, A extends BackgroundOpe
 ): GraphCancel {
   let cancel: GraphCancel = noCancel;
   let canceled = false;
+  let bodySettled = false;
   const settled: GraphResume<A> = (exit) => {
     if (canceled) return;
+    bodySettled = true;
     if (exit._tag === "Failure") {
       failNodeOperationSync(
         cell,
@@ -111,7 +113,7 @@ export function runOperation<O extends RunningOperation, A extends BackgroundOpe
       );
     } else if (exit.value._tag === "Success") completeNodeOperationSync(cell, operation);
     else failNodeOperationSync(cell, operation, exit.value.error, cell.syncClock.now());
-    finishObserverWork(
+    const changedSink = finishObserverWork(
       cell.notifyChanged(cell.nodeId),
       context,
       () => {
@@ -122,15 +124,17 @@ export function runOperation<O extends RunningOperation, A extends BackgroundOpe
         // A cancel during the change sink already ended the operation, and
         // its interrupt reports the operation's end.
         if (canceled) return;
-        finishObserverWork(
+        const completedSink = finishObserverWork(
           completed(cell, operation, input, exit.value),
           context,
           () => resume(exit),
           cell.jobs
         );
+        if (completedSink !== undefined) cancel = completedSink;
       },
       cell.jobs
     );
+    if (changedSink !== undefined) cancel = changedSink;
   };
   // A sink still running before the body starts is the operation's work:
   // cancelling interrupts it, then ends the operation. `undefined` means it
@@ -148,7 +152,9 @@ export function runOperation<O extends RunningOperation, A extends BackgroundOpe
         () => {
           if (canceled) return;
           try {
-            cancel = body(cell, operation, input, context, settled);
+            const bodyCancel = body(cell, operation, input, context, settled);
+            // A synchronous settlement may already own a suspended sink.
+            if (!bodySettled) cancel = bodyCancel;
           } catch (cause) {
             settled(Exit.die(cause));
           }
