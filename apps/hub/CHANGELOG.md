@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.1](https://github.com/frondruntime/frond/compare/hub-v0.6.0...hub-v0.6.1) (2026-11-20)
+
+
+### Miscellaneous Chores
+
+* **hub:** Synchronize frondruntime versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @frondruntime/core bumped from 0.6.0 to 0.6.1
+    * @frondruntime/devtools bumped from 0.6.0 to 0.6.1
+    * @frondruntime/react bumped from 0.6.0 to 0.6.1
+
 ## [0.6.0](https://github.com/frondruntime/frond/compare/hub-v0.5.0...hub-v0.6.0) (2026-11-20)
 
 
