@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.0](https://github.com/frondruntime/frond/compare/core-v0.5.0...core-v0.6.0) (2026-11-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* Frond 0.6, a synchronous core for Hermes ([#28](https://github.com/frondruntime/frond/issues/28))
+
+### Features
+
+* Frond 0.6, a synchronous core for Hermes ([#28](https://github.com/frondruntime/frond/issues/28)) ([3767a73](https://github.com/frondruntime/frond/commit/3767a73e655dadf75a081a6a57a84c3b1ef84a0b))
+
 ## [0.5.0](https://github.com/frondruntime/frond/compare/core-v0.4.0...core-v0.5.0) (2026-10-22)
 
 
