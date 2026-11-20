@@ -1,28 +1,13 @@
-import { Effect } from "effect";
-import type {
-  AsyncLiveContext,
-  AsyncLiveResourceDescriptor,
-  AsyncLiveStopContext,
-} from "./liveDescriptor";
+import type { AsyncLiveResourceDescriptor } from "./liveDescriptor";
 import { buildNormalizedDriver } from "./normalize";
 import type {
   AsyncDriver,
   AsyncDriverActionContracts,
   AsyncDriverActionMap,
   AsyncDriverActionResult,
-  AsyncDriverResult,
-  AsyncDriverVoidResult,
   Driver,
   NormalizedLiveResource,
-  NormalizedLiveStartOptions,
-  ResultCommit,
 } from "./types";
-
-export class AsyncDriverHookFailed {
-  readonly _tag = "AsyncDriverHookFailed";
-
-  constructor(readonly cause: unknown) {}
-}
 
 export function createAsyncDriver<
   TResult,
@@ -63,16 +48,15 @@ export function createAsyncDriver<
     mode: "async",
     resultValidity: driver.resultValidity,
     resultPatch: driver.resultPatch,
-    acquire: (ctx) => runAsyncResult(() => driver.acquire(ctx.async)),
+    acquire: (ctx) => driver.acquire(ctx.async),
     release: driver.release,
     refresh: driver.refresh,
     live: driver.live,
     actions: driver.actions,
-    normalizeRelease: (release) => (ctx) => runAsyncVoid(() => release(ctx.async)),
-    normalizeRefresh: (refresh) => (ctx) => runAsyncVoid(() => refresh(ctx.async)),
+    normalizeRelease: (release) => (ctx) => release(ctx.async),
+    normalizeRefresh: (refresh) => (ctx) => refresh(ctx.async),
     normalizeLive: normalizeAsyncLiveResource,
-    normalizeAction: (action) => (ctx, input) =>
-      runAsyncAction(() => runAction(action, ctx.async, input)),
+    normalizeAction: (action) => (ctx, input) => runAction(action, ctx.async, input),
   });
 
   return normalized as unknown as Driver<
@@ -87,110 +71,16 @@ export function createAsyncDriver<
 function normalizeAsyncLiveResource<TNode extends object>(
   live: AsyncLiveResourceDescriptor<TNode, unknown>
 ): NormalizedLiveResource<TNode> {
-  const resource = {
-    start: (ctx, demand, options) =>
-      runAsyncLiveStart(ctx.async, (liveCtx) => live.start(liveCtx, demand), options),
-    stop: (ctx, resource) => runAsyncLiveVoid(ctx.async, () => live.stop(ctx.async, resource)),
-  } satisfies NormalizedLiveResource<TNode>;
-
-  return live.update === undefined
-    ? resource
-    : {
-        ...resource,
-        update: (ctx, liveResource, demand) =>
-          runAsyncLiveVoid(ctx.async, (liveCtx) => live.update?.(liveCtx, liveResource, demand)),
-      };
-}
-
-// Single shared try/Promise-unwrap that all four runAsync* variants delegate to.
-// The variants only differ in how the sync-return path is finalized, so they
-// each pass an `onSync` callback that produces the final Effect.
-function runAsync<TIn, TOut>(
-  run: () => TIn | Promise<TIn> | undefined,
-  onSync: (value: TIn | undefined) => Effect.Effect<TOut, AsyncDriverHookFailed>
-): Effect.Effect<TOut, AsyncDriverHookFailed> {
-  return Effect.try({
-    try: run,
-    catch: (cause) => new AsyncDriverHookFailed(cause),
-  }).pipe(
-    Effect.flatMap((result) =>
-      isPromiseLike<TOut>(result)
-        ? Effect.tryPromise({
-            try: () => result,
-            catch: (cause) => new AsyncDriverHookFailed(cause),
-          })
-        : onSync(result as TIn | undefined)
-    )
-  );
-}
-
-const succeedSync = <TOut>(value: unknown): Effect.Effect<TOut, AsyncDriverHookFailed> =>
-  Effect.succeed(value as TOut);
-
-const succeedVoid = (): Effect.Effect<void, AsyncDriverHookFailed> => Effect.void;
-
-function runAsyncResult<TValue>(
-  run: () => AsyncDriverResult<TValue> | undefined
-): Effect.Effect<TValue | ResultCommit<TValue>, AsyncDriverHookFailed> {
-  return runAsync<TValue | ResultCommit<TValue>, TValue | ResultCommit<TValue>>(
-    run as () => TValue | ResultCommit<TValue> | Promise<TValue | ResultCommit<TValue>> | undefined,
-    succeedSync
-  );
-}
-
-function runAsyncLiveStart<TNode extends object, TValue>(
-  ctx: AsyncLiveContext<TNode>,
-  run: (ctx: AsyncLiveContext<TNode>) => TValue | Promise<TValue>,
-  options: NormalizedLiveStartOptions | undefined
-): Effect.Effect<TValue, AsyncDriverHookFailed> {
-  const onAbandonedResource = options?.onAbandonedResource;
-  // Hazard: interrupting an Effect built from a promise abandons the promise —
-  // it keeps running and can still settle with a real resource. Retain the
-  // promise so an interrupted start routes that late resource to the caller
-  // instead of dropping it (the caller stops it; see startLiveResource).
-  let pending: Promise<TValue> | undefined;
-
-  const start = Effect.tryPromise({
-    try: (signal) => {
-      pending = Promise.resolve(run({ ...ctx, signal }));
-      return pending;
-    },
-    catch: (cause) => new AsyncDriverHookFailed(cause),
-  });
-
-  return onAbandonedResource === undefined
-    ? start
-    : start.pipe(
-        Effect.onInterrupt(() =>
-          Effect.sync(() => {
-            pending?.then(
-              (resource) => onAbandonedResource(resource),
-              () => undefined
-            );
-          })
-        )
-      );
-}
-
-function runAsyncVoid(
-  run: () => AsyncDriverVoidResult | undefined
-): Effect.Effect<void, AsyncDriverHookFailed> {
-  return runAsync<void, void>(run as () => void | Promise<void> | undefined, succeedVoid);
-}
-
-function runAsyncLiveVoid<TNode extends object>(
-  ctx: AsyncLiveContext<TNode>,
-  run: (
-    ctx: AsyncLiveContext<TNode> | AsyncLiveStopContext<TNode>
-  ) => AsyncDriverVoidResult | undefined
-): Effect.Effect<void, AsyncDriverHookFailed> {
-  return runAsyncWithAbortSignal<void, void>((signal) => run({ ...ctx, signal }), succeedVoid);
-}
-
-function runAsyncAction<TValue>(
-  run: () => AsyncDriverActionResult<TValue> | undefined
-): Effect.Effect<TValue, AsyncDriverHookFailed> {
-  return runAsync<TValue, TValue>(run as () => TValue | Promise<TValue> | undefined, succeedSync);
+  const resource: NormalizedLiveResource<TNode> = {
+    start: (ctx, demand) => live.start(ctx.async, demand),
+    stop: (ctx, resource) => live.stop(ctx.async, resource),
+  };
+  if (live.update === undefined) return resource;
+  return {
+    start: resource.start,
+    stop: resource.stop,
+    update: (ctx, value, demand) => live.update?.(ctx.async, value, demand),
+  };
 }
 
 function runAction<TAction>(
@@ -214,23 +104,4 @@ function runAction<TAction>(
       : (action as (ctx: unknown, input: unknown) => AsyncDriverActionResult<unknown> | undefined);
 
   return run(ctx, input);
-}
-
-function isPromiseLike<TValue>(value: unknown): value is Promise<TValue> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "then" in value &&
-    typeof (value as { readonly then?: unknown }).then === "function"
-  );
-}
-
-function runAsyncWithAbortSignal<TIn, TOut>(
-  run: (signal: AbortSignal) => TIn | Promise<TIn> | undefined,
-  onSync: (value: TIn | undefined) => Effect.Effect<TOut, AsyncDriverHookFailed>
-): Effect.Effect<TOut, AsyncDriverHookFailed> {
-  return Effect.tryPromise({
-    try: (signal) => Promise.resolve(run(signal)),
-    catch: (cause) => new AsyncDriverHookFailed(cause),
-  }).pipe(Effect.flatMap(onSync));
 }

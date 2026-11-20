@@ -1,5 +1,7 @@
-import { Effect } from "effect";
+import type { Effect } from "effect";
 import type { RuntimeActionEffectExecutor, RuntimeActionExecutor } from "../../node/runtime";
+import { corePromise } from "../../runtime/promiseFacade";
+import type { CoreCall } from "../queue/reply";
 import type { ActionResult, NodeId } from "../types";
 
 export type NodeActionRunner = (
@@ -8,12 +10,13 @@ export type NodeActionRunner = (
   input: unknown
 ) => Effect.Effect<ActionResult>;
 
-/** Bridges graph-native action execution to the Promise API exposed by user node methods. */
+/** One Promise over the same callback submission used by the Effect facade. */
 export function bridgeNodeActionRunner(
-  runAction: NodeActionRunner,
+  runAction: CoreCall<NodeActionRunner>,
   nodeId: NodeId
 ): RuntimeActionExecutor {
-  return (action, input) => Effect.runPromise(runAction(nodeId, action, input));
+  return (action, input) =>
+    corePromise((resume) => runAction(nodeId, action, input, undefined, resume), actionValue);
 }
 
 /**
@@ -30,4 +33,17 @@ export function bridgeNodeActionEffectRunner(
   nodeId: NodeId
 ): RuntimeActionEffectExecutor {
   return (action, input) => runAction(nodeId, action, input);
+}
+
+function actionValue(result: ActionResult): unknown {
+  switch (result._tag) {
+    case "Success":
+      return result.value;
+    case "Failure":
+      throw result.error;
+    default: {
+      const exhaustive: never = result;
+      return exhaustive;
+    }
+  }
 }

@@ -12,32 +12,39 @@ export interface GraphCellStateReader<TState> {
 }
 
 export interface GraphCellState<TState> extends GraphCellStateReader<TState> {
+  readonly updateSync: <A>(mutate: (state: TState) => A) => A;
+  readonly transitionSync: <A>(map: (state: TState) => readonly [A, TState]) => A;
   readonly replace: (next: TState) => Effect.Effect<void>;
   readonly transition: <A>(map: (state: TState) => readonly [A, TState]) => Effect.Effect<A>;
 }
 
-// Writes are owned by serialized cell-actor operations; getSync is for passive projection only.
+// Writes are owned by serialized cell-queue operations; getSync is for passive projection only.
 export function makeGraphCellState<TState>(
   initial: TState,
   initialRevision = 0
 ): GraphCellState<TState> {
   let current = initial;
   let revision = initialRevision;
+  const replaceSync = (next: TState): void => {
+    current = next;
+    revision += 1;
+  };
+  const transitionSync = <A>(map: (state: TState) => readonly [A, TState]): A => {
+    const [value, next] = map(current);
+    replaceSync(next);
+    return value;
+  };
 
   return {
+    updateSync: (mutate) => {
+      const value = mutate(current);
+      revision += 1;
+      return value;
+    },
+    transitionSync,
     get: Effect.sync(() => current),
-    replace: (next) =>
-      Effect.sync(() => {
-        current = next;
-        revision += 1;
-      }),
-    transition: (map) =>
-      Effect.sync(() => {
-        const [value, next] = map(current);
-        current = next;
-        revision += 1;
-        return value;
-      }),
+    replace: (next) => Effect.sync(() => replaceSync(next)),
+    transition: (map) => Effect.sync(() => transitionSync(map)),
     getSync: () => current,
     getRevisionSync: () => revision,
   };

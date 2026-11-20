@@ -1,5 +1,5 @@
 import { Context, type Effect } from "effect";
-import type { NodeRead, NodeRequest, PendingNodeOperation } from "../../graph";
+import type { NodeId, NodeRead, NodeRequest, PendingNodeOperation } from "../../graph";
 import type {
   RuntimeSignal,
   RuntimeSignalSubscriber,
@@ -59,7 +59,10 @@ export interface RuntimeHostService {
     subscriber: RuntimeSignalSubscriber
   ) => Effect.Effect<RuntimeSignalSubscription, RuntimeError>;
   readonly getSnapshot: () => Effect.Effect<RuntimeSnapshot>;
-  readonly observe: (observer: RuntimeObserver) => Effect.Effect<RuntimeSubscription>;
+  readonly observe: (
+    observer: RuntimeObserver,
+    nodeId?: NodeId
+  ) => Effect.Effect<RuntimeSubscription>;
 }
 
 export class FrondRuntime extends Context.Service<FrondRuntime, RuntimeHostService>()(

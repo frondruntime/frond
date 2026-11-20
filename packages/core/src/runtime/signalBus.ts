@@ -1,4 +1,4 @@
-import { Clock, Effect } from "effect";
+import { Effect } from "effect";
 import { effectBoundaryFailed } from "../graph/driverExecution/effectBoundary";
 import type {
   RuntimeSignal,
@@ -14,12 +14,19 @@ import { signalSpanAttributes, withRuntimeSpan } from "./observability";
 import type { RuntimeSignalPolicyRegistry } from "./options";
 import type { RuntimeId, RuntimeWorkContext } from "./types";
 
+interface SignalBusCore extends RuntimeSignalBusService {
+  readonly recordsSync: (query?: RuntimeSignalQuery) => ReadonlyArray<RuntimeSignalRecord>;
+  readonly subscribersSync: () => ReadonlyArray<string>;
+  readonly subscribeSync: (subscriber: RuntimeSignalSubscriber) => RuntimeSignalSubscription;
+}
+
 export function makeRuntimeSignalBus(input: {
   readonly runtimeId: RuntimeId;
+  readonly syncClock: { readonly now: () => number };
   readonly eventBus: RuntimeEventBus;
   readonly policies: RuntimeSignalPolicyRegistry;
   readonly subscribers: ReadonlyArray<RuntimeSignalSubscriber>;
-}): RuntimeSignalBusService {
+}): SignalBusCore {
   const recordsByChannel = new Map<RuntimeSignal["channel"], Array<RuntimeSignalRecord>>();
   const subscribers = new Set<RuntimeSignalSubscriber>(input.subscribers);
   // Snapshot of `subscribers`, rebuilt only on (un)subscribe so each publish
@@ -74,7 +81,7 @@ export function makeRuntimeSignalBus(input: {
       Effect.suspend(() => subscriber.handle(record)).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
-            const at = yield* Clock.currentTimeMillis;
+            const at = input.syncClock.now();
             yield* input.eventBus.emit(
               {
                 _tag: "RuntimeSignalSubscriberFailureObserved",
@@ -97,14 +104,25 @@ export function makeRuntimeSignalBus(input: {
       })
     );
 
-  const read = (query?: RuntimeSignalQuery | undefined) =>
-    Effect.sync(() => queryRecords(recordsByChannel, query));
+  const recordsSync = (query?: RuntimeSignalQuery) => queryRecords(recordsByChannel, query);
+  const subscribersSync = () => subscriberList.map((subscriber) => subscriber.name);
+  const subscribeSync = (subscriber: RuntimeSignalSubscriber): RuntimeSignalSubscription => {
+    subscribers.add(subscriber);
+    subscriberList = [...subscribers];
+    return {
+      unsubscribe: () => {
+        subscribers.delete(subscriber);
+        subscriberList = [...subscribers];
+      },
+    };
+  };
+  const read = (query?: RuntimeSignalQuery) => Effect.sync(() => recordsSync(query));
 
   return {
     publish: (signal, work) =>
       withRuntimeSpan(
         Effect.gen(function* () {
-          const recordedAt = yield* Clock.currentTimeMillis;
+          const recordedAt = input.syncClock.now();
           sequence += 1;
           const record: RuntimeSignalRecord = {
             runtimeId: input.runtimeId,
@@ -129,20 +147,12 @@ export function makeRuntimeSignalBus(input: {
         signalSpanAttributes({ runtimeId: input.runtimeId, signal, work })
       ),
     readRetained: read,
-    subscribe: (subscriber) =>
-      Effect.sync(() => {
-        subscribers.add(subscriber);
-        subscriberList = [...subscribers];
-
-        return {
-          unsubscribe: () => {
-            subscribers.delete(subscriber);
-            subscriberList = [...subscribers];
-          },
-        } satisfies RuntimeSignalSubscription;
-      }),
+    recordsSync,
+    subscribersSync,
+    subscribeSync,
+    subscribe: (subscriber) => Effect.sync(() => subscribeSync(subscriber)),
     records: read,
-    subscribers: () => Effect.sync(() => [...subscribers].map((subscriber) => subscriber.name)),
+    subscribers: () => Effect.sync(subscribersSync),
   };
 }
 

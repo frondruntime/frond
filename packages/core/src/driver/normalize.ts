@@ -1,4 +1,3 @@
-import type { Effect } from "effect";
 import type { ResultValidityPolicy } from "../graph/types";
 import { makeDriverActionRegistry, normalizeDriverHook } from "./capabilities";
 import type {
@@ -7,6 +6,7 @@ import type {
   DriverActionRegistry,
   DriverActionRun,
   DriverMode,
+  DriverRunResult,
   NormalizedAcquireDriverContext,
   NormalizedDisposeContext,
   NormalizedDriverContext,
@@ -32,17 +32,17 @@ export function buildNormalizedDriver<
   readonly resultPatch?: import("./types").ResultPatchOptions | undefined;
   readonly acquire: (
     ctx: NormalizedAcquireDriverContext<TArgs, TDeps, TResult>
-  ) => Effect.Effect<TResult | ResultCommit<TResult>, unknown>;
+  ) => DriverRunResult<TResult | ResultCommit<TResult>>;
   readonly release?: TRelease | undefined;
   readonly refresh?: TRefresh | undefined;
   readonly live?: TLive | undefined;
   readonly actions?: TActionMap | undefined;
   readonly normalizeRelease: (
     hook: TRelease
-  ) => (ctx: NormalizedDisposeContext<TNode>) => Effect.Effect<void, unknown>;
+  ) => (ctx: NormalizedDisposeContext<TNode>) => DriverRunResult<void>;
   readonly normalizeRefresh: (
     hook: TRefresh
-  ) => (ctx: NormalizedDriverContext<TNode, TArgs, TDeps, TResult>) => Effect.Effect<void, unknown>;
+  ) => (ctx: NormalizedDriverContext<TNode, TArgs, TDeps, TResult>) => DriverRunResult<void>;
   readonly normalizeLive: (hook: TLive) => NormalizedLiveResource<TNode>;
   readonly normalizeAction: (action: TAction) => DriverActionRun<TNode, TArgs, TDeps, TResult>;
 }): Driver<TNode, TArgs, TDeps, TResult, TActions> {

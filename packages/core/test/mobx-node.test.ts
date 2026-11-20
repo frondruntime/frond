@@ -1,6 +1,6 @@
-import { describe, expect, test } from "bun:test";
-import { Deferred, Effect, Match } from "effect";
-import { autorun, observable, onBecomeObserved, onBecomeUnobserved } from "mobx";
+import { describe, expect, spyOn, test } from "bun:test";
+import { Deferred, Effect, Exit, Match } from "effect";
+import { autorun, observable, onBecomeObserved, onBecomeUnobserved, spy } from "mobx";
 import { Driver, Key, unwrapEffect } from "../src";
 import { ActionFailed, GraphInvariantViolation, type NodeId, resultCommit } from "../src/graph";
 import { createNode } from "../src/mobx";
@@ -15,7 +15,12 @@ import {
   resourceSpec,
   serviceSpec,
 } from "../src/node";
-import { createRuntime } from "../src/runtime";
+import {
+  createRuntime,
+  FrondRuntimeInvariantViolation,
+  type RuntimeSubmission,
+} from "../src/runtime";
+import { runtimeCore } from "../src/runtime/core";
 import { waitForRuntimeEvent, waitForRuntimeEventCount } from "../src/testing";
 
 type Profile = {
@@ -92,6 +97,244 @@ class ProfileNode extends NodeBase<ProfileSpec> {
 }
 
 describe("MobX node projection", () => {
+  test("real runtime sync reads and publishes before its Promise is awaited", async () => {
+    const runtime = createRuntime();
+    await runtime.submit({ _tag: "RuntimeStart" });
+    await runtime.client.node(ProfileNode, {}).ensureReady();
+    const projection = createNode(runtime, ProfileNode, {}, { autoSync: false });
+    const syncRead = spyOn(runtime, "readNodeSnapshotSync");
+    const asyncRead = spyOn(runtime, "readNodeSnapshot");
+
+    try {
+      const synced = projection.sync();
+      expect(synced).toBeInstanceOf(Promise);
+      expect(projection.result?.timezone).toBe("UTC");
+      expect(syncRead).toHaveBeenCalledTimes(1);
+      expect(asyncRead).not.toHaveBeenCalled();
+      await synced;
+    } finally {
+      projection.dispose();
+      syncRead.mockRestore();
+      asyncRead.mockRestore();
+    }
+  });
+
+  test("a spread runtime wrapper keeps the asynchronous read even with a sync method", async () => {
+    const runtime = createRuntime();
+    await runtime.submit({ _tag: "RuntimeStart" });
+    await runtime.client.node(ProfileNode, {}).ensureReady();
+    const wrapper = { ...runtime };
+    const syncRead = spyOn(wrapper, "readNodeSnapshotSync");
+    const asyncRead = spyOn(wrapper, "readNodeSnapshot");
+    const projection = createNode(wrapper, ProfileNode, {}, { autoSync: false });
+
+    try {
+      const synced = projection.sync();
+      expect(projection.result).toBeUndefined();
+      expect(syncRead).not.toHaveBeenCalled();
+      expect(asyncRead).toHaveBeenCalledTimes(1);
+      await synced;
+      expect(projection.result?.timezone).toBe("UTC");
+    } finally {
+      projection.dispose();
+      syncRead.mockRestore();
+      asyncRead.mockRestore();
+    }
+  });
+
+  test("a proxy of the runtime keeps the asynchronous read through its own traps", async () => {
+    const runtime = createRuntime();
+    await runtime.submit({ _tag: "RuntimeStart" });
+    await runtime.client.node(ProfileNode, {}).ensureReady();
+    const trapped: Array<PropertyKey> = [];
+    const proxy = new Proxy(runtime, {
+      get(target, property, receiver) {
+        trapped.push(property);
+        if (property === "readNodeSnapshot")
+          return async (nodeId: NodeId) => ({ _tag: "Missing", nodeId }) as const;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const projection = createNode(proxy, ProfileNode, {}, { autoSync: false });
+
+    try {
+      await projection.sync();
+      expect(trapped).toContain("readNodeSnapshot");
+      expect(trapped).not.toContain("readNodeSnapshotSync");
+      expect(projection.status._tag).toBe("Unwired");
+      expect(projection.result).toBeUndefined();
+    } finally {
+      projection.dispose();
+    }
+  });
+
+  test("looking up the runtime core reads no symbol property of a proxied runtime", async () => {
+    const runtime = createRuntime();
+    await runtime.submit({ _tag: "RuntimeStart" });
+    const symbolReads: Array<symbol> = [];
+    const observed = new Proxy(runtime, {
+      get(target, property, receiver) {
+        if (typeof property === "symbol") symbolReads.push(property);
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const projection = createNode(observed, ProfileNode, {}, { autoSync: false });
+
+    try {
+      expect(symbolReads).toEqual([]);
+    } finally {
+      projection.dispose();
+    }
+  });
+
+  test("a proxied runtime that rejects symbol keys still builds a projection", async () => {
+    const runtime = createRuntime();
+    await runtime.submit({ _tag: "RuntimeStart" });
+    const strict = new Proxy(runtime, {
+      get(target, property, receiver) {
+        if (typeof property === "symbol") throw new TypeError("symbol keys are not supported");
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    const projection = createNode(strict, ProfileNode, {}, { autoSync: false });
+    projection.dispose();
+  });
+
+  test("a direct submission with the wrong tag rejects with a plain Error", async () => {
+    const runtime = createRuntime();
+    await runtime.submit({ _tag: "RuntimeStart" });
+    await runtime.client.node(ProfileNode, {}).ensureReady();
+    const core = runtimeCore(runtime);
+    if (core === undefined) throw new Error("Expected a runtime core");
+    const submit = spyOn(core, "submit").mockImplementation((_command, _context, resume) => {
+      resume(Exit.succeed({ _tag: "RuntimeStarted" } as unknown as RuntimeSubmission));
+      return () => Effect.void;
+    });
+    const projection = createNode(runtime, ProfileNode, {}, { autoSync: false });
+
+    try {
+      const rejection = await projection.refresh().then(
+        () => undefined,
+        (cause: unknown) => cause
+      );
+      expect(rejection).toBeInstanceOf(Error);
+      expect(rejection).not.toBeInstanceOf(FrondRuntimeInvariantViolation);
+      expect((rejection as Error).message).toBe(
+        "Expected runtime submission GraphRefreshCompleted"
+      );
+    } finally {
+      projection.dispose();
+      submit.mockRestore();
+    }
+  });
+
+  test("coalesces a node's event burst into one synchronous read and MobX action", async () => {
+    const runtime = createRuntime();
+    await runtime.submit({ _tag: "RuntimeStart" });
+    const handle = runtime.client.node(ProfileNode, {});
+    await handle.ensureReady();
+    const record = runtime
+      .getSnapshotSync()
+      .events.find((event) => event.nodeIds.includes(handle.nodeId));
+    if (record === undefined) throw new Error("Expected a profile runtime event");
+    const observe = spyOn(runtime, "observe");
+    const projection = createNode(runtime, ProfileNode, {}, { autoSync: false });
+    const unrelated = createNode(runtime, TransportNode, {}, { autoSync: false });
+    const observer = observe.mock.calls[0]?.[0];
+    if (observer === undefined) throw new Error("Expected a projection observer");
+    const syncRead = spyOn(runtime, "readNodeSnapshotSync");
+    let actions = 0;
+    const stopSpy = spy((event) => {
+      if (event.type === "action") actions++;
+    });
+
+    try {
+      expect(observe).toHaveBeenCalledTimes(1);
+      for (let i = 0; i < 5; i++) observer(record);
+      expect(syncRead).not.toHaveBeenCalled();
+      await Promise.resolve();
+      expect(syncRead).toHaveBeenCalledTimes(1);
+      expect(syncRead).toHaveBeenCalledWith(projection.nodeId);
+      expect(actions).toBe(1);
+      expect(projection.result?.timezone).toBe("UTC");
+      expect(unrelated.snapshot).toBeUndefined();
+
+      // Explicit sync consumes pending event work instead of doing a second read.
+      observer(record);
+      await projection.sync();
+      expect(syncRead).toHaveBeenCalledTimes(2);
+      expect(actions).toBe(2);
+
+      observer(record);
+      projection.dispose();
+      await Promise.resolve();
+      expect(syncRead).toHaveBeenCalledTimes(2);
+      unrelated.dispose();
+
+      // Last-listener cleanup allows a later projection to subscribe anew.
+      const replacement = createNode(runtime, ProfileNode, {}, { autoSync: false });
+      expect(observe).toHaveBeenCalledTimes(2);
+      replacement.dispose();
+    } finally {
+      stopSpy();
+      projection.dispose();
+      unrelated.dispose();
+      observe.mockRestore();
+      syncRead.mockRestore();
+    }
+  });
+
+  test("an event syncs the projection while queueMicrotask callbacks are held, as Jest fake timers do", async () => {
+    const runtime = createRuntime();
+    await runtime.submit({ _tag: "RuntimeStart" });
+    const handle = runtime.client.node(ProfileNode, {});
+    await handle.ensureReady();
+    const record = runtime
+      .getSnapshotSync()
+      .events.find((event) => event.nodeIds.includes(handle.nodeId));
+    if (record === undefined) throw new Error("Expected a profile runtime event");
+    const observe = spyOn(runtime, "observe");
+    const projection = createNode(runtime, ProfileNode, {}, { autoSync: false });
+    const observer = observe.mock.calls[0]?.[0];
+    if (observer === undefined) throw new Error("Expected a projection observer");
+    const held = spyOn(globalThis, "queueMicrotask").mockImplementation(() => {});
+
+    try {
+      observer(record);
+      await Promise.resolve();
+      expect(projection.result?.timezone).toBe("UTC");
+    } finally {
+      held.mockRestore();
+      projection.dispose();
+      observe.mockRestore();
+    }
+  });
+
+  test("runAction publishes its final commit with event observation disabled", async () => {
+    const runtime = createRuntime();
+    const projection = createNode(
+      runtime,
+      ProfileNode,
+      {},
+      {
+        autoSync: false,
+        observeRuntimeEvents: false,
+      }
+    );
+    try {
+      await runtime.submit({ _tag: "RuntimeStart" });
+      await projection.ensureReady();
+      const result = await projection.runAction("updateTimezone", { timezone: "CET" });
+      expect(result._tag).toBe("Success");
+      expect(projection.result?.timezone).toBe("CET");
+      expect(projection.node.timezone).toBe("CET");
+      expect(projection.busy).toBe(false);
+    } finally {
+      projection.dispose();
+    }
+  });
+
   test("mirrors runtime readiness into observable node state", async () => {
     const runtime = createRuntime();
     const projection = createNode(runtime, ProfileNode, {});
@@ -984,6 +1227,8 @@ describe("MobX node projection", () => {
       _tag: "GraphEnsureNode",
       request: { spec: ConflictingInvalidatedObservationNode, args: {} },
     });
+    // Invalidation teardown and the observation release now post queue jobs.
+    await waitForRuntimeEventCount(runtime, "GraphNodeLiveDemandChanged", 2);
     await projection.sync();
 
     expect(projection.snapshot?.liveDemand).toEqual({

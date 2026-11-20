@@ -1,10 +1,14 @@
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 import { createRuntimeClient, type RuntimeEffectBridgeRunner } from "./client";
+import { attachRuntimeCore, resolveValidatedNodeIdSlot, runtimeCore } from "./core";
+import { FrondRuntimeInvariantViolation } from "./errors";
 import { makeRuntimeHost } from "./host";
+import { corePromise, promiseRejection } from "./promiseFacade";
 import type {
   Runtime,
   RuntimeCommand,
   RuntimeControl,
+  RuntimeError,
   RuntimeHostService,
   RuntimeInput,
   RuntimeObserver,
@@ -13,26 +17,30 @@ import type {
   RuntimeQuery,
   RuntimeSignal,
   RuntimeSignalSubscriber,
+  RuntimeSubmission,
   RuntimeWorkMetadata,
 } from "./types";
 
 const defaultBridgeRunner: RuntimeEffectBridgeRunner = {
-  run: (effect) => Effect.runPromise(effect),
+  run: (effect) =>
+    Effect.runPromiseExit(effect).then((exit) => {
+      if (Exit.isSuccess(exit)) return exit.value;
+      throw promiseRejection(exit.cause);
+    }),
   runSync: (effect) => Effect.runSync(effect),
 };
 
 /**
  * Creates the Promise/sync runtime facade used by apps and adapters.
  *
- * Boundary: runtime internals stay Effect-native. This function runs host
- * construction once and bridges host commands for consumer code.
+ * Host construction runs once; commands call its queue-backed core directly.
  */
 export function createRuntime(options: RuntimeOptions = {}): Runtime {
   return bridgeRuntimeHost(defaultBridgeRunner.runSync(makeRuntimeHost(options)));
 }
 
 /**
- * Bridges an Effect-native runtime host to the public runtime facade.
+ * Exposes the host's core through the public Promise facade.
  *
  * Use this at explicit consumer boundaries, such as app setup or tests. Runtime
  * graph code should use `RuntimeHostService` directly.
@@ -41,30 +49,50 @@ export function bridgeRuntimeHost(
   host: RuntimeHostService,
   runner: RuntimeEffectBridgeRunner = defaultBridgeRunner
 ): Runtime {
+  const core = runtimeCore(host);
+  if (core === undefined)
+    throw new FrondRuntimeInvariantViolation({
+      message: "bridgeRuntimeHost requires a host built by makeRuntimeHost.",
+      cause: host,
+    });
   const runtimeHost = {
     resolveNodeIdSync: host.resolveNodeIdSync,
     getStatusSync: host.getStatusSync,
     readNodeSnapshotSync: host.readNodeSnapshotSync,
     readNodeRevisionSync: host.readNodeRevisionSync,
     readNodeSnapshot: (nodeId: Parameters<RuntimeHostService["readNodeSnapshot"]>[0]) =>
-      runner.run(host.readNodeSnapshot(nodeId)),
-    submit: (command: RuntimeCommand) => runner.run(host.submit(command)),
-    control: (control: RuntimeControl) => runner.run(host.control(control)),
-    query: (query: RuntimeQuery) => runner.run(host.query(query)),
-    ingest: (input: RuntimeInput) => runner.run(host.ingest(input)),
+      Promise.resolve(host.readNodeSnapshotSync(nodeId)),
+    submit: (command: RuntimeCommand) =>
+      corePromise<RuntimeSubmission, RuntimeError>(
+        (resume) => core.submit(command, undefined, resume),
+        undefined,
+        command.metadata?.signal
+      ),
+    control: (control: RuntimeControl) =>
+      corePromise<void, RuntimeError>((resume) => core.control(control, undefined, resume)),
+    query: async (query: RuntimeQuery) => core.querySync(query),
+    ingest: (input: RuntimeInput) =>
+      corePromise<void, RuntimeError>((resume) => core.ingest(input, undefined, resume)),
     publish: (signal: RuntimeSignal, metadata?: RuntimeWorkMetadata | undefined) =>
-      runner.run(host.publish(signal, metadata)),
+      corePromise<void, RuntimeError>((resume) =>
+        core.publish(signal, metadata, undefined, resume)
+      ),
     recordUnsafeScheduleFailure: (command: RuntimeCommand, cause: unknown) =>
-      runner.run(host.recordUnsafeScheduleFailure(command, cause)),
+      corePromise<void, never>((resume) =>
+        core.recordUnsafeScheduleFailure(command, cause, undefined, resume)
+      ),
     recordMobXProjectionFailure: (
       nodeId: Parameters<RuntimeHostService["recordMobXProjectionFailure"]>[0],
       cause: unknown
-    ) => runner.run(host.recordMobXProjectionFailure(nodeId, cause)),
-    subscribeSignals: (subscriber: RuntimeSignalSubscriber) =>
-      runner.run(host.subscribeSignals(subscriber)),
-    getSnapshotSync: () => runner.runSync(host.getSnapshot()),
-    getSnapshot: () => runner.run(host.getSnapshot()),
-    observe: (observer: RuntimeObserver) => runner.runSync(host.observe(observer)),
+    ) =>
+      corePromise<void, never>((resume) =>
+        core.recordMobXProjectionFailure(nodeId, cause, undefined, resume)
+      ),
+    subscribeSignals: async (subscriber: RuntimeSignalSubscriber) =>
+      core.subscribeSignalsSync(subscriber),
+    getSnapshotSync: () => core.getSnapshotSync(),
+    getSnapshot: async () => core.getSnapshotSync(),
+    observe: (observer: RuntimeObserver) => core.observeSync(observer),
   };
 
   // Quiescence READ, not a barrier: the narrow graph scan projects only each
@@ -74,12 +102,20 @@ export function bridgeRuntimeHost(
   const pendingOperations = (): ReadonlyArray<RuntimePendingOperation> =>
     host.readPendingOperationsSync();
 
-  return {
+  const runtime: Runtime = {
     ...runtimeHost,
     pendingOperations,
     isQuiescent: () => pendingOperations().length === 0,
-    // The client is built over the Effect-native host directly (not the Promise
-    // facade above) and owns its own Effect→Promise bridging via the runner.
+    // Handles share the host core and retain its Effect surface for Effect callers.
     client: createRuntimeClient(host, runner),
   };
+  attachRuntimeCore(runtime, core);
+  // Lets an adapter that already canonicalized args skip the second pass.
+  Object.defineProperty(runtime, resolveValidatedNodeIdSlot, {
+    value: { owner: runtime, resolve: core.resolveValidatedNodeIdSync },
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  return runtime;
 }

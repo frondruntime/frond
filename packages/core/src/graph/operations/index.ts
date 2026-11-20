@@ -8,5 +8,4 @@ export {
   makeMissingUnsafeUpdateNodeFailure,
   makeRefreshFailure,
 } from "./operationFailures";
-export { refreshInCell } from "./refreshOperation";
 export { unsafeUpdateNodeInCell } from "./unsafeUpdateOperation";

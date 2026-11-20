@@ -5,6 +5,7 @@ export function updateReadyNodeRuntimeState(input: {
   readonly args?: unknown | undefined;
   readonly deps?: object | undefined;
   readonly result?: unknown | undefined;
+  readonly resultPatched?: true | undefined;
 }): void {
   asRuntimeReadyNodeControl<unknown, object, unknown>(input.node)?._updateRuntimeReadyState(input);
 }

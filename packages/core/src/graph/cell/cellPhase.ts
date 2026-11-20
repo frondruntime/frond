@@ -1,6 +1,7 @@
-import { type Deferred, Match } from "effect";
+import type { Effect } from "effect";
 import type { DisposerRegistry } from "../lifecycle/disposers";
 import { idleOperation } from "../operations/nodeOperation";
+import type { GraphCellTask } from "../queue/reply";
 import type {
   ActiveNodeLiveDemandSnapshot,
   NodeLiveDemandSnapshot,
@@ -19,9 +20,9 @@ import type {
 
 export type ActiveCellOperation = Extract<NodeOperation, { readonly _tag: "Running" }>;
 
-export interface CellReadinessAttempt {
+export interface CellReadinessAttempt extends GraphCellTask<NodeRead> {
   readonly attemptId: number;
-  readonly deferred: Deferred.Deferred<NodeRead>;
+  readonly await: Effect.Effect<NodeRead>;
   readonly promise: Promise<NodeRead>;
   readonly resolve: (handle: NodeRead) => void;
 }
@@ -34,7 +35,8 @@ export interface CellLiveLease {
 }
 
 export interface CellBase {
-  readonly args: unknown;
+  readonly previousResult?: { readonly result: unknown } | undefined;
+  args: unknown;
   readonly liveLeases: ReadonlyArray<CellLiveLease>;
   readonly resultValidity?: ResultValidity | undefined;
   readonly liveFailure?: NodeLiveFailure | undefined;
@@ -53,10 +55,10 @@ export type LiveResourceState =
 
 export interface ReadyData extends CellBase {
   readonly node: object;
-  readonly deps: Readonly<Record<string, object>>;
-  readonly result: unknown;
-  readonly resultValidity: ResultValidity;
-  readonly resultLoadedAt?: number | undefined;
+  deps: Readonly<Record<string, object>>;
+  result: unknown;
+  resultValidity: ResultValidity;
+  resultLoadedAt?: number | undefined;
   readonly resultValidityPolicy: NormalizedResultValidityPolicy;
   // Ownership: the incarnation's disposer registry handed off by the acquire
   // operation bag. Later operation commits append into the same registry so
@@ -76,7 +78,7 @@ export type CellPhaseBaseLookup =
     }
   | {
       readonly _tag: "Missing";
-      readonly phase: "Invalid" | "Evicted";
+      readonly phase: "Invalid";
     };
 
 export type CellPhaseReadyLookup =
@@ -146,18 +148,9 @@ export type CellPhase =
       readonly operation: ActiveCellOperation;
     }
   | {
-      readonly _tag: "Releasing";
-      readonly base: CellBase;
-      readonly cleanupFailure?: unknown | undefined;
-    }
-  | {
       readonly _tag: "Invalid";
       readonly base?: CellBase | undefined;
       readonly error: unknown;
-    }
-  | {
-      readonly _tag: "Evicted";
-      readonly reason?: string | undefined;
     };
 
 export type CellPhaseProjection =
@@ -175,9 +168,6 @@ export type CellPhaseProjection =
       readonly _tag: "Ready";
       readonly result: unknown;
       readonly node: object;
-    } & CellPhaseProjectionBase)
-  | ({
-      readonly _tag: "Releasing";
     } & CellPhaseProjectionBase)
   | {
       readonly _tag: "Invalid";
@@ -219,47 +209,53 @@ export function operatingCell(ready: ReadyData, operation: ActiveCellOperation):
   return { _tag: "Operating", ready, operation };
 }
 
-export function releasingCell(base: CellBase, cleanupFailure?: unknown | undefined): CellPhase {
-  return { _tag: "Releasing", base, cleanupFailure };
-}
-
 export function invalidCell(error: unknown, base?: CellBase | undefined): CellPhase {
   return { _tag: "Invalid", base, error };
 }
 
-export function evictedCell(reason?: string | undefined): CellPhase {
-  return { _tag: "Evicted", reason };
-}
-
 export function projectCellPhase(phase: CellPhase): CellPhaseProjection {
-  return Match.value(phase).pipe(
-    Match.tag("Idle", ({ base, cleanupFailure }) =>
-      projectedBase("Idle", base, { _tag: "Wired", run: { _tag: "Idle" } }, cleanupFailure)
-    ),
-    Match.tag("Acquiring", ({ base, attempt }) =>
-      projectedAcquiring(
+  switch (phase._tag) {
+    case "Idle": {
+      const { base, cleanupFailure } = phase;
+      return projectedBase("Idle", base, { _tag: "Wired", run: { _tag: "Idle" } }, cleanupFailure);
+    }
+    case "Acquiring": {
+      const { base, attempt } = phase;
+      return projectedAcquiring(
         base,
         {
           _tag: "Wired",
           run: { _tag: "Pending", attemptId: attempt.attemptId },
         },
         attempt
-      )
-    ),
-    Match.tag("ReadinessError", ({ base, error }) =>
-      projectedBase("ReadinessError", base, { _tag: "Wired", run: { _tag: "Error", error } }, error)
-    ),
-    Match.tag("Ready", ({ ready, operationFailure }) =>
-      projectedReady(ready, idleOperation, operationFailure)
-    ),
-    Match.tag("Operating", ({ ready, operation }) => projectedReady(ready, operation, undefined)),
-    Match.tag("Releasing", ({ base, cleanupFailure }) =>
-      projectedBase("Releasing", base, { _tag: "Wired", run: { _tag: "Idle" } }, cleanupFailure)
-    ),
-    Match.tag("Invalid", ({ base, error }) => projectedInvalid(error, base)),
-    Match.tag("Evicted", ({ reason }) => ({ _tag: "Removed", reason }) as const),
-    Match.exhaustive
-  );
+      );
+    }
+    case "ReadinessError": {
+      const { base, error } = phase;
+      return projectedBase(
+        "ReadinessError",
+        base,
+        { _tag: "Wired", run: { _tag: "Error", error } },
+        error
+      );
+    }
+    case "Ready": {
+      const { ready, operationFailure } = phase;
+      return projectedReady(ready, idleOperation, operationFailure);
+    }
+    case "Operating": {
+      const { ready, operation } = phase;
+      return projectedReady(ready, operation, undefined);
+    }
+    case "Invalid": {
+      const { base, error } = phase;
+      return projectedInvalid(error, base);
+    }
+    default: {
+      const unreachable: never = phase;
+      return unreachable;
+    }
+  }
 }
 
 export function phaseArgs(phase: CellPhase): unknown {
@@ -269,38 +265,67 @@ export function phaseArgs(phase: CellPhase): unknown {
 }
 
 export function phaseReadyData(phase: CellPhase): CellPhaseReadyLookup {
-  return Match.value(phase).pipe(
-    Match.tag("Idle", () => ({ _tag: "Missing", phase: "Idle" }) as const),
-    Match.tag("Acquiring", () => ({ _tag: "Missing", phase: "Acquiring" }) as const),
-    Match.tag("ReadinessError", () => ({ _tag: "Missing", phase: "ReadinessError" }) as const),
-    Match.tag("Ready", ({ ready }) => ({ _tag: "Found", ready }) as const),
-    Match.tag("Operating", ({ ready }) => ({ _tag: "Found", ready }) as const),
-    Match.tag("Releasing", () => ({ _tag: "Missing", phase: "Releasing" }) as const),
-    Match.tag("Invalid", () => ({ _tag: "Missing", phase: "Invalid" }) as const),
-    Match.tag("Evicted", () => ({ _tag: "Missing", phase: "Evicted" }) as const),
-    Match.exhaustive
-  );
+  switch (phase._tag) {
+    case "Idle": {
+      return { _tag: "Missing", phase: "Idle" } as const;
+    }
+    case "Acquiring": {
+      return { _tag: "Missing", phase: "Acquiring" } as const;
+    }
+    case "ReadinessError": {
+      return { _tag: "Missing", phase: "ReadinessError" } as const;
+    }
+    case "Ready": {
+      const { ready } = phase;
+      return { _tag: "Found", ready } as const;
+    }
+    case "Operating": {
+      const { ready } = phase;
+      return { _tag: "Found", ready } as const;
+    }
+    case "Invalid": {
+      return { _tag: "Missing", phase: "Invalid" } as const;
+    }
+    default: {
+      const unreachable: never = phase;
+      return unreachable;
+    }
+  }
 }
 
 export function phaseBase(phase: CellPhase): CellPhaseBaseLookup {
-  return Match.value(phase).pipe(
-    Match.tag("Idle", ({ base }) => ({ _tag: "Found", base }) as const),
-    Match.tag("Acquiring", ({ base }) => ({ _tag: "Found", base }) as const),
-    Match.tag("ReadinessError", ({ base }) => ({ _tag: "Found", base }) as const),
-    Match.tag("Ready", ({ ready }) => ({ _tag: "Found", base: cellBaseFromReady(ready) }) as const),
-    Match.tag(
-      "Operating",
-      ({ ready }) => ({ _tag: "Found", base: cellBaseFromReady(ready) }) as const
-    ),
-    Match.tag("Releasing", ({ base }) => ({ _tag: "Found", base }) as const),
-    Match.tag("Invalid", ({ base }) =>
-      base === undefined
+  switch (phase._tag) {
+    case "Idle": {
+      const { base } = phase;
+      return { _tag: "Found", base } as const;
+    }
+    case "Acquiring": {
+      const { base } = phase;
+      return { _tag: "Found", base } as const;
+    }
+    case "ReadinessError": {
+      const { base } = phase;
+      return { _tag: "Found", base } as const;
+    }
+    case "Ready": {
+      const { ready } = phase;
+      return { _tag: "Found", base: cellBaseFromReady(ready) } as const;
+    }
+    case "Operating": {
+      const { ready } = phase;
+      return { _tag: "Found", base: cellBaseFromReady(ready) } as const;
+    }
+    case "Invalid": {
+      const { base } = phase;
+      return base === undefined
         ? ({ _tag: "Missing", phase: "Invalid" } as const)
-        : ({ _tag: "Found", base } as const)
-    ),
-    Match.tag("Evicted", () => ({ _tag: "Missing", phase: "Evicted" }) as const),
-    Match.exhaustive
-  );
+        : ({ _tag: "Found", base } as const);
+    }
+    default: {
+      const unreachable: never = phase;
+      return unreachable;
+    }
+  }
 }
 
 export function phaseLiveLeases(phase: CellPhase): ReadonlyArray<CellLiveLease> {
@@ -310,45 +335,80 @@ export function phaseLiveLeases(phase: CellPhase): ReadonlyArray<CellLiveLease> 
 }
 
 export function phaseReadinessAttempt(phase: CellPhase): CellPhaseReadinessAttemptLookup {
-  return Match.value(phase).pipe(
-    Match.tag("Idle", () => ({ _tag: "Missing", phase: "Idle" }) as const),
-    Match.tag("Acquiring", ({ attempt }) => ({ _tag: "Found", attempt }) as const),
-    Match.tag("ReadinessError", () => ({ _tag: "Missing", phase: "ReadinessError" }) as const),
-    Match.tag("Ready", () => ({ _tag: "Missing", phase: "Ready" }) as const),
-    Match.tag("Operating", () => ({ _tag: "Missing", phase: "Operating" }) as const),
-    Match.tag("Releasing", () => ({ _tag: "Missing", phase: "Releasing" }) as const),
-    Match.tag("Invalid", () => ({ _tag: "Missing", phase: "Invalid" }) as const),
-    Match.tag("Evicted", () => ({ _tag: "Missing", phase: "Evicted" }) as const),
-    Match.exhaustive
-  );
+  switch (phase._tag) {
+    case "Idle": {
+      return { _tag: "Missing", phase: "Idle" } as const;
+    }
+    case "Acquiring": {
+      const { attempt } = phase;
+      return { _tag: "Found", attempt } as const;
+    }
+    case "ReadinessError": {
+      return { _tag: "Missing", phase: "ReadinessError" } as const;
+    }
+    case "Ready": {
+      return { _tag: "Missing", phase: "Ready" } as const;
+    }
+    case "Operating": {
+      return { _tag: "Missing", phase: "Operating" } as const;
+    }
+    case "Invalid": {
+      return { _tag: "Missing", phase: "Invalid" } as const;
+    }
+    default: {
+      const unreachable: never = phase;
+      return unreachable;
+    }
+  }
 }
 
 export function mapPhaseBase(phase: CellPhase, map: (base: CellBase) => CellBase): CellPhase {
-  return Match.value(phase).pipe(
-    Match.tag("Idle", ({ base, cleanupFailure }) => idleCell(map(base), cleanupFailure)),
-    Match.tag("Acquiring", ({ base, attempt }) => acquiringCell(map(base), attempt)),
-    Match.tag("ReadinessError", ({ base, error }) => readinessErrorCell(map(base), error)),
-    Match.tag("Ready", ({ ready, operationFailure }) =>
-      readyCell(mapReadyBase(ready, map), operationFailure)
-    ),
-    Match.tag("Operating", ({ ready, operation }) =>
-      operatingCell(mapReadyBase(ready, map), operation)
-    ),
-    Match.tag("Releasing", ({ base, cleanupFailure }) => releasingCell(map(base), cleanupFailure)),
-    Match.tag("Invalid", ({ base, error }) =>
-      invalidCell(error, base === undefined ? undefined : map(base))
-    ),
-    Match.tag("Evicted", ({ reason }) => evictedCell(reason)),
-    Match.exhaustive
-  );
+  switch (phase._tag) {
+    case "Idle": {
+      const { base, cleanupFailure } = phase;
+      return idleCell(map(base), cleanupFailure);
+    }
+    case "Acquiring": {
+      const { base, attempt } = phase;
+      return acquiringCell(map(base), attempt);
+    }
+    case "ReadinessError": {
+      const { base, error } = phase;
+      return readinessErrorCell(map(base), error);
+    }
+    case "Ready": {
+      const { ready, operationFailure } = phase;
+      return readyCell(mapReadyBase(ready, map), operationFailure);
+    }
+    case "Operating": {
+      const { ready, operation } = phase;
+      return operatingCell(mapReadyBase(ready, map), operation);
+    }
+    case "Invalid": {
+      const { base, error } = phase;
+      return invalidCell(error, base === undefined ? undefined : map(base));
+    }
+    default: {
+      const unreachable: never = phase;
+      return unreachable;
+    }
+  }
 }
 
 export function mapPhaseReady(phase: CellPhase, map: (ready: ReadyData) => ReadyData): CellPhase {
-  return Match.value(phase).pipe(
-    Match.tag("Ready", ({ ready, operationFailure }) => readyCell(map(ready), operationFailure)),
-    Match.tag("Operating", ({ ready, operation }) => operatingCell(map(ready), operation)),
-    Match.orElse(() => phase)
-  );
+  switch (phase._tag) {
+    case "Ready": {
+      const { ready, operationFailure } = phase;
+      return readyCell(map(ready), operationFailure);
+    }
+    case "Operating": {
+      const { ready, operation } = phase;
+      return operatingCell(map(ready), operation);
+    }
+    default: {
+      return phase;
+    }
+  }
 }
 
 const INACTIVE_LIVE_DEMAND: NodeLiveDemandSnapshot = Object.freeze({
@@ -424,7 +484,7 @@ export function activeLiveDemand(demand: NodeLiveDemandSnapshot):
 }
 
 function projectedBase(
-  tag: "Idle" | "ReadinessError" | "Releasing",
+  tag: "Idle" | "ReadinessError",
   base: CellBase,
   status: NodeStatus,
   failure?: unknown | undefined

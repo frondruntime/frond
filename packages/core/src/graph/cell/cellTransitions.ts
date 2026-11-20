@@ -15,7 +15,6 @@ import {
   type CellReadinessAttempt,
   idleCell,
   invalidCell,
-  mapPhaseReady,
   operatingCell,
   phaseBase,
   phaseLiveLeases,
@@ -33,11 +32,9 @@ export function beginReadinessAttemptState(input: {
   readonly base: CellBase;
   readonly attempt: CellReadinessAttempt;
 }): GraphNodeState {
-  return {
-    ...input.latest,
-    nextAttemptId: input.attemptId,
-    phase: acquiringCell(input.base, input.attempt),
-  };
+  input.latest.nextAttemptId = input.attemptId;
+  input.latest.phase = acquiringCell(input.base, input.attempt);
+  return input.latest;
 }
 
 export function failReadinessAttemptState(input: {
@@ -45,16 +42,23 @@ export function failReadinessAttemptState(input: {
   readonly cause: unknown;
   readonly resultValidity?: ResultValidity | undefined;
 }): GraphNodeState {
-  return {
-    ...input.latest,
-    phase:
-      input.latest.phase._tag === "Acquiring"
-        ? readinessErrorCell(
-            baseWithResultValidity(input.latest.phase.base, input.resultValidity),
-            input.cause
-          )
-        : input.latest.phase,
-  };
+  if (input.latest.phase._tag === "Acquiring") {
+    const base = input.latest.phase.base;
+    // A failed re-acquire drops the expired incarnation's result: no later
+    // acquire may retain it as an equal result.
+    input.latest.phase = readinessErrorCell(
+      base.previousResult === undefined
+        ? baseWithResultValidity(base, input.resultValidity)
+        : {
+            args: base.args,
+            liveLeases: base.liveLeases,
+            liveFailure: base.liveFailure,
+            resultValidity: input.resultValidity ?? base.resultValidity,
+          },
+      input.cause
+    );
+  }
+  return input.latest;
 }
 
 export function completeAcquireState(input: {
@@ -79,57 +83,47 @@ export function completeAcquireState(input: {
     return { _tag: "Stale", state: input.latest };
   }
 
-  return {
-    _tag: "Committed",
-    state: {
-      ...input.latest,
-      phase: readyCell({
-        node: input.ready.node,
-        args: input.ready.args,
-        liveLeases: phaseLiveLeases(input.latest.phase),
-        deps: input.ready.deps,
-        result: input.ready.resultState.result,
-        resultValidity: input.ready.resultState.resultValidity,
-        resultLoadedAt: input.ready.resultState.resultLoadedAt,
-        resultValidityPolicy: input.ready.resultValidityPolicy,
-        disposers: input.ready.disposers,
-        // Contract: a freshly ready node preserves accumulated live leases, but no
-        // live resource exists until demand is delivered after the ready commit.
-        liveResource: { _tag: "Inactive" },
-        nodeLifetime: input.ready.nodeLifetime,
-      }),
-    },
-  };
+  input.latest.phase = readyCell({
+    node: input.ready.node,
+    args: input.ready.args,
+    liveLeases: phaseLiveLeases(input.latest.phase),
+    deps: input.ready.deps,
+    result: input.ready.resultState.result,
+    resultValidity: input.ready.resultState.resultValidity,
+    resultLoadedAt: input.ready.resultState.resultLoadedAt,
+    resultValidityPolicy: input.ready.resultValidityPolicy,
+    disposers: input.ready.disposers,
+    // Contract: a freshly ready node preserves accumulated live leases, but no
+    // live resource exists until demand is delivered after the ready commit.
+    liveResource: { _tag: "Inactive" },
+    nodeLifetime: input.ready.nodeLifetime,
+  });
+  return { _tag: "Committed", state: input.latest };
 }
 
 export function beginNodeOperationState(input: {
   readonly latest: GraphNodeState;
   readonly operation: ActiveCellOperation;
 }): GraphNodeState {
-  return {
-    ...input.latest,
-    nextOperationId: input.operation.operationId + 1,
-    phase:
-      input.latest.phase._tag === "Ready"
-        ? operatingCell(input.latest.phase.ready, input.operation)
-        : input.latest.phase,
-  };
+  input.latest.nextOperationId = input.operation.operationId + 1;
+  if (input.latest.phase._tag === "Ready") {
+    input.latest.phase = operatingCell(input.latest.phase.ready, input.operation);
+  }
+  return input.latest;
 }
 
 export function completeNodeOperationState(input: {
   readonly latest: GraphNodeState;
   readonly operation: ActiveCellOperation;
 }): GraphNodeState {
-  return {
-    ...input.latest,
-    // Hazard: late completion from an interrupted/overtaken operation must not
-    // clear the current operation or overwrite its failure.
-    phase:
-      input.latest.phase._tag === "Operating" &&
-      isCurrentOperation(input.latest.phase.operation, input.operation)
-        ? readyCell(input.latest.phase.ready)
-        : input.latest.phase,
-  };
+  // Refuse a late completion from an interrupted or overtaken operation.
+  if (
+    input.latest.phase._tag === "Operating" &&
+    isCurrentOperation(input.latest.phase.operation, input.operation)
+  ) {
+    input.latest.phase = readyCell(input.latest.phase.ready);
+  }
+  return input.latest;
 }
 
 export function failNodeOperationState(input: {
@@ -137,14 +131,13 @@ export function failNodeOperationState(input: {
   readonly operation: ActiveCellOperation;
   readonly failure: NodeOperationFailure;
 }): GraphNodeState {
-  return {
-    ...input.latest,
-    phase:
-      input.latest.phase._tag === "Operating" &&
-      isCurrentOperation(input.latest.phase.operation, input.operation)
-        ? readyCell(input.latest.phase.ready, input.failure)
-        : input.latest.phase,
-  };
+  if (
+    input.latest.phase._tag === "Operating" &&
+    isCurrentOperation(input.latest.phase.operation, input.operation)
+  ) {
+    input.latest.phase = readyCell(input.latest.phase.ready, input.failure);
+  }
+  return input.latest;
 }
 
 export function commitReadyOperationState(input: {
@@ -153,30 +146,27 @@ export function commitReadyOperationState(input: {
   readonly resultState: ResultState;
   readonly operationDisposers: ReadonlyArray<Disposer>;
 }): GraphNodeState {
-  return {
-    ...input.latest,
-    phase: mapPhaseReady(input.latest.phase, (readyData) => ({
-      ...readyData,
-      deps: input.deps,
-      result: input.resultState.result,
-      resultValidity: input.resultState.resultValidity,
-      resultLoadedAt: input.resultState.resultLoadedAt,
-      disposers: appendReadyDisposers(readyData.disposers, input.operationDisposers),
-    })),
-  };
+  const phase = input.latest.phase;
+  if (phase._tag === "Ready" || phase._tag === "Operating") {
+    const ready = phase.ready;
+    ready.deps = input.deps;
+    ready.result = input.resultState.result;
+    ready.resultValidity = input.resultState.resultValidity;
+    ready.resultLoadedAt = input.resultState.resultLoadedAt;
+    appendReadyDisposers(ready.disposers, input.operationDisposers);
+  }
+  return input.latest;
 }
 
 export function appendReadyDisposersState(input: {
   readonly latest: GraphNodeState;
   readonly operationDisposers: ReadonlyArray<Disposer>;
 }): GraphNodeState {
-  return {
-    ...input.latest,
-    phase: mapPhaseReady(input.latest.phase, (readyData) => ({
-      ...readyData,
-      disposers: appendReadyDisposers(readyData.disposers, input.operationDisposers),
-    })),
-  };
+  const phase = input.latest.phase;
+  if (phase._tag === "Ready" || phase._tag === "Operating") {
+    appendReadyDisposers(phase.ready.disposers, input.operationDisposers);
+  }
+  return input.latest;
 }
 
 // Ownership: ready disposers live in the incarnation registry handed off by
@@ -197,13 +187,9 @@ export function completeReleaseState(input: {
   const failure = input.cleanupFailures[0];
   const base = phaseBase(input.latest.phase);
 
-  return {
-    ...input.latest,
-    // Contract: release returns to idle identity and retains the first cleanup
-    // failure for projection/events; eviction is the operation that removes
-    // graph records.
-    phase: base._tag === "Missing" ? input.latest.phase : idleCell(base.base, failure),
-  };
+  // Release retains identity; eviction removes the graph record.
+  if (base._tag === "Found") input.latest.phase = idleCell(base.base, failure);
+  return input.latest;
 }
 
 export function markInvalidState(input: {
@@ -212,11 +198,9 @@ export function markInvalidState(input: {
 }): GraphNodeState {
   const base = phaseBase(input.latest.phase);
 
-  return {
-    ...input.latest,
-    phase:
-      base._tag === "Found" ? invalidCell(input.failure, base.base) : invalidCell(input.failure),
-  };
+  input.latest.phase =
+    base._tag === "Found" ? invalidCell(input.failure, base.base) : invalidCell(input.failure);
+  return input.latest;
 }
 
 function baseWithResultValidity(
@@ -227,7 +211,12 @@ function baseWithResultValidity(
     return base;
   }
 
-  return { ...base, resultValidity };
+  return {
+    args: base.args,
+    liveLeases: base.liveLeases,
+    liveFailure: base.liveFailure,
+    resultValidity,
+  };
 }
 
 function isCurrentOperation(current: ActiveCellOperation, operation: ActiveCellOperation): boolean {

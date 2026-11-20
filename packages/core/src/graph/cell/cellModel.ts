@@ -1,5 +1,7 @@
 import type { Effect } from "effect";
 import type { NodeDescriptor } from "../planning/descriptor";
+import type { GraphJobQueue } from "../queue/jobQueue";
+import type { CoreCall } from "../queue/reply";
 import type {
   DriverOperationTimeouts,
   EdgeSnapshot,
@@ -19,21 +21,31 @@ import type {
   ObservedResultLease,
 } from "../types";
 import type { ActionResult } from "../types/operations";
-import type { GraphCellActor } from "./cellActor";
 import type { CellPhase } from "./cellPhase";
+import type { GraphCellQueue } from "./cellQueue";
 import type { GraphCellState, GraphCellStateReader } from "./cellState";
 
 export interface GraphPlanState {
+  readonly syncClock: { readonly now: () => number };
+  readonly jobs: GraphJobQueue;
+  readonly enqueue: (effect: Effect.Effect<void>) => void;
   readonly nodes: Map<NodeId, GraphNodeCell>;
   readonly edges: Map<string, EdgeSnapshot>;
   // Last committed revision of each evicted cell, keyed by node id. A recreated
   // cell seeds its revision past this so `readVersion` stays monotonic across
   // evict + recreate for the same node identity instead of ABA-ing back to 0.
   readonly evictedRevisionByNodeId: Map<NodeId, number>;
+  // Bumped whenever eviction deletes a cell and its edges, and whenever a cell
+  // enters Invalid or a release takes one out of it. A cell wired at an older
+  // generation may have lost a dependency (directly or further down) to an
+  // interrupted eviction, or have a closure member that failed planning, so it
+  // takes the full re-plan once to heal.
+  wiringGeneration: number;
   readonly specByTag: Map<string, unknown>;
   readonly specOverrides: ReadonlyMap<unknown, unknown>;
   readonly driverTimeouts: DriverOperationTimeouts;
   readonly nextLiveLeaseId: () => NodeLiveLeaseId;
+  readonly executeNodeActionDirect: CoreCall<GraphPlanState["executeNodeAction"]>;
   readonly executeNodeAction: (
     nodeId: NodeId,
     action: string,
@@ -56,16 +68,14 @@ export interface GraphPlanState {
     observed: boolean,
     lease: ObservedResultLease
   ) => Promise<ObservedResultLease>;
-  readonly cellActors?: {
-    readonly getExistingActor: (nodeId: NodeId) => Effect.Effect<GraphCellActor | undefined>;
-    readonly deleteActor: (
-      nodeId: NodeId,
-      actor?: GraphCellActor | undefined
-    ) => Effect.Effect<void>;
+  readonly cellQueues: {
+    readonly getExistingQueue: (nodeId: NodeId) => GraphCellQueue | undefined;
+    readonly deleteQueue: (nodeId: NodeId, queue?: GraphCellQueue | undefined) => void;
   };
 }
 
 export interface GraphNodeCellView {
+  readonly syncClock: { readonly now: () => number };
   readonly nodeId: NodeId;
   readonly tag: string;
   readonly kind: string;
@@ -78,6 +88,7 @@ export interface GraphNodeCellView {
 }
 
 export interface GraphNodeCell extends GraphNodeCellView {
+  readonly jobs: GraphJobQueue;
   readonly request: NodeRequest;
   readonly originalRequest: NodeRequest;
   readonly state: GraphCellState<GraphNodeState>;
@@ -86,11 +97,15 @@ export interface GraphNodeCell extends GraphNodeCellView {
   readonly notifyActionCompleted: GraphActionCompletionObserver;
   readonly notifyResultValidityChanged: GraphResultValidityObserver;
   readonly notifyReadinessFailed: GraphReadinessFailureObserver;
+  // The `GraphPlanState.wiringGeneration` at which this cell and its whole
+  // dependency closure were last planned, recorded, and not Invalid; 0 until
+  // the first such wiring.
+  wiredGeneration: number;
 }
 
 export interface GraphNodeState {
-  readonly nextOperationId: number;
-  readonly nextAttemptId: number;
-  readonly nextLiveGeneration: number;
-  readonly phase: CellPhase;
+  nextOperationId: number;
+  nextAttemptId: number;
+  nextLiveGeneration: number;
+  phase: CellPhase;
 }

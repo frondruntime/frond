@@ -1,6 +1,6 @@
 import type { NodeSpecArgs, NodeSpecLike } from "@frondruntime/core";
 import type { ReadyReactNode } from "./types";
-import { useNodeState } from "./useNodeState";
+import { useReactNodeStore } from "./useReactNodeStore";
 
 /**
  * Reads a ready Frond node for React rendering.
@@ -12,5 +12,5 @@ export function useNode<TSpec extends NodeSpecLike>(
   spec: TSpec,
   args: NodeSpecArgs<TSpec>
 ): ReadyReactNode<TSpec> {
-  return useNodeState(spec, args).node as ReadyReactNode<TSpec>;
+  return useReactNodeStore(spec, args, "result").read().node as ReadyReactNode<TSpec>;
 }

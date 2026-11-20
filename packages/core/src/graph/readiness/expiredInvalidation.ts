@@ -1,71 +1,81 @@
-import { Effect } from "effect";
+import { type Context, Exit } from "effect";
 import type { GraphNodeCell } from "../cell/cellModel";
-import type { CellBase, ReadyData } from "../cell/cellPhase";
+import type { ReadyData } from "../cell/cellPhase";
+import { finishObserverWork, runEffectEdge } from "../driverExecution/effectRunner";
 import { teardownReadyData } from "../lifecycle/cleanup";
-import { ensureDependencyNodes, type GraphOperationEnvironment } from "../operations/dependencies";
+import type { GraphOperationEnvironment } from "../operations/dependencies";
+import type { GraphCancel, GraphResume } from "../queue/reply";
 import { validityChanged } from "../resultValidity";
 import type { NodeRead, ResultValidity } from "../types";
-import { runAcquire } from "./acquireOperation";
-import { failAttempt, runReadinessAttempt } from "./readinessAttempt";
+import { startReadiness } from "./index";
+import { beginReadinessAttempt } from "./readinessAttempt";
 
-export function runExpiredInvalidationAttempt(
+export function startExpiredInvalidation(
   env: GraphOperationEnvironment,
   cell: GraphNodeCell,
   ready: ReadyData,
-  expiredValidity: Extract<ResultValidity, { readonly _tag: "Expired" }>
-): Effect.Effect<NodeRead> {
-  return Effect.gen(function* () {
-    // Contract: re-acquiring after expiry discards the current ready generation,
-    // so it must run the full teardown (live stop, driver release, disposers).
-    const cleanupFailures = yield* teardownReadyData(
+  expiredValidity: Extract<ResultValidity, { readonly _tag: "Expired" }>,
+  context: Context.Context<never> | undefined,
+  resume: GraphResume<NodeRead>
+): GraphCancel {
+  let canceled = false;
+  let cancel = runEffectEdge(
+    teardownReadyData(
       cell,
       ready,
       { release: env.driverTimeouts.release, live: env.driverTimeouts.live },
       { _tag: "ReadyInvalidated" }
-    );
-
-    if (cleanupFailures.length > 0) {
-      yield* env.state.notifyCleanupFailures(cell.nodeId, "expired-invalidation", cleanupFailures);
+    ),
+    context,
+    (exit) => {
+      cell.jobs.post({
+        run: () => {
+          if (canceled) return;
+          if (exit._tag === "Failure") {
+            resume(Exit.failCause(exit.cause));
+            return;
+          }
+          const acquire = () => {
+            if (canceled) return;
+            const attempt = beginReadinessAttempt(cell, {
+              args: ready.args,
+              previousResult: { result: ready.result },
+              liveLeases: ready.liveLeases,
+              resultValidity: expiredValidity,
+              liveFailure: ready.liveFailure,
+            });
+            cancel = startReadiness(env, cell, attempt, context, resume);
+          };
+          const invalidate = () => {
+            if (canceled) return;
+            if (validityChanged(ready.resultValidity, expiredValidity))
+              finishObserverWork(
+                cell.notifyResultValidityChanged(
+                  cell.nodeId,
+                  ready.resultValidity,
+                  expiredValidity,
+                  "time-bound"
+                ),
+                context,
+                acquire,
+                cell.jobs
+              );
+            else acquire();
+          };
+          if (exit.value.length === 0) invalidate();
+          else
+            finishObserverWork(
+              env.state.notifyCleanupFailures(cell.nodeId, "expired-invalidation", exit.value),
+              context,
+              invalidate,
+              cell.jobs
+            );
+        },
+      });
     }
-
-    const base = expiredInvalidationBase(ready, expiredValidity);
-
-    if (validityChanged(ready.resultValidity, expiredValidity)) {
-      yield* cell.notifyResultValidityChanged(
-        cell.nodeId,
-        ready.resultValidity,
-        expiredValidity,
-        "time-bound"
-      );
-    }
-
-    return yield* runReadinessAttempt(cell, base, (attempt) =>
-      Effect.gen(function* () {
-        const depsResult = yield* ensureDependencyNodes(env, cell).pipe(
-          Effect.match({
-            onFailure: (failure) => ({ _tag: "Failure", failure }) as const,
-            onSuccess: (deps) => ({ _tag: "Success", deps }) as const,
-          })
-        );
-
-        if (depsResult._tag === "Failure") {
-          return yield* failAttempt(cell, attempt, depsResult.failure);
-        }
-
-        return yield* runAcquire(env, cell, depsResult.deps, attempt);
-      })
-    );
-  });
-}
-
-function expiredInvalidationBase(
-  ready: ReadyData,
-  resultValidity: Extract<ResultValidity, { readonly _tag: "Expired" }>
-): CellBase {
-  return {
-    args: ready.args,
-    liveLeases: ready.liveLeases,
-    resultValidity,
-    liveFailure: ready.liveFailure,
+  );
+  return () => {
+    canceled = true;
+    return cancel();
   };
 }

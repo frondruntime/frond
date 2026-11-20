@@ -1,72 +1,59 @@
-import { Effect } from "effect";
+import { type Context, Exit } from "effect";
 import type { GraphNodeCell } from "../cell/cellModel";
-import { mapPhaseReady, phaseReadyData, projectCellPhase } from "../cell/cellPhase";
+import { phaseReadyData, projectCellPhase } from "../cell/cellPhase";
+import { finishObserverWork } from "../driverExecution/effectRunner";
 import { updateReadyNodeRuntimeState } from "../planning/readyNodeRuntime";
+import { type GraphCancel, type GraphResume, noCancel } from "../queue/reply";
 import type { UnsafeUpdateNodeRequest, UnsafeUpdateNodeResult } from "../types";
 import { makeUnsafeUpdateNodeFailure } from "./operationFailures";
 
 export function unsafeUpdateNodeInCell(
   cell: GraphNodeCell,
-  request: UnsafeUpdateNodeRequest
-): Effect.Effect<UnsafeUpdateNodeResult> {
-  return Effect.gen(function* () {
-    const current = yield* cell.state.get;
-    const projection = projectCellPhase(current.phase);
-    const readyLookup = phaseReadyData(current.phase);
-
-    if (
-      projection._tag === "Removed" ||
-      projection.status._tag !== "Wired" ||
-      readyLookup._tag === "Missing"
-    ) {
-      return makeUnsafeUpdateNodeFailure(
-        cell,
-        request,
-        projection._tag === "Removed" ? { _tag: "Unwired" } : projection.status
-      );
-    }
-
-    const { node } = readyLookup.ready;
-
-    return yield* Effect.sync(() => {
-      try {
-        request.recipe(node);
-        const result = (node as { readonly result?: unknown }).result;
-        return {
-          _tag: "Success",
-          nodeId: cell.nodeId,
-          value: result,
-        } satisfies UnsafeUpdateNodeResult;
-      } catch (cause) {
-        return makeUnsafeUpdateNodeFailure(cell, request, cause);
-      }
-    }).pipe(
-      Effect.tap((result) =>
-        result._tag === "Success"
-          ? cell.state
-              .transition((latest) => [
-                undefined,
-                {
-                  ...latest,
-                  phase: mapPhaseReady(latest.phase, (readyData) => ({
-                    ...readyData,
-                    result: result.value,
-                  })),
-                },
-              ])
-              .pipe(
-                Effect.tap(() =>
-                  Effect.sync(() => {
-                    updateReadyNodeRuntimeState({
-                      node,
-                      result: result.value,
-                    });
-                  })
-                ),
-                Effect.tap(() => cell.notifyChanged(cell.nodeId))
-              )
-          : Effect.void
+  request: UnsafeUpdateNodeRequest,
+  context: Context.Context<never> | undefined,
+  resume: GraphResume<UnsafeUpdateNodeResult>
+): GraphCancel {
+  const phase = cell.state.getSync().phase;
+  const projection = projectCellPhase(phase);
+  const ready = phaseReadyData(phase);
+  if (
+    projection._tag === "Removed" ||
+    projection.status._tag !== "Wired" ||
+    ready._tag === "Missing"
+  ) {
+    resume(
+      Exit.succeed(
+        makeUnsafeUpdateNodeFailure(
+          cell,
+          request,
+          projection._tag === "Removed" ? { _tag: "Unwired" } : projection.status
+        )
       )
     );
+    return noCancel;
+  }
+  const { node } = ready.ready;
+  let result: UnsafeUpdateNodeResult;
+  try {
+    request.recipe(node);
+    result = {
+      _tag: "Success",
+      nodeId: cell.nodeId,
+      value: (node as { readonly result?: unknown }).result,
+    };
+  } catch (cause) {
+    resume(Exit.succeed(makeUnsafeUpdateNodeFailure(cell, request, cause)));
+    return noCancel;
+  }
+  cell.state.updateSync(() => {
+    ready.ready.result = result.value;
   });
+  updateReadyNodeRuntimeState({ node, result: result.value });
+  finishObserverWork(
+    cell.notifyChanged(cell.nodeId),
+    context,
+    () => resume(Exit.succeed(result)),
+    cell.jobs
+  );
+  return noCancel;
 }

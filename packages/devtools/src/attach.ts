@@ -1,12 +1,12 @@
 import type { Runtime } from "@frondruntime/core";
-import { Clock, Effect, Layer, Stream } from "effect";
+import { Clock, Effect, Layer, Option, Schema, Stream } from "effect";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import { Socket } from "effect/socket";
 import { encodeRecord } from "./encode.ts";
 import { type EncodePolicy, resolvePolicy } from "./policy.ts";
 import {
   type AttachmentInfo,
-  type EncodedEventRecord,
+  EncodedEventRecord,
   FrondHubRpcs,
   HUB_PROTOCOL_VERSION,
   type HubCommand,
@@ -129,6 +129,12 @@ export function attachLayer(attachUrl: string): Layer.Layer<RpcClient.Protocol> 
  */
 export const attachRuntime = Effect.fnUntraced(function* (options: AttachOptions) {
   const client = yield* RpcClient.make(FrondHubRpcs);
+  // The transport's own codec, so the check below rejects exactly what a send
+  // would. Built once; it runs only after a batch has already failed.
+  const { codecFor } = yield* RpcClient.Protocol;
+  const encodeForWire = Schema.encodeUnknownOption(codecFor(EncodedEventRecord));
+  const crossesTheWire = (record: EncodedEventRecord): boolean =>
+    Option.isSome(encodeForWire(record));
 
   const ceiling: ValuePolicy = options.values ?? "shape";
 
@@ -192,10 +198,29 @@ export const attachRuntime = Effect.fnUntraced(function* (options: AttachOptions
     buffer = [];
     dropped = 0;
 
-    yield* client["Frond.Ingest"]({ attachmentId: id, records, droppedSince });
-  });
+    // One record the codec rejects fails the send of the whole batch, and a
+    // failure here ends the attachment (see below), which would make every
+    // such record cost a reconnect and the batch around it. So a failed batch
+    // is checked record by record, against the transport's own codec, and sent
+    // again without the records that cannot cross; those are counted as
+    // dropped, because to the hub they are the same gap. A batch in which every
+    // record crosses failed for some other reason, and that failure goes on to
+    // end the attachment.
+    yield* Effect.catchCause(
+      client["Frond.Ingest"]({ attachmentId: id, records, droppedSince }),
+      (cause) => {
+        const sendable = records.filter(crossesTheWire);
 
-  yield* Effect.forkScoped(Effect.forever(flushOnce));
+        return sendable.length === records.length
+          ? Effect.failCause(cause)
+          : client["Frond.Ingest"]({
+              attachmentId: id,
+              records: sendable,
+              droppedSince: droppedSince + records.length - sendable.length,
+            });
+      }
+    );
+  });
 
   /**
    * Answers one query, on its own fiber.
@@ -246,7 +271,7 @@ export const attachRuntime = Effect.fnUntraced(function* (options: AttachOptions
       );
     });
 
-  yield* Stream.runForEach(client["Frond.Attach"]({ info }), (command) => {
+  const commands = Stream.runForEach(client["Frond.Attach"]({ info }), (command) => {
     if (command._tag === "Attached") {
       return Effect.sync(() => {
         attachmentId = command.attachmentId;
@@ -261,6 +286,15 @@ export const attachRuntime = Effect.fnUntraced(function* (options: AttachOptions
 
     return Effect.void;
   });
+
+  // The flusher and the command stream are one attachment, and whichever ends
+  // first ends it. A send that fails, on a socket whose write side broke while
+  // its read side still answers, ends neither the stream nor its heartbeat,
+  // and a flusher left to die on its own would leave the app attached and
+  // sending nothing for good. Ending the attachment hands the failure to
+  // whoever runs it, which for `attachDevtools` is a reconnect. The flusher
+  // never succeeds, so a stream the hub closes still ends it the way it did.
+  yield* Effect.raceFirst(commands, Effect.forever(flushOnce));
 });
 
 /**

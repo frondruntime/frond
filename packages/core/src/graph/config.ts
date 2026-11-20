@@ -13,6 +13,7 @@ import {
 export type GraphRuntimeSpanAttributes = Readonly<Record<string, string>>;
 
 export interface NormalizedGraphSystemConfigBase {
+  readonly syncClock: { readonly now: () => number };
   readonly runtimeSpanAttributes: GraphRuntimeSpanAttributes;
   readonly specOverrides: ReadonlyMap<unknown, unknown>;
   readonly driverTimeouts: DriverOperationTimeouts;
@@ -21,6 +22,8 @@ export interface NormalizedGraphSystemConfigBase {
 export interface NormalizedGraphSystemConfig extends NormalizedGraphSystemConfigBase {
   readonly signals: RuntimeSignalAccess;
 }
+
+const defaultSyncClock = { now: Date.now };
 
 const defaultDriverTimeouts = {
   acquire: 15_000,
@@ -45,6 +48,7 @@ export function normalizeGraphSystemConfigBase(
   options: GraphSystemOptions
 ): NormalizedGraphSystemConfigBase {
   return {
+    syncClock: options.syncClock ?? defaultSyncClock,
     runtimeSpanAttributes: { "frond.runtime.id": options.runtimeId },
     specOverrides: makeSpecOverrideMap(options.specOverrides ?? emptySpecOverrides),
     driverTimeouts: normalizeDriverTimeouts(options.driverTimeouts),

@@ -1,6 +1,8 @@
-import { Clock, Effect } from "effect";
+import { type Context, type Effect, Exit } from "effect";
 import type { GraphNodeCell } from "../cell/cellModel";
 import { phaseReadyData } from "../cell/cellPhase";
+import { type GraphCancel, type GraphResume, noCancel } from "../queue/reply";
+import { startReadiness } from "../readiness";
 import {
   type ActionRequest,
   type ActionResult,
@@ -9,43 +11,97 @@ import {
   type RunningActionOperation,
 } from "../types";
 import type { GraphOperationEnvironment } from "./dependencies";
-import { runReadyDriverOperation } from "./driverOperationSkeleton";
+import { startReadyDriverOperation } from "./driverOperationSkeleton";
 import { makeActionFailure } from "./operationFailures";
-import { runBackgroundOperation } from "./operationState";
+import { beginActionOperationSync, runOperation } from "./operationState";
+
+/**
+ * What an action's body and completion read beyond the cell and context. One
+ * record per action, so the shared runner takes module-level callbacks.
+ */
+interface ActionRun {
+  readonly env: GraphOperationEnvironment;
+  readonly request: ActionRequest;
+  readonly handle: NodeRead;
+  readonly decided: (() => void) | undefined;
+}
 
 export function runActionInCell(
   env: GraphOperationEnvironment,
-  ensureReady: (cell: GraphNodeCell) => Effect.Effect<NodeRead>,
   cell: GraphNodeCell,
-  request: ActionRequest
-): Effect.Effect<ActionResult> {
-  return Effect.gen(function* () {
-    const readyHandle = yield* ensureReady(cell);
+  request: ActionRequest,
+  context: Context.Context<never> | undefined,
+  resume: GraphResume<ActionResult>,
+  decided?: () => void
+): GraphCancel {
+  let cancel: GraphCancel = noCancel;
+  let canceled = false;
+  let startedAction = false;
+  const cancelReady = startReadiness(env, cell, undefined, context, (exit) => {
+    if (exit._tag === "Success") {
+      startedAction = true;
+      if (canceled) return;
+      cancel = startAction(env, cell, request, exit.value, context, resume, decided);
+    } else resume(Exit.failCause(exit.cause));
+  });
+  if (!startedAction) cancel = cancelReady;
+  return () => {
+    canceled = true;
+    return cancel();
+  };
+}
 
-    return yield* runBackgroundOperation(
-      cell,
-      "action",
-      () => runActionDriver(env, cell, request, readyHandle),
-      {
-        action: request.action,
-        actionInput: request.input,
-        // Contract: both runtime-submitted actions and node-domain
-        // `this.action(...)` completions are observed from the graph here.
-        // Runtime command code must not emit a second completion event.
-        onSettled: (operation, result) =>
-          Effect.gen(function* () {
-            const completedAt = yield* Clock.currentTimeMillis;
-            yield* cell.notifyActionCompleted({
-              nodeId: cell.nodeId,
-              operation: operation as RunningActionOperation,
-              action: request.action,
-              input: request.input,
-              result,
-              completedAt,
-            });
-          }),
-      }
-    );
+function startAction(
+  env: GraphOperationEnvironment,
+  cell: GraphNodeCell,
+  request: ActionRequest,
+  handle: NodeRead,
+  context: Context.Context<never> | undefined,
+  resume: GraphResume<ActionResult>,
+  decided: (() => void) | undefined
+): GraphCancel {
+  const operation = beginActionOperationSync(cell, request.action, cell.syncClock.now());
+  return runOperation(
+    cell,
+    operation,
+    {
+      _tag: "ActionStarted",
+      nodeId: cell.nodeId,
+      operation,
+      action: request.action,
+      input: request.input,
+    },
+    runActionBody,
+    { env, request, handle, decided },
+    context,
+    resume,
+    notifyActionCompletion
+  );
+}
+
+function runActionBody(
+  cell: GraphNodeCell,
+  _operation: RunningActionOperation,
+  run: ActionRun,
+  context: Context.Context<never> | undefined,
+  settled: GraphResume<ActionResult>
+): GraphCancel {
+  return runActionDriver(run.env, cell, run.request, run.handle, context, run.decided, settled);
+}
+
+function notifyActionCompletion(
+  cell: GraphNodeCell,
+  operation: RunningActionOperation,
+  run: ActionRun,
+  result: ActionResult
+): Effect.Effect<void> {
+  return cell.notifyActionCompleted({
+    nodeId: cell.nodeId,
+    operation,
+    action: run.request.action,
+    input: run.request.input,
+    result,
+    completedAt: cell.syncClock.now(),
   });
 }
 
@@ -53,17 +109,24 @@ function runActionDriver(
   env: GraphOperationEnvironment,
   cell: GraphNodeCell,
   request: ActionRequest,
-  readyHandle: NodeRead
-): Effect.Effect<ActionResult> {
-  return Effect.gen(function* () {
-    if (readyHandle.status._tag !== "Wired" || readyHandle.status.run._tag !== "Ready") {
-      return makeActionFailure(cell, request, notReadyCause(readyHandle));
-    }
+  readyHandle: NodeRead,
+  context: Context.Context<never> | undefined,
+  decided: (() => void) | undefined,
+  resume: GraphResume<ActionResult>
+): GraphCancel {
+  const fail = (result: ActionResult) => {
+    resume(Exit.succeed(result));
+    return noCancel;
+  };
+  if (readyHandle.status._tag !== "Wired" || readyHandle.status.run._tag !== "Ready") {
+    return fail(makeActionFailure(cell, request, notReadyCause(readyHandle)));
+  }
 
-    const action = cell.descriptor.driver.actions.read(request.action);
+  const action = cell.descriptor.driver.actions.read(request.action);
 
-    if (action._tag === "Missing") {
-      return makeActionFailure(
+  if (action._tag === "Missing") {
+    return fail(
+      makeActionFailure(
         cell,
         request,
         new GraphInvariantViolation({
@@ -72,14 +135,16 @@ function runActionDriver(
           invariant: "requested action must exist on the node driver",
           cause: { action: action.action },
         })
-      );
-    }
+      )
+    );
+  }
 
-    const current = yield* cell.state.get;
-    const ready = phaseReadyData(current.phase);
+  const current = cell.state.getSync();
+  const ready = phaseReadyData(current.phase);
 
-    if (ready._tag === "Missing") {
-      return makeActionFailure(
+  if (ready._tag === "Missing") {
+    return fail(
+      makeActionFailure(
         cell,
         request,
         new GraphInvariantViolation({
@@ -87,11 +152,13 @@ function runActionDriver(
           tag: cell.tag,
           invariant: "action requires ready graph-owned node data",
         })
-      );
-    }
-    const readyData = ready.ready;
+      )
+    );
+  }
+  const readyData = ready.ready;
 
-    return yield* runReadyDriverOperation<unknown, ActionResult>({
+  return startReadyDriverOperation<unknown, ActionResult>(
+    {
       env,
       cell,
       phase: current.phase,
@@ -126,6 +193,7 @@ function runActionDriver(
       previousValidity: readyData.resultValidity,
       validityReason: "manual",
       run: (ctx) => action.run(ctx, request.input),
+      onDecided: decided,
       makeFailure: (cause) => makeActionFailure(cell, request, cause),
       makeSuccess: ({ value }) =>
         ({
@@ -133,8 +201,10 @@ function runActionDriver(
           nodeId: cell.nodeId,
           value,
         }) satisfies ActionResult,
-    });
-  });
+    },
+    context,
+    resume
+  );
 }
 
 /**

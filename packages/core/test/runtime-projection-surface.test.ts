@@ -25,7 +25,8 @@ describe("runtime projection surface", () => {
     const state = makeGraphCellState({
       nextOperationId: 1,
       nextAttemptId: 0,
-      phase: { _tag: "Evicted" },
+      nextLiveGeneration: 0,
+      phase: { _tag: "Invalid", error: undefined },
     } satisfies GraphNodeState);
 
     expect(state.getSync().nextOperationId).toBe(1);
@@ -35,7 +36,8 @@ describe("runtime projection surface", () => {
       state.replace({
         nextOperationId: 2,
         nextAttemptId: 0,
-        phase: { _tag: "Evicted" },
+        nextLiveGeneration: 0,
+        phase: { _tag: "Invalid", error: undefined },
       })
     );
 

@@ -41,8 +41,8 @@ export type ErrorDescriptor = {
  * A marker that survived where a value did not.
  *
  * Only ever emitted alongside real data — at `"full"`, and at `"shape"` for a
- * string long enough to be cut — which is why these stay objects while the
- * `"shape"` vocabulary is strings. A reader looking at real values has to be
+ * string long enough to be cut or a number with no JSON form — which is why
+ * these stay objects while the `"shape"` vocabulary is strings. A reader looking at real values has to be
  * able to tell a marker from one of them, and `{_: …}` is that tell.
  *
  * `_` rather than `_tag` so a descriptor is never mistaken for a domain tagged
@@ -65,7 +65,8 @@ export type ShapeDescriptor =
   /**
    * Collections, at `"full"` only — `"shape"` names them `Map(3)` and `Set(3)`.
    * `size` is the collection's real size; `entries` and `values` are what
-   * survived the entry bound, so the two disagree when one was hit.
+   * survived the entry bound, and end in an `"elided"` marker when it cut them
+   * — in a map, as both halves of a last pair.
    */
   | {
       readonly _: "map";
@@ -105,3 +106,69 @@ export const WITHHELD = "withheld";
  * hole in the policy rather than a diagnostic.
  */
 export const UNREADABLE = { _: "opaque", type: "unreadable" } satisfies ShapeDescriptor;
+
+const NOT_A_NUMBER = { _: "opaque", type: "number:NaN" } satisfies ShapeDescriptor;
+const POSITIVE_INFINITY = { _: "opaque", type: "number:Infinity" } satisfies ShapeDescriptor;
+const NEGATIVE_INFINITY = { _: "opaque", type: "number:-Infinity" } satisfies ShapeDescriptor;
+
+/**
+ * A number JSON cannot carry, said by name.
+ *
+ * Passing `NaN` or an infinity through as a number fails the transport, not
+ * just the reader: the RPC codec validates every value as JSON and rejects the
+ * whole event batch or snapshot reply that holds one. And `JSON.stringify`
+ * alone would write `null`, which a reader cannot tell from a field that really
+ * was `null`. Both encoders emit the same three markers so a value reads the
+ * same at either policy.
+ *
+ * Callers test finiteness themselves and reach this only for the non-finite
+ * case, so a finite number pays no call. Shared constants, like
+ * {@link UNREADABLE}, so marking one allocates nothing.
+ */
+export function describeNonFiniteNumber(value: number): ShapeDescriptor {
+  return value > 0 ? POSITIVE_INFINITY : value < 0 ? NEGATIVE_INFINITY : NOT_A_NUMBER;
+}
+
+/**
+ * A class instance's name, or `"object"` when it has none it will give up.
+ *
+ * Guarded on its own, because both encoders read it after deciding what else
+ * to send: a `constructor` or `name` getter that throws would otherwise reach
+ * the catch around the whole value and trade its readable fields, or its
+ * label, for one marker.
+ *
+ * Checked for being a string, because nothing else makes it one: the name is
+ * read off the app's own prototype, and a `name` of `Infinity` there would
+ * otherwise fail the transport for the whole batch.
+ */
+export function typeName(value: object): string {
+  try {
+    const name = (value.constructor as { readonly name?: unknown } | undefined)?.name;
+
+    return typeof name === "string" ? name : "object";
+  } catch {
+    return "object";
+  }
+}
+
+/**
+ * Writes `key` onto an encoded record as an own data property.
+ *
+ * Assignment is not that for one key: `out["__proto__"] = x` sets the record's
+ * prototype, which drops the field and leaves an object the transport's JSON
+ * check rejects, failing the whole batch. `JSON.parse` makes `__proto__` an
+ * ordinary own key, so an app holding a parsed payload can hold one. Only that
+ * key takes the slow path; every other key is a plain assignment.
+ */
+export function setField(record: Record<string, unknown>, key: string, value: unknown): void {
+  if (key === "__proto__") {
+    Object.defineProperty(record, key, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  } else {
+    record[key] = value;
+  }
+}

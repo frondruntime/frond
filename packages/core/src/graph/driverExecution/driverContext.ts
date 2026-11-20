@@ -40,6 +40,9 @@ export function makeDriverContext<TDeps extends object>(input: {
   readonly refreshDep: <K extends keyof TDeps & string>(
     dependencyName: K
   ) => Effect.Effect<TDeps[K], unknown>;
+  readonly refreshDepPromise: <K extends keyof TDeps & string>(
+    dependencyName: K
+  ) => Promise<TDeps[K]>;
   readonly getCurrentResultState: () => ResultState;
   readonly setCurrentResultState: (next: ResultState) => void;
   readonly now: () => number;
@@ -58,7 +61,7 @@ export function makeDriverContext<TDeps extends object>(input: {
     async: {
       ...acquireContext.async,
       node: input.node,
-      refreshDep: (dependencyName) => Effect.runPromise(input.refreshDep(dependencyName)),
+      refreshDep: input.refreshDepPromise,
     },
   };
 }
@@ -100,9 +103,11 @@ export function makeAcquireDriverContext<TDeps extends object>(input: {
   const setResultValidity = (validity: unknown): void => {
     const current = input.getCurrentResultState();
     input.setCurrentResultState({
-      ...current,
+      result: current.result,
+      resultLoadedAt: current.resultLoadedAt,
       resultValidity: validateResultValidity(validity, input.cell),
       resultValidityCommit: "explicit",
+      resultPatched: current.resultPatched,
     });
   };
   const patchResult = (recipe: (current: unknown) => void): void => {
@@ -118,13 +123,26 @@ export function makeAcquireDriverContext<TDeps extends object>(input: {
     }
 
     if (input.cloneResultOnPatch === true && !resultClonedForPatch) {
+      const staged = input.getCurrentResultState();
       input.setCurrentResultState({
-        ...input.getCurrentResultState(),
+        resultLoadedAt: staged.resultLoadedAt,
+        resultValidity: staged.resultValidity,
+        resultValidityCommit: staged.resultValidityCommit,
         result: clonePatchableResult(current, input.resultPatch, input.cell),
+        resultPatched: true,
       });
       resultClonedForPatch = true;
     } else {
       assertPatchableResult(current, input.resultPatch, input.cell);
+      const staged = input.getCurrentResultState();
+      if (staged.resultPatched !== true)
+        input.setCurrentResultState({
+          result: staged.result,
+          resultLoadedAt: staged.resultLoadedAt,
+          resultValidity: staged.resultValidity,
+          resultValidityCommit: staged.resultValidityCommit,
+          resultPatched: true,
+        });
     }
 
     recipe(input.getCurrentResultState().result);
@@ -210,6 +228,12 @@ function clonePatchableResult(
   }
 
   if (isPlainObject(value)) {
+    const fastClone = clonePlainDataObject(value, options, context);
+
+    if (fastClone !== undefined) {
+      return fastClone;
+    }
+
     // Copy EVERY own property — string and symbol keys, enumerable or not —
     // and keep the original prototype (plain objects may be null-prototype).
     // Enumerable string-keyed properties are patchable data and are staged by
@@ -255,6 +279,53 @@ function clonePatchableResult(
   }
 
   return value;
+}
+
+// Fast path for the common shape — an extensible `Object.prototype` object
+// whose own properties are all writable, configurable, enumerable string-keyed
+// data properties (JSON-decoded payloads). Equivalent to the descriptor copy
+// for that shape: every slot holds the recursive clone.
+// Avoids `getOwnPropertyDescriptors` + `Object.create(proto, descriptors)`,
+// which dominate patch cost on Hermes. Returns `undefined` for any other shape.
+function clonePlainDataObject(
+  value: Record<string, unknown>,
+  options: ResultPatchOptions | undefined,
+  context: GraphNodeCell
+): Record<string, unknown> | undefined {
+  // An own `__proto__` key (JSON.parse makes one) would hit the prototype
+  // setter on `clone[key] = …`; the descriptor path below defines it instead.
+  if (
+    Object.getPrototypeOf(value) !== Object.prototype ||
+    !Object.isExtensible(value) ||
+    Object.prototype.hasOwnProperty.call(value, "__proto__")
+  ) {
+    return undefined;
+  }
+
+  const keys = Object.keys(value);
+
+  if (
+    Object.getOwnPropertyNames(value).length !== keys.length ||
+    Object.getOwnPropertySymbols(value).length !== 0
+  ) {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+
+    if (descriptor?.writable !== true || descriptor.configurable !== true) {
+      return undefined;
+    }
+  }
+
+  const clone: Record<string, unknown> = {};
+
+  for (const key of keys) {
+    clone[key] = clonePatchableResult(value[key], options, context);
+  }
+
+  return clone;
 }
 
 function cloneNonPlainResult(

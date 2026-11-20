@@ -1,7 +1,7 @@
 import type * as Frond from "@frondruntime/core";
 import type { NodeSpecArgs, NodeSpecLike } from "@frondruntime/core";
 import { useEffect, useMemo, useRef } from "react";
-import { getReactArgsFingerprint } from "./argsFingerprint";
+import { getReactArgsFingerprint, validatedNodeIdResolver } from "./argsFingerprint";
 import { useRuntime } from "./context";
 import { ReactRuntimeMetadata } from "./metadata";
 import { assertStableKeySet, prepareReactNodeMap, type ReactNodeMapEntry } from "./nodeInputMap";
@@ -23,7 +23,16 @@ export function useNodeControls<TSpec extends NodeSpecLike>(
   args: NodeSpecArgs<TSpec>
 ): UseNodeControls {
   const runtime = useRuntime();
-  const nodeId = runtime.resolveNodeIdSync({ spec, args });
+  // One canonicalization per render on a runtime from `createRuntime`: the
+  // fingerprint validates args, then resolution skips its own pass.
+  const resolveValidated = validatedNodeIdResolver(runtime);
+  const validatedFingerprint =
+    resolveValidated === undefined ? undefined : getReactArgsFingerprint(args);
+  const nodeId =
+    resolveValidated === undefined
+      ? runtime.resolveNodeIdSync({ spec, args })
+      : resolveValidated({ spec, args });
+  const renderArgsFingerprint = validatedFingerprint ?? getReactArgsFingerprint(args);
   // Biome cannot see that nodeId is the canonical identity for spec and args.
   // Including args would recreate controls for inline object literals with the same Frond key.
   // biome-ignore lint/correctness/useExhaustiveDependencies: nodeId is the stable Frond identity.
@@ -33,12 +42,12 @@ export function useNodeControls<TSpec extends NodeSpecLike>(
   if (argsFingerprint.current === undefined) {
     argsFingerprint.current = {
       nodeId,
-      fingerprint: getReactArgsFingerprint(args),
+      fingerprint: renderArgsFingerprint,
     };
   }
 
   useEffect(() => {
-    const nextArgsFingerprint = getReactArgsFingerprint(args);
+    const nextArgsFingerprint = renderArgsFingerprint;
     const currentArgsFingerprint = argsFingerprint.current;
 
     if (currentArgsFingerprint === undefined || currentArgsFingerprint.nodeId !== nodeId) {
@@ -66,7 +75,7 @@ export function useNodeControls<TSpec extends NodeSpecLike>(
         argsFingerprint.current = fingerprint;
       },
     });
-  }, [args, handle, nodeId]);
+  }, [args, handle, nodeId, renderArgsFingerprint]);
 
   return useMemo(() => makeReactNodeControls(handle), [handle]);
 }

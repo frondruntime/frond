@@ -1,4 +1,4 @@
-import { Clock, Effect } from "effect";
+import { Cause, type Context, Effect, Exit } from "effect";
 import type { GraphNodeCellLookup } from "../cell/cellLookup";
 import type { GraphNodeCell, GraphPlanState } from "../cell/cellModel";
 import {
@@ -12,9 +12,11 @@ import {
   projectLiveDemand,
 } from "../cell/cellPhase";
 import { makeLiveContext, makeLiveStopContext } from "../driverExecution/driverContext";
-import { runTimedDriverOperation } from "../driverExecution/driverOperationRunner";
+import { type DriverEdgeInput, startEdge } from "../driverExecution/driverOperationRunner";
+import { finishObserverWorkInTurn } from "../driverExecution/effectRunner";
 import { interruptedCancellation } from "../lifecycle/operationDisposers";
 import { canonicalKey } from "../planning/canonicalKey";
+import { callbackEffect, type GraphCancel, type GraphResume, noCancel } from "../queue/reply";
 import type {
   AcquireNodeLiveLeaseRequest,
   ActiveNodeLiveDemandSnapshot,
@@ -34,40 +36,103 @@ import {
   LiveDeliveryFailed,
 } from "../types";
 
-export function acquireNodeLiveLease(
+type ActiveLiveResource = Extract<LiveResourceState, { readonly _tag: "Active" }>;
+type LiveFailures = ReadonlyArray<GraphFailure>;
+type LiveDone = (failures: LiveFailures) => void;
+
+const noFailures: LiveFailures = [];
+const inactiveLiveResource: LiveResourceState = { _tag: "Inactive" };
+
+/**
+ * One live delivery: the step in flight and the caller waiting on the result.
+ * Every step settles through a graph job; a step that settles after `cancel`
+ * stops the delivery where it stands.
+ */
+class LiveChain<A> {
+  ended = false;
+  current: GraphCancel = noCancel;
+  /** An update's signal stays governed until its failure recovery ends. */
+  updateAbort: AbortController | undefined = undefined;
+
+  constructor(
+    readonly context: Context.Context<never> | undefined,
+    private readonly resume: GraphResume<A>
+  ) {}
+
+  succeed(value: A): void {
+    if (this.ended) return;
+    this.ended = true;
+    this.resume(Exit.succeed(value));
+  }
+
+  die(cause: unknown): void {
+    if (this.ended) return;
+    this.ended = true;
+    this.resume(Exit.die(cause));
+  }
+
+  failCause(cause: Cause.Cause<never>): void {
+    if (this.ended) return;
+    this.ended = true;
+    this.resume(Exit.failCause(cause));
+  }
+
+  cancel = (): Effect.Effect<void> => {
+    if (this.ended) return Effect.void;
+    this.ended = true;
+    this.updateAbort?.abort(interruptedCancellation());
+    const current = this.current;
+    this.current = noCancel;
+    return current();
+  };
+}
+
+function startLiveChain<A>(
+  context: Context.Context<never> | undefined,
+  resume: GraphResume<A>,
+  run: (chain: LiveChain<A>) => void
+): GraphCancel {
+  const chain = new LiveChain(context, resume);
+  try {
+    run(chain);
+  } catch (cause) {
+    chain.die(cause);
+  }
+  return chain.cancel;
+}
+
+export function startAcquireNodeLiveLease(
   state: Pick<GraphPlanState, "nextLiveLeaseId">,
   cellLookup: GraphNodeCellLookup,
   request: AcquireNodeLiveLeaseRequest,
   liveTimeout: DriverOperationTimeoutMs,
-  liveInterrupt?: LiveDeliveryInterrupt | undefined,
-  onLeasePrepared?: ((leaseId: NodeLiveLeaseId) => void) | undefined
-): Effect.Effect<NodeLiveLeaseResult> {
-  return Effect.gen(function* () {
+  onLeasePrepared: ((leaseId: NodeLiveLeaseId) => void) | undefined,
+  context: Context.Context<never> | undefined,
+  resume: GraphResume<NodeLiveLeaseResult>
+): GraphCancel {
+  return startLiveChain(context, resume, (chain) => {
     if (cellLookup._tag === "Missing") {
-      return {
-        _tag: "NodeMissing",
-        nodeId: request.nodeId,
-        liveDemand: projectLiveDemand([]),
-      };
+      chain.succeed(missingNodeLiveLease(request.nodeId));
+      return;
     }
 
     const { cell } = cellLookup;
     const scopeKeyResult = liveScopeKey(cell, request.scope);
 
     if ("failure" in scopeKeyResult) {
-      const current = yield* cell.state.get;
-      return {
+      chain.succeed({
         _tag: "Failed",
         nodeId: request.nodeId,
-        liveDemand: projectLiveDemand(phaseLiveLeases(current.phase)),
+        liveDemand: projectLiveDemand(phaseLiveLeases(cell.state.getSync().phase)),
         failures: [scopeKeyResult.failure],
-      };
+      });
+      return;
     }
 
     const leaseId = state.nextLiveLeaseId();
     const scopeKey = scopeKeyResult.scopeKey;
     onLeasePrepared?.(leaseId);
-    const { changed, liveDemand } = yield* cell.state.transition((latest) => {
+    const { changed, liveDemand } = cell.state.transitionSync((latest) => {
       const latestLiveLeases = phaseLiveLeases(latest.phase);
       const liveLeases = [
         ...latestLiveLeases,
@@ -89,22 +154,16 @@ export function acquireNodeLiveLease(
       ] as const;
     });
 
-    const failures = changed
-      ? yield* deliverLiveDemand(cell, liveDemand, liveTimeout, liveInterrupt)
-      : [];
-
-    if (changed) {
-      yield* cell.notifyChanged(cell.nodeId);
+    if (!changed) {
+      chain.succeed(heldLease(request.nodeId, leaseId, liveDemand, false, noFailures));
+      return;
     }
 
-    return {
-      _tag: "Held",
-      nodeId: request.nodeId,
-      leaseId,
-      liveDemand,
-      changed,
-      failures,
-    };
+    runDeliverLiveDemand(cell, liveDemand, liveTimeout, chain, (failures) =>
+      notifyLiveObservers(chain, cell, cell.notifyChanged(cell.nodeId), () =>
+        chain.succeed(heldLease(request.nodeId, leaseId, liveDemand, true, failures))
+      )
+    );
   });
 }
 
@@ -114,67 +173,83 @@ export function rollbackNodeLiveLease(
   leaseId: NodeLiveLeaseId,
   liveTimeout: DriverOperationTimeoutMs
 ): Effect.Effect<void> {
-  return Effect.gen(function* () {
-    type RollbackResult =
-      | { readonly _tag: "Missing" }
-      | {
-          readonly _tag: "Removed";
-          readonly changed: boolean;
-          readonly liveDemand: NodeLiveDemandSnapshot;
-        };
-    const rollback = yield* cell.state.transition<RollbackResult>((latest) => {
-      const latestLiveLeases = phaseLiveLeases(latest.phase);
-      const liveLeases = latestLiveLeases.filter((lease) => lease.leaseId !== leaseId);
+  return callbackEffect((context, resume) =>
+    startLiveChain<void>(context, resume, (chain) => {
+      type RollbackResult =
+        | { readonly _tag: "Missing" }
+        | {
+            readonly _tag: "Removed";
+            readonly changed: boolean;
+            readonly liveDemand: NodeLiveDemandSnapshot;
+          };
+      const rollback = cell.state.transitionSync<RollbackResult>((latest) => {
+        const latestLiveLeases = phaseLiveLeases(latest.phase);
+        const liveLeases = latestLiveLeases.filter((lease) => lease.leaseId !== leaseId);
 
-      if (liveLeases.length === latestLiveLeases.length) {
-        return [{ _tag: "Missing" } as const, latest] as const;
+        if (liveLeases.length === latestLiveLeases.length) {
+          return [{ _tag: "Missing" } as const, latest] as const;
+        }
+
+        const liveDemand = projectLiveDemand(liveLeases);
+        return [
+          {
+            _tag: "Removed",
+            changed: !sameLiveLeasesDemand(latestLiveLeases, liveLeases),
+            liveDemand,
+          } as const,
+          {
+            ...latest,
+            phase: mapPhaseBase(latest.phase, (base) => ({ ...base, liveLeases })),
+          },
+        ] as const;
+      });
+
+      if (rollback._tag === "Missing" || !rollback.changed) {
+        chain.succeed(undefined);
+        return;
       }
 
-      const liveDemand = projectLiveDemand(liveLeases);
-      return [
-        {
-          _tag: "Removed",
-          changed: !sameLiveLeasesDemand(latestLiveLeases, liveLeases),
-          liveDemand,
-        } as const,
-        {
-          ...latest,
-          phase: mapPhaseBase(latest.phase, (base) => ({ ...base, liveLeases })),
-        },
-      ] as const;
-    });
-
-    if (rollback._tag === "Missing" || !rollback.changed) {
-      return;
-    }
-
-    const failures = yield* deliverLiveDemand(cell, rollback.liveDemand, liveTimeout);
-    yield* cell.notifyChanged(cell.nodeId);
-    yield* state.notifyLiveDemandChanged(cell.nodeId, rollback.liveDemand);
-
-    if (failures.length > 0) {
-      yield* state.notifyLiveFailures(cell.nodeId, failures);
-    }
-  });
+      const { liveDemand } = rollback;
+      runDeliverLiveDemand(cell, liveDemand, liveTimeout, chain, (failures) =>
+        notifyLiveObservers(chain, cell, cell.notifyChanged(cell.nodeId), () =>
+          notifyLiveObservers(
+            chain,
+            cell,
+            state.notifyLiveDemandChanged(cell.nodeId, liveDemand),
+            () => {
+              if (failures.length === 0) {
+                chain.succeed(undefined);
+                return;
+              }
+              notifyLiveObservers(
+                chain,
+                cell,
+                state.notifyLiveFailures(cell.nodeId, failures),
+                () => chain.succeed(undefined)
+              );
+            }
+          )
+        )
+      );
+    })
+  );
 }
 
-export function releaseNodeLiveLease(
+export function startReleaseNodeLiveLease(
   cellLookup: GraphNodeCellLookup,
   request: ReleaseNodeLiveLeaseRequest,
   liveTimeout: DriverOperationTimeoutMs,
-  liveInterrupt?: LiveDeliveryInterrupt | undefined
-): Effect.Effect<NodeLiveLeaseResult> {
-  return Effect.gen(function* () {
+  context: Context.Context<never> | undefined,
+  resume: GraphResume<NodeLiveLeaseResult>
+): GraphCancel {
+  return startLiveChain(context, resume, (chain) => {
     if (cellLookup._tag === "Missing") {
-      return {
-        _tag: "NodeMissing",
-        nodeId: request.nodeId,
-        liveDemand: projectLiveDemand([]),
-      };
+      chain.succeed(missingNodeLiveLease(request.nodeId));
+      return;
     }
 
     const { cell } = cellLookup;
-    const { changed, liveDemand } = yield* cell.state.transition((latest) => {
+    const { changed, liveDemand } = cell.state.transitionSync((latest) => {
       const latestLiveLeases = phaseLiveLeases(latest.phase);
       const liveLeases = latestLiveLeases.filter((lease) => lease.leaseId !== request.leaseId);
       const nextDemand = projectLiveDemand(liveLeases);
@@ -190,255 +265,337 @@ export function releaseNodeLiveLease(
       ] as const;
     });
 
-    const failures = changed
-      ? yield* deliverLiveDemand(cell, liveDemand, liveTimeout, liveInterrupt)
-      : [];
-
-    if (changed) {
-      yield* cell.notifyChanged(cell.nodeId);
+    if (!changed) {
+      chain.succeed(heldLease(request.nodeId, request.leaseId, liveDemand, false, noFailures));
+      return;
     }
 
-    return {
-      _tag: "Held",
-      nodeId: request.nodeId,
-      leaseId: request.leaseId,
-      liveDemand,
-      changed,
-      failures,
-    };
+    runDeliverLiveDemand(cell, liveDemand, liveTimeout, chain, (failures) =>
+      notifyLiveObservers(chain, cell, cell.notifyChanged(cell.nodeId), () =>
+        chain.succeed(heldLease(request.nodeId, request.leaseId, liveDemand, true, failures))
+      )
+    );
   });
 }
 
 export function deliverLiveDemand(
   cell: GraphNodeCell,
   nextDemand: NodeLiveDemandSnapshot,
-  liveTimeout: DriverOperationTimeoutMs,
-  liveInterrupt?: LiveDeliveryInterrupt | undefined
-): Effect.Effect<ReadonlyArray<GraphFailure>> {
-  const { live } = cell.descriptor.driver;
-
-  if (live._tag === "Missing") {
-    return Effect.succeed([]);
+  liveTimeout: DriverOperationTimeoutMs
+): Effect.Effect<LiveFailures> {
+  if (cell.descriptor.driver.live._tag === "Missing") {
+    return Effect.succeed(noFailures);
   }
 
-  return Effect.gen(function* () {
-    const current = yield* cell.state.get;
-    const ready = phaseReadyData(current.phase);
-
-    if (ready._tag === "Missing") {
-      return [];
-    }
-
-    const active = activeLiveDemand(nextDemand);
-
-    // Contract: driver live hooks see only active demand. Inactive demand is a
-    // graph-owned transition that stops the current resource, if any.
-    if (active._tag === "Inactive") {
-      return yield* stopCurrentLiveResource(
-        cell,
-        ready.ready.liveResource,
-        liveTimeout,
-        {
-          _tag: "DemandInactive",
-        },
-        liveInterrupt
-      );
-    }
-
-    const currentLive = ready.ready.liveResource;
-
-    if (currentLive._tag === "Inactive") {
-      return yield* startLiveResource(
-        cell,
-        ready.ready.node,
-        active.demand,
-        liveTimeout,
-        [],
-        liveInterrupt
-      );
-    }
-
-    if (sameLiveDemand(currentLive.demand, active.demand)) {
-      return [];
-    }
-
-    if (live.run.update === undefined) {
-      // Contract: without an update hook, changed active demand is modeled as a
-      // stop/start transition. Authors opt into in-place resource updates.
-      const stopFailures = yield* stopLiveResource(
-        cell,
-        ready.ready.node,
-        currentLive,
-        liveTimeout,
-        {
-          _tag: "DemandChanged",
-        },
-        liveInterrupt
-      );
-      return yield* startLiveResource(
-        cell,
-        ready.ready.node,
-        active.demand,
-        liveTimeout,
-        stopFailures,
-        liveInterrupt
-      );
-    }
-
-    return yield* updateLiveResource(
-      cell,
-      ready.ready.node,
-      currentLive,
-      active.demand,
-      liveTimeout,
-      liveInterrupt
-    );
-  });
+  return callbackEffect((context, resume) =>
+    startLiveChain<LiveFailures>(context, resume, (chain) =>
+      runDeliverLiveDemand(cell, nextDemand, liveTimeout, chain, (failures) =>
+        chain.succeed(failures)
+      )
+    )
+  );
 }
 
 export function stopCurrentLiveResource(
   cell: GraphNodeCell,
   liveResource: LiveResourceState,
   liveTimeout: DriverOperationTimeoutMs,
-  reason: LiveResourceStopReason,
-  liveInterrupt?: LiveDeliveryInterrupt | undefined
-): Effect.Effect<ReadonlyArray<GraphFailure>> {
+  reason: LiveResourceStopReason
+): Effect.Effect<LiveFailures> {
   if (liveResource._tag === "Inactive") {
-    return setLiveResourceState(cell, { _tag: "Inactive" }).pipe(Effect.as([]));
+    return Effect.sync(() => {
+      setLiveResourceState(cell, inactiveLiveResource, noFailures);
+      return noFailures;
+    });
   }
 
-  return Effect.gen(function* () {
-    const current = yield* cell.state.get;
-    const ready = phaseReadyData(current.phase);
+  return callbackEffect((context, resume) =>
+    startLiveChain<LiveFailures>(context, resume, (chain) =>
+      runStopCurrentLiveResource(cell, liveResource, liveTimeout, reason, chain, (failures) =>
+        chain.succeed(failures)
+      )
+    )
+  );
+}
 
-    if (ready._tag === "Missing") {
-      return [];
-    }
+function runDeliverLiveDemand<A>(
+  cell: GraphNodeCell,
+  nextDemand: NodeLiveDemandSnapshot,
+  liveTimeout: DriverOperationTimeoutMs,
+  chain: LiveChain<A>,
+  done: LiveDone
+): void {
+  const { live } = cell.descriptor.driver;
 
-    return yield* stopLiveResource(
+  if (live._tag === "Missing") {
+    done(noFailures);
+    return;
+  }
+
+  const ready = phaseReadyData(cell.state.getSync().phase);
+
+  if (ready._tag === "Missing") {
+    done(noFailures);
+    return;
+  }
+
+  const active = activeLiveDemand(nextDemand);
+
+  // Contract: driver live hooks see only active demand. Inactive demand is a
+  // graph-owned transition that stops the current resource, if any.
+  if (active._tag === "Inactive") {
+    runStopCurrentLiveResource(
       cell,
-      ready.ready.node,
-      liveResource,
+      ready.ready.liveResource,
       liveTimeout,
-      reason,
-      liveInterrupt
+      { _tag: "DemandInactive" },
+      chain,
+      done
     );
+    return;
+  }
+
+  const { node } = ready.ready;
+  const currentLive = ready.ready.liveResource;
+
+  if (currentLive._tag === "Inactive") {
+    runLiveStart(cell, node, active.demand, liveTimeout, noFailures, chain, done);
+    return;
+  }
+
+  if (sameLiveDemand(currentLive.demand, active.demand)) {
+    done(noFailures);
+    return;
+  }
+
+  if (live.run.update === undefined) {
+    // Contract: without an update hook, changed active demand is modeled as a
+    // stop/start transition. Authors opt into in-place resource updates.
+    runLiveStop(
+      cell,
+      node,
+      currentLive,
+      liveTimeout,
+      { _tag: "DemandChanged" },
+      chain,
+      (stopFailures) =>
+        runLiveStart(cell, node, active.demand, liveTimeout, stopFailures, chain, done)
+    );
+    return;
+  }
+
+  runLiveUpdate(cell, node, currentLive, active.demand, liveTimeout, chain, done);
+}
+
+function runStopCurrentLiveResource<A>(
+  cell: GraphNodeCell,
+  liveResource: LiveResourceState,
+  liveTimeout: DriverOperationTimeoutMs,
+  reason: LiveResourceStopReason,
+  chain: LiveChain<A>,
+  done: LiveDone
+): void {
+  if (liveResource._tag === "Inactive") {
+    setLiveResourceState(cell, inactiveLiveResource, noFailures);
+    done(noFailures);
+    return;
+  }
+
+  const ready = phaseReadyData(cell.state.getSync().phase);
+
+  if (ready._tag === "Missing") {
+    done(noFailures);
+    return;
+  }
+
+  runLiveStop(cell, ready.ready.node, liveResource, liveTimeout, reason, chain, done);
+}
+
+/**
+ * Runs one live hook as the chain's current step. Its settle continues the
+ * chain unless the chain was canceled first; a continuation that throws ends
+ * the delivery as a defect, as a throw inside the Effect pipeline did.
+ */
+function runLiveEdge<A, B>(
+  chain: LiveChain<B>,
+  input: DriverEdgeInput<A>,
+  settle: (exit: Exit.Exit<A, unknown>) => void
+): void {
+  chain.current = startEdge(input, chain.context, (exit) => {
+    if (chain.ended) return;
+    chain.current = noCancel;
+    try {
+      settle(exit);
+    } catch (cause) {
+      chain.die(cause);
+    }
   });
 }
 
-function updateLiveResource(
+/**
+ * Runs observer work as the chain's current step, then `next` in the turn the
+ * work ends, as the notice inside the delivery's Effect pipeline did. Work
+ * that fails, dies, or interrupts itself ends the delivery with its cause.
+ * A void notice continues at once; the chain is the owner of effectful work,
+ * so no notice allocates a failure handler.
+ */
+function notifyLiveObservers<A>(
+  chain: LiveChain<A>,
+  cell: GraphNodeCell,
+  work: Effect.Effect<void>,
+  next: () => void
+): void {
+  if (work === Effect.void) {
+    continueLiveChain(chain, next);
+    return;
+  }
+  const cancel = finishObserverWorkInTurn(
+    work,
+    chain.context,
+    () => continueLiveChain(chain, next),
+    chain,
+    cell.jobs
+  );
+  if (cancel !== undefined) chain.current = cancel;
+}
+
+/** Runs the chain's next step; a step that throws ends the delivery as a defect. */
+function continueLiveChain<A>(chain: LiveChain<A>, next: () => void): void {
+  if (chain.ended) return;
+  chain.current = noCancel;
+  try {
+    next();
+  } catch (cause) {
+    chain.die(cause);
+  }
+}
+
+function runLiveUpdate<A>(
   cell: GraphNodeCell,
   node: object,
-  currentLive: Extract<LiveResourceState, { readonly _tag: "Active" }>,
+  currentLive: ActiveLiveResource,
   demand: ActiveNodeLiveDemandSnapshot,
   liveTimeout: DriverOperationTimeoutMs,
-  liveInterrupt?: LiveDeliveryInterrupt | undefined
-): Effect.Effect<ReadonlyArray<GraphFailure>> {
+  chain: LiveChain<A>,
+  done: LiveDone
+): void {
   const { live } = cell.descriptor.driver;
+  const update = live._tag === "Missing" ? undefined : live.run.update;
 
-  if (live._tag === "Missing" || live.run.update === undefined) {
-    return Effect.succeed([]);
+  if (update === undefined) {
+    done(noFailures);
+    return;
   }
 
   const abortController = new AbortController();
   const ctx = makeLiveContext({ node, abortController });
+  // The update's signal stays governed through its failure recovery below,
+  // as one interruptible delivery step.
+  chain.updateAbort = abortController;
 
-  const runUpdate = runTimedDriverOperation({
-    cell,
-    operation: "live.update",
-    boundary: "driver-live",
-    timeout: liveTimeout,
-    abortController,
-    spanName: "frond.graph.live.update",
-    spanAttributes: liveSpanAttributes(cell, "update"),
-    run: () => live.run.update?.(ctx, currentLive.resource, demand),
-  });
+  runLiveEdge(
+    chain,
+    {
+      cell,
+      operation: "live.update",
+      boundary: "driver-live",
+      timeout: liveTimeout,
+      abortController,
+      spanName: "frond.graph.live.update",
+      spanAttributes: liveSpanAttributes(cell, "update"),
+      run: () => update(ctx, currentLive.resource, demand),
+    },
+    (exit) => {
+      if (exit._tag === "Success") {
+        chain.updateAbort = undefined;
+        setLiveResourceState(
+          cell,
+          {
+            _tag: "Active",
+            generation: currentLive.generation,
+            demand,
+            resource: currentLive.resource,
+          },
+          noFailures
+        );
+        done(noFailures);
+        return;
+      }
 
-  return trackLiveInterrupt(liveInterrupt, abortController, runUpdate).pipe(
-    Effect.matchEffect({
-      onFailure: (cause) =>
-        Effect.gen(function* () {
-          // Hazard: update failure leaves resource state uncertain. Report it,
-          // stop the old resource once, then make one bounded restart attempt
-          // for the latest active demand. Do not loop here.
-          const updateFailure = liveDeliveryFailed(cell, "update", cause);
-          const stopFailures = yield* stopLiveResource(
-            cell,
-            node,
-            currentLive,
-            liveTimeout,
-            {
-              _tag: "UpdateFailed",
-            },
-            liveInterrupt
-          );
-          return yield* startLiveResource(
+      // Hazard: update failure leaves resource state uncertain. Report it,
+      // stop the old resource once, then make one bounded restart attempt
+      // for the latest active demand. Do not loop here.
+      const updateFailure = liveDeliveryFailed(cell, "update", Cause.squash(exit.cause));
+      runLiveStop(
+        cell,
+        node,
+        currentLive,
+        liveTimeout,
+        { _tag: "UpdateFailed" },
+        chain,
+        (stopFailures) =>
+          runLiveStart(
             cell,
             node,
             demand,
             liveTimeout,
             [updateFailure, ...stopFailures],
-            liveInterrupt
-          );
-        }),
-      onSuccess: () =>
-        setLiveResourceState(cell, {
-          _tag: "Active",
-          generation: currentLive.generation,
-          demand,
-          resource: currentLive.resource,
-        }).pipe(Effect.as([])),
-    }),
-    Effect.onInterrupt(() =>
-      Effect.sync(() => {
-        abortController.abort(interruptedCancellation());
-      })
-    )
+            chain,
+            (failures) => {
+              chain.updateAbort = undefined;
+              done(failures);
+            }
+          )
+      );
+    }
   );
 }
 
-function startLiveResource(
+function runLiveStart<A>(
   cell: GraphNodeCell,
   node: object,
   demand: ActiveNodeLiveDemandSnapshot,
   liveTimeout: DriverOperationTimeoutMs,
-  previousFailures: ReadonlyArray<GraphFailure>,
-  liveInterrupt?: LiveDeliveryInterrupt | undefined
-): Effect.Effect<ReadonlyArray<GraphFailure>> {
+  previousFailures: LiveFailures,
+  chain: LiveChain<A>,
+  done: LiveDone
+): void {
   const { live } = cell.descriptor.driver;
 
   if (live._tag === "Missing") {
-    return Effect.succeed(previousFailures);
+    done(previousFailures);
+    return;
   }
 
-  return Effect.gen(function* () {
-    const generation = yield* cell.state.transition((latest) => [
-      latest.nextLiveGeneration,
-      { ...latest, nextLiveGeneration: latest.nextLiveGeneration + 1 },
-    ]);
-    const abortController = new AbortController();
-    const ctx = makeLiveContext({ node, abortController });
+  const generation = cell.state.transitionSync((latest) => [
+    latest.nextLiveGeneration,
+    { ...latest, nextLiveGeneration: latest.nextLiveGeneration + 1 },
+  ]);
+  const abortController = new AbortController();
+  const ctx = makeLiveContext({ node, abortController });
 
-    // Interrupt atomicity: any resource returned from start must reach stop.
-    // Two escapes feed one dedupe gate: (1) the value crossed into the runtime
-    // but the fiber was interrupted before the state commit (`produced`);
-    // (2) the normalized start's underlying work settles with a resource after
-    // the lease operation was abandoned — a retained promise in async mode, a
-    // masked routing fiber in effect mode — and reports it through the
-    // onAbandonedResource contract both normalizations implement. Either way
-    // the resource is routed into a detached driver stop instead of dropped.
-    let produced: { readonly resource: unknown } | undefined;
-    let settled = false;
-    const stopAbandonedResource = (resource: unknown): void => {
-      if (settled) {
-        return;
-      }
+  // Interrupt atomicity: any resource returned from start must reach stop.
+  // Two escapes feed one dedupe gate: (1) the value crossed into the runtime
+  // but the delivery was canceled before the state commit (`produced`);
+  // (2) the normalized start's underlying work settles with a resource after
+  // the lease operation was abandoned — a retained promise in async mode, a
+  // masked routing fiber in effect mode — and reports it through the
+  // onAbandonedResource contract both normalizations implement. Either way
+  // the resource is routed into a detached driver stop instead of dropped.
+  let produced: { readonly resource: unknown } | undefined;
+  let settled = false;
+  const stopAbandonedResource = (resource: unknown): void => {
+    if (settled) {
+      return;
+    }
 
-      settled = true;
-      runDetachedAbandonedLiveStop(cell, node, resource, liveTimeout);
-    };
+    settled = true;
+    runDetachedAbandonedLiveStop(cell, node, resource, liveTimeout);
+  };
 
-    const runStart = runTimedDriverOperation({
+  runLiveEdge(
+    chain,
+    {
       cell,
       operation: "live.start",
       boundary: "driver-live",
@@ -446,49 +603,49 @@ function startLiveResource(
       abortController,
       spanName: "frond.graph.live.start",
       spanAttributes: liveSpanAttributes(cell, "start"),
-      run: () =>
-        live.run.start(ctx, demand, { onAbandonedResource: stopAbandonedResource }).pipe(
-          Effect.tap((resource) =>
-            Effect.sync(() => {
-              produced = { resource };
-            })
-          )
-        ),
-    });
+      run: () => live.run.start(ctx, demand, { onAbandonedResource: stopAbandonedResource }),
+      onProduced: (resource) => {
+        produced = { resource };
+      },
+      onAbandonedResource: stopAbandonedResource,
+    },
+    (exit) => {
+      if (exit._tag === "Failure") {
+        const failures = [
+          ...previousFailures,
+          liveDeliveryFailed(cell, "start", Cause.squash(exit.cause)),
+        ];
+        setLiveResourceState(cell, inactiveLiveResource, failures);
+        done(failures);
+        return;
+      }
 
-    return yield* trackLiveInterrupt(liveInterrupt, abortController, runStart).pipe(
-      Effect.matchEffect({
-        onFailure: (cause) =>
-          Effect.gen(function* () {
-            const failures = [...previousFailures, liveDeliveryFailed(cell, "start", cause)];
-            yield* setLiveResourceState(cell, { _tag: "Inactive" }, failures);
-            return failures;
-          }),
-        onSuccess: (resource) =>
-          Effect.gen(function* () {
-            // Committed resources are owned by cell state from here on; the
-            // abandoned-resource routing must never double-stop them.
-            settled = true;
-            // Hazard: generation prevents a late start from overwriting a newer
-            // live-resource transition if actor behavior changes later.
-            yield* setLiveResourceState(
-              cell,
-              {
-                _tag: "Active",
-                generation,
-                demand,
-                resource,
-              },
-              previousFailures
-            );
-            return previousFailures;
-          }),
-      }),
-      // Hazard: eviction and stop interrupt the live-lease operation fiber;
-      // without this the live.start driver never observes cancellation and
-      // its in-flight work runs ungoverned (same wiring as acquire/refresh/
-      // action driver operations).
-      Effect.onInterrupt(() =>
+      // Committed resources are owned by cell state from here on; the
+      // abandoned-resource routing must never double-stop them.
+      settled = true;
+      // Hazard: generation prevents a late start from overwriting a newer
+      // live-resource transition if queue behavior changes later.
+      setLiveResourceState(
+        cell,
+        {
+          _tag: "Active",
+          generation,
+          demand,
+          resource: exit.value,
+        },
+        previousFailures
+      );
+      done(previousFailures);
+    }
+  );
+
+  // Hazard: eviction and stop cancel the live-lease delivery; the start hook
+  // must observe cancellation and a produced resource must reach stop, after
+  // the edge's own interruption has ended.
+  const cancelEdge = chain.current;
+  chain.current = () =>
+    cancelEdge().pipe(
+      Effect.andThen(
         Effect.sync(() => {
           abortController.abort(interruptedCancellation());
 
@@ -498,13 +655,11 @@ function startLiveResource(
         })
       )
     );
-  });
 }
 
 // Detached by design: the operation that owned this start was already
 // interrupted or timed out, so no caller awaits this stop. Failures are
-// recorded on the cell as live failures rather than thrown into an
-// unobserved fiber.
+// recorded on the cell as live failures rather than thrown.
 function runDetachedAbandonedLiveStop(
   cell: GraphNodeCell,
   node: object,
@@ -518,151 +673,135 @@ function runDetachedAbandonedLiveStop(
   }
 
   const abortController = new AbortController();
-  const ctx = makeLiveStopContext({
-    node,
-    abortController,
-    reason: { _tag: "StartInterrupted" },
-  });
+  const ctx = makeLiveStopContext({ node, abortController, reason: { _tag: "StartInterrupted" } });
 
-  const runStop = runTimedDriverOperation({
-    cell,
-    operation: "live.stop",
-    boundary: "driver-live",
-    timeout: liveTimeout,
-    abortController,
-    spanName: "frond.graph.live.stop",
-    spanAttributes: liveSpanAttributes(cell, "stop"),
-    run: () => live.run.stop(ctx, resource),
-  });
-
-  Effect.runFork(
-    runStop.pipe(
-      Effect.asVoid,
-      Effect.catch((cause) => recordDetachedLiveStopFailure(cell, cause)),
-      Effect.catchCause(() => Effect.void)
-    )
+  startEdge(
+    {
+      cell,
+      operation: "live.stop",
+      boundary: "driver-live",
+      timeout: liveTimeout,
+      abortController,
+      spanName: "frond.graph.live.stop",
+      spanAttributes: liveSpanAttributes(cell, "stop"),
+      run: () => live.run.stop(ctx, resource),
+    },
+    undefined,
+    (exit) => {
+      if (exit._tag === "Failure") {
+        recordDetachedLiveStopFailure(cell, Cause.squash(exit.cause));
+      }
+    }
   );
 }
 
 // Records a detached stop failure as the cell's live failure without touching
 // the live-resource slot: the abandoned resource never became current, so a
-// newer active resource (or Inactive) must not be clobbered from a detached
-// fiber.
-function recordDetachedLiveStopFailure(cell: GraphNodeCell, cause: unknown): Effect.Effect<void> {
-  return Effect.gen(function* () {
-    const liveFailure = yield* liveFailureFromFailures([liveDeliveryFailed(cell, "stop", cause)]);
-    yield* cell.state.transition((latest) => [
-      undefined,
-      {
-        ...latest,
-        phase: mapPhaseBase(latest.phase, (base) => ({ ...base, liveFailure })),
-      },
-    ]);
-    yield* cell.notifyChanged(cell.nodeId);
-  });
+// newer active resource (or Inactive) must not be clobbered by a detached
+// stop.
+function recordDetachedLiveStopFailure(cell: GraphNodeCell, cause: unknown): void {
+  const liveFailure = liveFailureFromFailures(cell, [liveDeliveryFailed(cell, "stop", cause)]);
+  cell.state.transitionSync((latest) => [
+    undefined,
+    {
+      ...latest,
+      phase: mapPhaseBase(latest.phase, (base) => ({ ...base, liveFailure })),
+    },
+  ]);
+  const work = cell.notifyChanged(cell.nodeId);
+
+  if (work !== Effect.void) {
+    Effect.runFork(work.pipe(Effect.catchCause(() => Effect.void)));
+  }
 }
 
-function stopLiveResource(
+function runLiveStop<A>(
   cell: GraphNodeCell,
   node: object,
-  currentLive: Extract<LiveResourceState, { readonly _tag: "Active" }>,
+  currentLive: ActiveLiveResource,
   liveTimeout: DriverOperationTimeoutMs,
   reason: LiveResourceStopReason,
-  liveInterrupt?: LiveDeliveryInterrupt | undefined
-): Effect.Effect<ReadonlyArray<GraphFailure>> {
+  chain: LiveChain<A>,
+  done: LiveDone
+): void {
   const { live } = cell.descriptor.driver;
 
   if (live._tag === "Missing") {
-    return setLiveResourceState(cell, { _tag: "Inactive" }).pipe(Effect.as([]));
+    setLiveResourceState(cell, inactiveLiveResource, noFailures);
+    done(noFailures);
+    return;
   }
 
   const abortController = new AbortController();
   const ctx = makeLiveStopContext({ node, abortController, reason });
 
-  const runStop = runTimedDriverOperation({
-    cell,
-    operation: "live.stop",
-    boundary: "driver-live",
-    timeout: liveTimeout,
-    abortController,
-    spanName: "frond.graph.live.stop",
-    spanAttributes: liveSpanAttributes(cell, "stop"),
-    run: () => live.run.stop(ctx, currentLive.resource),
-  });
+  runLiveEdge(
+    chain,
+    {
+      cell,
+      operation: "live.stop",
+      boundary: "driver-live",
+      timeout: liveTimeout,
+      abortController,
+      spanName: "frond.graph.live.stop",
+      spanAttributes: liveSpanAttributes(cell, "stop"),
+      run: () => live.run.stop(ctx, currentLive.resource),
+    },
+    (exit) => {
+      if (exit._tag === "Failure") {
+        const failures = [liveDeliveryFailed(cell, "stop", Cause.squash(exit.cause))];
+        setLiveResourceState(cell, inactiveLiveResource, failures);
+        done(failures);
+        return;
+      }
 
-  return trackLiveInterrupt(liveInterrupt, abortController, runStop).pipe(
-    Effect.matchEffect({
-      onFailure: (cause) => {
-        const failures = [liveDeliveryFailed(cell, "stop", cause)];
-        return setLiveResourceState(cell, { _tag: "Inactive" }, failures).pipe(Effect.as(failures));
-      },
-      onSuccess: () => setLiveResourceState(cell, { _tag: "Inactive" }).pipe(Effect.as([])),
-    }),
-    Effect.onInterrupt(() =>
-      Effect.sync(() => {
-        abortController.abort(interruptedCancellation());
-      })
-    )
+      setLiveResourceState(cell, inactiveLiveResource, noFailures);
+      done(noFailures);
+    }
   );
 }
 
-export interface LiveDeliveryInterrupt {
-  readonly track: <A, E, R>(
-    abortController: AbortController,
-    effect: Effect.Effect<A, E, R>
-  ) => Effect.Effect<A, E, R>;
-  readonly abort: () => void;
-}
-
-export function makeLiveDeliveryInterrupt(): LiveDeliveryInterrupt {
-  const abortControllers = new Set<AbortController>();
-
+export function missingNodeLiveLease(nodeId: NodeLiveLeaseResult["nodeId"]): NodeLiveLeaseResult {
   return {
-    track: (abortController, effect) =>
-      Effect.sync(() => {
-        abortControllers.add(abortController);
-      }).pipe(
-        Effect.flatMap(() => effect),
-        Effect.ensuring(
-          Effect.sync(() => {
-            abortControllers.delete(abortController);
-          })
-        )
-      ),
-    abort: () => {
-      for (const abortController of abortControllers) {
-        abortController.abort(interruptedCancellation());
-      }
-    },
+    _tag: "NodeMissing",
+    nodeId,
+    liveDemand: projectLiveDemand([]),
   };
 }
 
-function trackLiveInterrupt<A, E, R>(
-  liveInterrupt: LiveDeliveryInterrupt | undefined,
-  abortController: AbortController,
-  effect: Effect.Effect<A, E, R>
-): Effect.Effect<A, E, R> {
-  return liveInterrupt === undefined ? effect : liveInterrupt.track(abortController, effect);
+function heldLease(
+  nodeId: NodeLiveLeaseResult["nodeId"],
+  leaseId: NodeLiveLeaseId,
+  liveDemand: NodeLiveDemandSnapshot,
+  changed: boolean,
+  failures: LiveFailures
+): NodeLiveLeaseResult {
+  return {
+    _tag: "Held",
+    nodeId,
+    leaseId,
+    liveDemand,
+    changed,
+    failures,
+  };
 }
 
 function setLiveResourceState(
   cell: GraphNodeCell,
   liveResource: LiveResourceState,
-  failures: ReadonlyArray<GraphFailure> = []
-): Effect.Effect<void> {
-  return Effect.gen(function* () {
-    const liveFailure = yield* liveFailureFromFailures(failures);
-    yield* cell.state.transition((latest) => [
-      undefined,
-      {
-        ...latest,
-        phase: mapPhaseReady(
-          mapPhaseBase(latest.phase, (base) => ({ ...base, liveFailure })),
-          (readyData) => ({ ...readyData, liveResource })
-        ),
-      },
-    ]);
-  });
+  failures: LiveFailures
+): void {
+  const liveFailure = liveFailureFromFailures(cell, failures);
+  cell.state.transitionSync((latest) => [
+    undefined,
+    {
+      ...latest,
+      phase: mapPhaseReady(
+        mapPhaseBase(latest.phase, (base) => ({ ...base, liveFailure })),
+        (readyData) => ({ ...readyData, liveResource })
+      ),
+    },
+  ]);
 }
 
 function sameLiveDemand(
@@ -701,13 +840,10 @@ function liveDeliveryFailed(
 }
 
 function liveFailureFromFailures(
-  failures: ReadonlyArray<GraphFailure>
-): Effect.Effect<NodeLiveFailure | undefined> {
-  const noFailure: NodeLiveFailure | undefined = undefined;
-
-  return failures.length === 0
-    ? Effect.succeed(noFailure)
-    : Clock.currentTimeMillis.pipe(Effect.map((at) => ({ failures, at })));
+  cell: GraphNodeCell,
+  failures: LiveFailures
+): NodeLiveFailure | undefined {
+  return failures.length === 0 ? undefined : { failures, at: cell.syncClock.now() };
 }
 
 function sameLiveLeasesDemand(

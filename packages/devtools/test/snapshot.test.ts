@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import type { Graph, Runtime } from "@frondruntime/core";
+import { Graph, type Runtime } from "@frondruntime/core";
 import type { EncodePolicy } from "../src/policy.ts";
+import { Reply } from "../src/protocol.ts";
 import { encodeGraphSnapshot } from "../src/snapshot.ts";
+import { acrossTheWire } from "./wire.ts";
 
 /**
  * Builds a node in whichever arm the test needs.
@@ -305,4 +307,145 @@ describe("encodeGraphSnapshot", () => {
 
     expect(encoded.sequence).toBe(42);
   });
+});
+
+/**
+ * Same failure as on the event path, answered the same way: the NDJSON codec
+ * rejects `NaN` and both infinities as JSON values, which used to fail the
+ * whole `Frond.Reply` and leave the hub waiting out its timeout for a node read
+ * the app had already answered.
+ */
+describe("numbers with no JSON form", () => {
+  const values = {
+    rate: Number.NaN,
+    upper: Number.POSITIVE_INFINITY,
+    lower: Number.NEGATIVE_INFINITY,
+    empty: null,
+    finite: 42,
+  };
+
+  const expected = {
+    rate: { _: "opaque", type: "number:NaN" },
+    upper: { _: "opaque", type: "number:Infinity" },
+    lower: { _: "opaque", type: "number:-Infinity" },
+    empty: null,
+    finite: 42,
+  };
+
+  function resultAcrossTheWire(result: unknown, policy: EncodePolicy): unknown {
+    const snapshot = encode(
+      snapshotOf({ nodes: [node({ _tag: "Ready", result })] }),
+      policy,
+      "orders:v1"
+    );
+    const received = acrossTheWire(Reply.payloadSchema, {
+      attachmentId: "attachment-1",
+      requestId: "request-1",
+      outcome: { _tag: "Snapshot", snapshot },
+    });
+
+    return received.outcome._tag === "Snapshot"
+      ? received.outcome.snapshot.nodes[0]?.result
+      : received.outcome.reason;
+  }
+
+  test("a node result crosses the transport distinguishable, at full", () => {
+    expect(resultAcrossTheWire(values, "full")).toEqual(expected);
+  });
+
+  /**
+   * One read per value, because at `"shape"` an object result is its key list
+   * and no number inside it would reach the wire to be tested.
+   */
+  test("a node result crosses the transport distinguishable, at shape", () => {
+    const received = Object.fromEntries(
+      Object.entries(values).map(([key, value]) => [key, resultAcrossTheWire(value, "shape")])
+    );
+
+    expect(received).toEqual(expected);
+  });
+});
+
+/** See the same block in `encode.test.ts`; this is the snapshot path's half. */
+describe("a key named __proto__", () => {
+  test("a node result crosses the transport with it as an own key, at full", () => {
+    const result = JSON.parse('{"__proto__":{"flag":1},"good":2}') as unknown;
+    const snapshot = encode(
+      snapshotOf({ nodes: [node({ _tag: "Ready", result })] }),
+      "full",
+      "orders:v1"
+    );
+    const received = acrossTheWire(Reply.payloadSchema, {
+      attachmentId: "attachment-1",
+      requestId: "request-1",
+      outcome: { _tag: "Snapshot", snapshot },
+    });
+    const crossed =
+      received.outcome._tag === "Snapshot" ? received.outcome.snapshot.nodes[0]?.result : undefined;
+
+    expect(Object.getPrototypeOf(crossed)).toBe(Object.prototype);
+    expect(Object.prototype.hasOwnProperty.call(crossed, "__proto__")).toBe(true);
+    expect(JSON.stringify(crossed)).toBe('{"__proto__":{"flag":1},"good":2}');
+  });
+});
+
+describe("aggregate failures", () => {
+  const failed = (dependency: string): Graph.DependencyFailed =>
+    new Graph.DependencyFailed({
+      nodeId: "orders:v1" as Graph.NodeId,
+      tag: "orders",
+      dependency,
+      dependencyNodeId: `${dependency}:v1` as Graph.NodeId,
+      cause: { ratio: Number.NaN },
+    });
+  const aggregate = new Graph.DependencyFailures({
+    nodeId: "orders:v1" as Graph.NodeId,
+    tag: "orders",
+    failures: [failed("rates"), failed("prices")],
+  });
+
+  for (const policy of ["none", "shape", "full"] as const) {
+    test(`a node failed by two dependencies crosses the transport, at ${policy}`, () => {
+      const snapshot = encode(
+        snapshotOf({
+          nodes: [
+            node({
+              failure: aggregate,
+              liveFailure: { at: 1_660, failures: [aggregate] },
+            }),
+          ],
+        }),
+        policy,
+        "orders:v1"
+      );
+      const received = acrossTheWire(Reply.payloadSchema, {
+        attachmentId: "attachment-1",
+        requestId: "request-1",
+        outcome: { _tag: "Snapshot", snapshot },
+      });
+
+      expect(received.outcome._tag).toBe("Snapshot");
+    });
+  }
+});
+
+/** See the same block in `encode.test.ts`: core keeps a hole in a failure's path. */
+describe("a failure path with holes", () => {
+  for (const policy of ["shape", "full"] as const) {
+    test(`a node failure crosses the transport, at ${policy}`, () => {
+      const failure = Object.assign(new Error("boom"), { path: new Array(2) });
+      const snapshot = encode(snapshotOf({ nodes: [node({ failure })] }), policy, "orders:v1");
+      const received = acrossTheWire(Reply.payloadSchema, {
+        attachmentId: "attachment-1",
+        requestId: "request-1",
+        outcome: { _tag: "Snapshot", snapshot },
+      });
+      const crossed =
+        received.outcome._tag === "Snapshot"
+          ? received.outcome.snapshot.nodes[0]?.failure
+          : undefined;
+
+      expect(crossed).toMatchObject({ causes: [{ path: ["undefined", "undefined"] }] });
+    });
+  }
 });

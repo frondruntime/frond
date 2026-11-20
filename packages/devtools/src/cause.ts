@@ -1,5 +1,10 @@
 import { Diagnostics } from "@frondruntime/core";
-import type { ErrorDescriptor } from "./descriptors.ts";
+import {
+  describeNonFiniteNumber,
+  type ErrorDescriptor,
+  setField,
+  UNREADABLE,
+} from "./descriptors.ts";
 import type { EncodePolicy } from "./policy.ts";
 
 /**
@@ -124,21 +129,10 @@ export function describeError(
   });
 
   if (full === undefined) {
-    // `path` and `valueKind` are the two frame fields that describe the app's
-    // data rather than the runtime's: a path is a list of the app's own key
-    // names, and a value kind says whether what failed was an array or an
-    // object. Both are shape by any definition, so `"none"` — whose whole
-    // contract is that no shape crosses — drops them. The message still
-    // crosses at every policy; that is deliberate, and it is the one thing a
-    // reader cannot diagnose without.
-    const shed = policy === "none" ? { path: undefined, valueKind: undefined } : {};
-
     return {
       _: "error",
       message: rootMessage(frames),
-      causes: frames.map((frame) =>
-        compact({ ...frame, ...shed, stack: undefined, preview: undefined })
-      ),
+      causes: reduceChain(frames, policy),
     };
   }
 
@@ -151,33 +145,154 @@ export function describeError(
   // app object whose payload points back at that object is the ordinary shape of
   // a wrapped failure, and un-marking it there would let the walk descend into
   // the ancestor instead of naming the cycle.
+  //
+  // Which links this call inserted is a bit per link, in place of an array of
+  // them: there are at most `CAUSE_MAX_DEPTH` links, well under 31.
   const links = causeValues(value, frames.length);
-  const marked = links.filter(
-    (link): link is object => typeof link === "object" && link !== null && !full.seen.has(link)
-  );
+  let marked = 0;
 
-  for (const link of marked) {
-    full.seen.add(link);
+  for (let index = 0; index < links.length; index++) {
+    const link = links[index];
+
+    if (typeof link === "object" && link !== null && !full.seen.has(link)) {
+      full.seen.add(link);
+      marked |= 1 << index;
+    }
   }
 
   try {
-    return {
-      _: "error",
-      message: rootMessage(frames),
-      causes: frames.map((frame, index) =>
-        compact({
-          ...frame,
-          preview: undefined,
-          stack: frame.stack === undefined ? undefined : abridgeStack(frame.stack),
-          fields: errorFields(links[index], full.encodeValue),
-        })
-      ),
-    };
+    const causes = reduceChain(frames, policy);
+
+    for (let index = 0; index < causes.length; index++) {
+      const fields = errorFields(links[index], full.encodeValue);
+
+      if (fields !== undefined) {
+        // Index-aligned: `reduceChain` keeps one frame per frame it is given.
+        (causes[index] as Record<string, unknown>)["fields"] = fields;
+      }
+    }
+
+    return { _: "error", message: rootMessage(frames), causes };
   } finally {
-    for (const link of marked) {
-      full.seen.delete(link);
+    for (let index = 0; index < links.length; index++) {
+      if ((marked & (1 << index)) !== 0) {
+        full.seen.delete(links[index] as object);
+      }
     }
   }
+}
+
+/**
+ * A chain of frames, each cut down by {@link reduceFrame}.
+ *
+ * Indexed loops rather than `map`, here and in `reduceFrame`: this runs once
+ * per failure in every record, nested once per member of an aggregate, and on
+ * Hermes a callback and an entry array per frame are a cost worth not paying.
+ */
+function reduceChain(
+  chain: ReadonlyArray<Diagnostics.SerializedCauseFrame>,
+  policy: EncodePolicy
+): Array<Record<string, unknown>> {
+  const reduced: Array<Record<string, unknown>> = [];
+
+  for (let index = 0; index < chain.length; index++) {
+    reduced.push(reduceFrame(chain[index] as Diagnostics.SerializedCauseFrame, policy));
+  }
+
+  return reduced;
+}
+
+/**
+ * One frame, cut down to what its policy lets cross.
+ *
+ * The one place a frame is reduced, so the frames of an aggregate's member
+ * chains, which core nests under `failures`, get exactly what the chain that
+ * holds them gets. A member frame comes from the same walk as any other and
+ * carries the same `preview`, `stack` and absent keys.
+ *
+ * `path` and `valueKind` are the two frame fields that describe the app's data
+ * rather than the runtime's: a path is a list of the app's own key names, and a
+ * value kind says whether what failed was an array or an object. Both are shape
+ * by any definition, so `"none"` — whose whole contract is that no shape
+ * crosses — drops them. The message still crosses at every policy; that is
+ * deliberate, and it is the one thing a reader cannot diagnose without.
+ *
+ * `fields` is not added here: it needs the value behind the frame, which only
+ * the outermost chain keeps (see {@link causeValues}).
+ */
+function reduceFrame(
+  frame: Diagnostics.SerializedCauseFrame,
+  policy: EncodePolicy
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+
+  // `Object.prototype.hasOwnProperty.call` rather than `Object.hasOwn`, which
+  // Hermes does not ship.
+  for (const key in frame) {
+    if (!Object.prototype.hasOwnProperty.call(frame, key)) {
+      continue;
+    }
+
+    const value = (frame as Record<string, unknown>)[key];
+
+    if (value === undefined || key === "preview") {
+      continue;
+    }
+
+    if (key === "stack") {
+      if (policy === "full" && typeof value === "string") {
+        out[key] = abridgeStack(value);
+      }
+    } else if (key === "path") {
+      if (policy !== "none") {
+        out[key] = Array.isArray(value) ? pathOf(value) : value;
+      }
+    } else if (key === "valueKind") {
+      if (policy !== "none") {
+        out[key] = value;
+      }
+    } else if (key === "failures" && Array.isArray(value)) {
+      const chains: ReadonlyArray<ReadonlyArray<Diagnostics.SerializedCauseFrame>> = value;
+      const reduced: Array<Array<Record<string, unknown>>> = [];
+
+      for (let index = 0; index < chains.length; index++) {
+        reduced.push(
+          reduceChain(chains[index] as ReadonlyArray<Diagnostics.SerializedCauseFrame>, policy)
+        );
+      }
+
+      out[key] = reduced;
+    } else if (key === "cancellation" && typeof value === "object" && value !== null) {
+      // Core fills both of its keys whether the failure had them or not.
+      out[key] = compact(value as Record<string, unknown>);
+    } else if (typeof value === "number") {
+      out[key] = value - value === 0 ? value : describeNonFiniteNumber(value);
+    } else {
+      out[key] = value;
+    }
+  }
+
+  return out;
+}
+
+/**
+ * A frame's `path`, with no holes.
+ *
+ * Core writes each key name as a string and an `undefined` one as
+ * `"undefined"`, but keeps a hole where the failure's own list had one. A hole
+ * reads as `undefined`, so it goes out as core writes that: the codec rejects a
+ * hole as it rejects `undefined`, and one would fail the whole batch.
+ */
+function pathOf(path: ReadonlyArray<unknown>): Array<unknown> {
+  const out: Array<unknown> = [];
+
+  for (let index = 0; index < path.length; index++) {
+    const entry = path[index];
+
+    out.push(entry === undefined ? "undefined" : entry);
+  }
+
+  return out;
 }
 
 /**
@@ -203,7 +318,14 @@ export function describeError(
  */
 function abridgeStack(stack: string): string {
   const lines = stack.split("\n");
-  const first = lines.findIndex(isStackFrame);
+  let first = -1;
+
+  for (let index = 0; index < lines.length; index++) {
+    if (isStackFrame(lines[index] as string)) {
+      first = index;
+      break;
+    }
+  }
 
   if (first === -1) {
     return stack.length <= FULL_CAUSE_STACK_LENGTH
@@ -211,31 +333,59 @@ function abridgeStack(stack: string): string {
       : `${stack.slice(0, FULL_CAUSE_STACK_LENGTH)}…`;
   }
 
-  // Everything above the first frame is the error's own header, kept whole: it
-  // is the name and message, which is the part a reader reads first.
-  const header = lines.slice(0, first);
+  // One pass over everything below the header, in loops rather than callbacks
+  // and spreads, for the reason `reduceChain` gives.
+  //
   // Counted against everything below the header, not just the lines the two
   // patterns recognize. JSC writes frames this cannot parse — `promiseReactionJob@[native code]`
   // has no `:line:col` — and dropping those out of the denominator would let the
   // trace claim it accounted for what it removed while quietly removing more.
-  const body = lines.slice(first).filter((line) => line.trim() !== "");
-  const frames = body.filter(isStackFrame);
-  const own = frames.filter((line) => !LIBRARY_STACK_FRAME.test(line));
-  const kept = (own.length === 0 ? frames.slice(0, LIBRARY_ONLY_STACK_FRAMES) : own).slice(
-    0,
-    KEPT_STACK_FRAMES
-  );
-  const dropped = body.length - kept.length;
+  let body = 0;
+  // Only as many of each as can be kept: the top library frames for a trace
+  // with no app frames, and the first app frames otherwise.
+  const leading: Array<string> = [];
+  const own: Array<string> = [];
 
-  if (dropped === 0) {
-    return [...header, ...kept].join("\n");
+  for (let index = first; index < lines.length; index++) {
+    const line = lines[index] as string;
+
+    if (line.trim() === "") {
+      continue;
+    }
+
+    body++;
+
+    if (!isStackFrame(line)) {
+      continue;
+    }
+
+    if (leading.length < LIBRARY_ONLY_STACK_FRAMES) {
+      leading.push(line);
+    }
+
+    if (own.length < KEPT_STACK_FRAMES && !LIBRARY_STACK_FRAME.test(line)) {
+      own.push(line);
+    }
   }
 
-  return [
-    ...header,
-    ...kept,
-    `    … ${dropped} frame${dropped === 1 ? "" : "s"} dropped: library internals, unrecognized lines, and any past the first ${KEPT_STACK_FRAMES}`,
-  ].join("\n");
+  const kept = own.length === 0 ? leading : own;
+  // Everything above the first frame is the error's own header, kept whole: it
+  // is the name and message, which is the part a reader reads first.
+  const out = lines.slice(0, first);
+
+  for (let index = 0; index < kept.length; index++) {
+    out.push(kept[index] as string);
+  }
+
+  const dropped = body - kept.length;
+
+  if (dropped !== 0) {
+    out.push(
+      `    … ${dropped} frame${dropped === 1 ? "" : "s"} dropped: library internals, unrecognized lines, and any past the first ${KEPT_STACK_FRAMES}`
+    );
+  }
+
+  return out.join("\n");
 }
 
 function isStackFrame(line: string): boolean {
@@ -311,19 +461,39 @@ function errorFields(value: unknown, encodeValue: (value: unknown) => unknown): 
     return encodeValue(value);
   }
 
-  const own: Record<string, unknown> = {};
+  let keys: ReadonlyArray<string>;
 
   try {
-    for (const key of Object.keys(value)) {
-      if (!NAMED_ERROR_KEYS.has(key)) {
-        own[key] = (value as Record<string, unknown>)[key];
-      }
-    }
+    keys = Object.keys(value);
   } catch {
     return undefined;
   }
 
-  return Object.keys(own).length === 0 ? undefined : encodeValue(own);
+  const own: Record<string, unknown> = {};
+  let copied = 0;
+
+  // Each read guarded on its own, like the payload walk this hands off to: a
+  // getter that throws costs its own field rather than every readable one.
+  for (let index = 0; index < keys.length; index++) {
+    const key = keys[index] as string;
+
+    if (NAMED_ERROR_KEYS.has(key)) {
+      continue;
+    }
+
+    let field: unknown;
+
+    try {
+      field = (value as Record<string, unknown>)[key];
+    } catch {
+      field = UNREADABLE;
+    }
+
+    setField(own, key, field);
+    copied++;
+  }
+
+  return copied === 0 ? undefined : encodeValue(own);
 }
 
 /**
@@ -352,14 +522,21 @@ function rootMessage(frames: ReadonlyArray<Diagnostics.SerializedCauseFrame>): s
 /**
  * Drops absent keys.
  *
- * A cause frame declares every field any failure might carry, so most of them
- * are `undefined` on any given one. JSON would drop those anyway; doing it here
- * means the in-memory record the hub retains and renders matches the wire.
+ * A cancellation declares both of its fields whether the failure had them or
+ * not, so either can be `undefined`, and the transport's JSON check rejects an
+ * `undefined` value rather than dropping it.
  */
-function compact(frame: Record<string, unknown>): Record<string, unknown> {
+export function compact(record: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
 
-  for (const [key, value] of Object.entries(frame)) {
+  for (const key in record) {
+    if (!Object.prototype.hasOwnProperty.call(record, key)) {
+      continue;
+    }
+
+    // Read once: a getter read twice can answer differently the second time.
+    const value = record[key];
+
     if (value !== undefined) {
       out[key] = value;
     }

@@ -8,7 +8,6 @@ import {
   type CellBase,
   type CellLiveLease,
   type CellReadinessAttempt,
-  evictedCell,
   idleCell,
   invalidCell,
   operatingCell,
@@ -20,10 +19,11 @@ import {
   type ReadyData,
   readinessErrorCell,
   readyCell,
-  releasingCell,
 } from "../src/graph/cell/cellPhase";
 import { makeGraphCellState } from "../src/graph/cell/cellState";
-import { runBackgroundOperation } from "../src/graph/operations/operationState";
+import { startBackgroundOperation } from "../src/graph/operations/operationState";
+
+import { corePromise } from "../src/runtime/promiseFacade";
 
 describe("graph cell phase", () => {
   test("idle projects as wired idle with retained identity data", () => {
@@ -141,8 +141,16 @@ describe("graph cell phase", () => {
     const cell = await makeCell(readyCell(ready));
 
     await expect(
-      Effect.runPromise(
-        runBackgroundOperation(cell, "refresh", () => Effect.fail(new Error("body failed")))
+      corePromise((resume) =>
+        startBackgroundOperation(
+          cell,
+          "refresh",
+          () => {
+            throw new Error("body failed");
+          },
+          undefined,
+          resume
+        )
       )
     ).rejects.toThrow("body failed");
 
@@ -161,25 +169,6 @@ describe("graph cell phase", () => {
     });
   });
 
-  test("releasing projects as wired idle while retained identity exists", () => {
-    const base = makeBase();
-    const projection = projectCellPhase(releasingCell(base));
-
-    expect(projection._tag).toBe("Releasing");
-    expect(projection.status).toEqual({ _tag: "Wired", run: { _tag: "Idle" } });
-    expect("node" in projection).toBe(false);
-    expect("result" in projection).toBe(false);
-  });
-
-  test("releasing can project cleanup failure", () => {
-    const base = makeBase();
-    const cleanupFailure = new Error("cleanup failed");
-    const projection = projectCellPhase(releasingCell(base, cleanupFailure));
-
-    expect(projection._tag).toBe("Releasing");
-    expect(projection.failure).toEqual({ _tag: "Present", failure: cleanupFailure });
-  });
-
   test("invalid projects as non-ready failure", () => {
     const base = makeBase();
     const error = new Error("cycle");
@@ -191,12 +180,6 @@ describe("graph cell phase", () => {
     expect(projection.nodeLookup).toEqual({ _tag: "Missing" });
     expect("node" in projection).toBe(false);
     expect("result" in projection).toBe(false);
-  });
-
-  test("evicted projects as removed", () => {
-    const projection = projectCellPhase(evictedCell("manual"));
-
-    expect(projection).toEqual({ _tag: "Removed", reason: "manual" });
   });
 
   test("base lookup is explicit across phases", () => {
@@ -218,13 +201,11 @@ describe("graph cell phase", () => {
       _tag: "Found",
       base: { args: ready.args, liveLeases: ready.liveLeases },
     });
-    expect(phaseBase(releasingCell(base))).toEqual({ _tag: "Found", base });
     expect(phaseBase(invalidCell(new Error("cycle"), base))).toEqual({ _tag: "Found", base });
     expect(phaseBase(invalidCell(new Error("cycle")))).toEqual({
       _tag: "Missing",
       phase: "Invalid",
     });
-    expect(phaseBase(evictedCell("manual"))).toEqual({ _tag: "Missing", phase: "Evicted" });
   });
 
   test("ready lookup is explicit and preserves undefined results", () => {
@@ -246,17 +227,9 @@ describe("graph cell phase", () => {
       _tag: "Found",
       ready,
     });
-    expect(phaseReadyData(releasingCell(base))).toEqual({
-      _tag: "Missing",
-      phase: "Releasing",
-    });
     expect(phaseReadyData(invalidCell(new Error("cycle"), base))).toEqual({
       _tag: "Missing",
       phase: "Invalid",
-    });
-    expect(phaseReadyData(evictedCell("manual"))).toEqual({
-      _tag: "Missing",
-      phase: "Evicted",
     });
 
     const lookup = phaseReadyData(readyCell(ready));
@@ -294,17 +267,9 @@ describe("graph cell phase", () => {
       _tag: "Missing",
       phase: "Operating",
     });
-    expect(phaseReadinessAttempt(releasingCell(base))).toEqual({
-      _tag: "Missing",
-      phase: "Releasing",
-    });
     expect(phaseReadinessAttempt(invalidCell(new Error("cycle"), base))).toEqual({
       _tag: "Missing",
       phase: "Invalid",
-    });
-    expect(phaseReadinessAttempt(evictedCell("manual"))).toEqual({
-      _tag: "Missing",
-      phase: "Evicted",
     });
   });
 
@@ -399,6 +364,7 @@ async function makeCell(phase: GraphNodeState["phase"]): Promise<GraphNodeCell> 
 
   return {
     nodeId: 'resources/profile:{"id":"profile"}' as NodeId,
+    syncClock: { now: () => 0 },
     tag: "resources/profile",
     kind: "resource",
     key: '{"id":"profile"}' as never,

@@ -11,7 +11,7 @@ export interface ObserverFailure {
 export interface ObserverChannelOptions<TArgs extends ReadonlyArray<unknown>> {
   readonly channel: GraphObserverChannel;
   readonly reportFailure?:
-    | ((failure: ObserverFailure & { readonly value: TArgs }) => Effect.Effect<void>)
+    | ((failure: ObserverFailure & { readonly value: TArgs }) => void | Effect.Effect<void>)
     | undefined;
 }
 
@@ -21,34 +21,29 @@ export interface ObserverChannel<TObserver, TArgs extends ReadonlyArray<unknown>
 }
 
 export function makeObserverChannel<
-  TObserver extends (...args: TArgs) => Effect.Effect<void>,
+  TObserver extends (...args: TArgs) => void | Effect.Effect<void>,
   TArgs extends ReadonlyArray<unknown>,
 >(options?: ObserverChannelOptions<TArgs> | undefined): ObserverChannel<TObserver, TArgs> {
   const observers = new Set<TObserver>();
+  let observerList: ReadonlyArray<TObserver> = [];
+  const notify = (args: TArgs, observer: TObserver) => observer(...args);
+  const reportFailure = (args: TArgs, _observer: TObserver, cause: unknown) =>
+    options?.reportFailure === undefined
+      ? Effect.void
+      : options.reportFailure({ channel: options.channel, value: args, cause });
 
   return {
     subscribe: (observer) =>
       Effect.sync(() => {
         observers.add(observer);
+        observerList = [...observers];
         return {
           unsubscribe: () => {
             observers.delete(observer);
+            observerList = [...observers];
           },
         };
       }),
-    notifyAll: (...args) =>
-      notifyProjectedObservers(
-        observers,
-        args,
-        (observedArgs, observer) => observer(...observedArgs),
-        (failedArgs, _observer, cause) =>
-          options?.reportFailure === undefined
-            ? Effect.void
-            : options.reportFailure({
-                channel: options.channel,
-                value: failedArgs,
-                cause,
-              })
-      ),
+    notifyAll: (...args) => notifyProjectedObservers(observerList, args, notify, reportFailure),
   };
 }

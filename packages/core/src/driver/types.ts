@@ -353,10 +353,12 @@ export type DriverHook<TRun> =
       readonly _tag: "Missing";
     };
 
+export type DriverRunResult<A> = A | PromiseLike<A> | Effect.Effect<A, unknown>;
+
 export type DriverActionRun<TNode extends object, TArgs, TDeps extends object, TResult> = (
   ctx: NormalizedDriverContext<TNode, TArgs, TDeps, TResult>,
   input: unknown
-) => Effect.Effect<unknown, unknown>;
+) => DriverRunResult<unknown>;
 
 export type DriverActionLookup<TNode extends object, TArgs, TDeps extends object, TResult> =
   | {
@@ -393,12 +395,10 @@ export type Driver<
   readonly resultPatch?: ResultPatchOptions | undefined;
   readonly acquire: (
     ctx: NormalizedAcquireDriverContext<TArgs, TDeps, TResult>
-  ) => Effect.Effect<TResult | ResultCommit<TResult>, unknown>;
-  readonly release: DriverHook<
-    (ctx: NormalizedDisposeContext<TNode>) => Effect.Effect<void, unknown>
-  >;
+  ) => DriverRunResult<TResult | ResultCommit<TResult>>;
+  readonly release: DriverHook<(ctx: NormalizedDisposeContext<TNode>) => DriverRunResult<void>>;
   readonly refresh: DriverHook<
-    (ctx: NormalizedDriverContext<TNode, TArgs, TDeps, TResult>) => Effect.Effect<void, unknown>
+    (ctx: NormalizedDriverContext<TNode, TArgs, TDeps, TResult>) => DriverRunResult<void>
   >;
   readonly live: DriverHook<NormalizedLiveResource<TNode>>;
   readonly actions: DriverActionRegistry<TNode, TArgs, TDeps, TResult>;
@@ -445,16 +445,16 @@ export interface NormalizedLiveResource<TNode extends object> {
     ctx: NormalizedLiveContext<TNode>,
     demand: ActiveNodeLiveDemandSnapshot,
     options?: NormalizedLiveStartOptions
-  ) => Effect.Effect<unknown, unknown>;
+  ) => DriverRunResult<unknown>;
   readonly update?: (
     ctx: NormalizedLiveContext<TNode>,
     resource: unknown,
     demand: ActiveNodeLiveDemandSnapshot
-  ) => Effect.Effect<void, unknown>;
+  ) => DriverRunResult<void>;
   readonly stop: (
     ctx: NormalizedLiveStopContext<TNode>,
     resource: unknown
-  ) => Effect.Effect<void, unknown>;
+  ) => DriverRunResult<void>;
 }
 
 export type DriverContext<TNode extends object, TArgs, TDeps extends object, TResult> = {

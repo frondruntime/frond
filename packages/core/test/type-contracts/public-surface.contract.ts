@@ -118,6 +118,23 @@ export type UnsafeReadKeepsRawTags = Expect<
     | "Invalid"
   >
 >;
+// No cell phase produces a `Releasing` snapshot, in 0.5 or 0.6
+// (graph-releasing-snapshot.test.ts), but both public snapshot unions keep the
+// tag so a consumer's exhaustive switch still compiles.
+type PublicSnapshotTags =
+  | "Unwired"
+  | "Idle"
+  | "Pending"
+  | "Ready"
+  | "ReadinessError"
+  | "Releasing"
+  | "Invalid";
+export type GraphSnapshotKeepsReleasingTag = Expect<
+  Equal<GraphSnapshot["_tag"], PublicSnapshotTags>
+>;
+export type RuntimeSnapshotKeepsReleasingTag = Expect<
+  Equal<RuntimeSnapshot["_tag"], PublicSnapshotTags>
+>;
 
 // handle.readReady() projects the handle's typed node instance (TNode), and
 // ensureReadyNode is its awaited counterpart.

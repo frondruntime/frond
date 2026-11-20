@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import type { Runtime } from "@frondruntime/core";
+import { Graph, type Runtime } from "@frondruntime/core";
 import { Data } from "effect";
+import { compact } from "../src/cause.ts";
 import { createValueEncoder, encodeRecord } from "../src/encode.ts";
+import type { EncodePolicy } from "../src/policy.ts";
+import { Ingest } from "../src/protocol.ts";
+import { acrossTheWire } from "./wire.ts";
 
 /**
  * Builds a record around one event field.
@@ -47,6 +51,18 @@ function recordOf(
 
 function fieldOf(value: unknown, policy: "none" | "shape" | "full"): unknown {
   return encodeRecord(recordWith(value), policy).fields["value"];
+}
+
+/** One event field, encoded at `policy` and sent through the transport. */
+function crossed(value: unknown, policy: EncodePolicy): unknown {
+  const encoded = encodeRecord(recordWith(value), policy);
+  const received = acrossTheWire(Ingest.payloadSchema, {
+    attachmentId: "attachment-1",
+    records: [{ ...encoded, category: "state", timeline: "state", reason: "refresh", workId: 1 }],
+    droppedSince: 0,
+  });
+
+  return received.records[0]?.fields["value"];
 }
 
 describe("encodeRecord", () => {
@@ -114,6 +130,71 @@ describe("encodeRecord", () => {
   });
 
   /**
+   * A collection is read through its iterator, which can run the app's code and
+   * need never end, so the bound has to stop the reads and not only the output.
+   * One step past it says whether anything was cut; none after that runs.
+   */
+  test("full stops reading a long collection at its bound, and says so", () => {
+    const cut = { _: "elided", by: "entries", length: 5000 };
+    let steps = 0;
+
+    function counted<T>(source: Iterator<T>): IterableIterator<T> {
+      return {
+        next: () => {
+          steps++;
+          return source.next();
+        },
+        [Symbol.iterator]() {
+          return this;
+        },
+      } as IterableIterator<T>;
+    }
+
+    class CountedMap extends Map<number, number> {
+      override entries(): MapIterator<[number, number]> {
+        return counted(super.entries()) as MapIterator<[number, number]>;
+      }
+    }
+
+    class CountedSet extends Set<number> {
+      override values(): SetIterator<number> {
+        return counted(super.values()) as SetIterator<number>;
+      }
+    }
+
+    const numbers = Array.from({ length: 5000 }, (_, index) => index);
+    const map = fieldOf(new CountedMap(numbers.map((index) => [index, index])), "full") as {
+      readonly entries: ReadonlyArray<unknown>;
+      readonly size: number;
+    };
+
+    expect(steps).toBe(4097);
+    expect(map.entries).toHaveLength(4097);
+    expect(map.entries[4096]).toEqual([cut, cut]);
+    expect(map.size).toBe(5000);
+
+    steps = 0;
+    const set = fieldOf(new CountedSet(numbers), "full") as {
+      readonly values: ReadonlyArray<unknown>;
+      readonly size: number;
+    };
+
+    expect(steps).toBe(4097);
+    expect(set.values).toHaveLength(4097);
+    expect(set.values[4096]).toEqual(cut);
+    expect(set.size).toBe(5000);
+  });
+
+  /** Exactly at the bound nothing was cut, so nothing says it was. */
+  test("full marks no cut on a collection exactly at its bound", () => {
+    const numbers = Array.from({ length: 4096 }, (_, index) => index);
+    const set = fieldOf(new Set(numbers), "full") as { readonly values: ReadonlyArray<unknown> };
+
+    expect(set.values).toHaveLength(4096);
+    expect(set.values[4095]).toBe(4095);
+  });
+
+  /**
    * An array announces truncation by pushing a marker; an object has nowhere to
    * push one, so it carries the marker as a key. Without it a truncated object
    * is indistinguishable from a complete one, which is the single failure mode
@@ -143,6 +224,56 @@ describe("encodeRecord", () => {
     );
 
     expect(JSON.stringify(fieldOf(wide, "full"))).toContain(`{"_":"elided","by":"budget"}`);
+  });
+
+  test("two records, and two full encoders, never spend each other's budget", () => {
+    const wide = Object.fromEntries(
+      Array.from({ length: 4000 }, (_, index) => [
+        `k${index}`,
+        Object.fromEntries(Array.from({ length: 12 }, (_, field) => [`f${field}`, field])),
+      ])
+    );
+    const small = { user: { id: 7, tags: ["a", "b"] } };
+
+    expect(JSON.stringify(fieldOf(wide, "full"))).toContain(`"by":"budget"`);
+    expect(fieldOf(small, "full")).toEqual(small);
+
+    const spent = createValueEncoder("full");
+    const fresh = createValueEncoder("full");
+    expect(JSON.stringify(spent.value(wide))).toContain(`"by":"budget"`);
+    expect(JSON.stringify(spent.value(small))).toContain(`"by":"budget"`);
+    expect(fresh.value(small)).toEqual(small);
+  });
+
+  test("a record lays out its routing fields, then fields, then failures", () => {
+    const failure = new Error("boom");
+    const plain = encodeRecord(recordWith(failure, [failure]), "full");
+    const signal = encodeRecord(
+      recordOf({
+        _tag: "RuntimeSignalPublished",
+        record: { signal: { channel: "app.analytics", name: "checkout_started" } },
+      }),
+      "shape"
+    );
+    const routing = [
+      "sequence",
+      "recordedAt",
+      "tag",
+      "category",
+      "severity",
+      "timeline",
+      "reportable",
+      "workId",
+      "parentWorkId",
+      "source",
+      "reason",
+      "priority",
+      "nodeIds",
+    ];
+
+    expect(Object.keys(plain)).toEqual([...routing, "fields", "failures"]);
+    expect(Object.keys(signal)).toEqual([...routing, "channel", "name", "fields", "failures"]);
+    expect(plain.fields["value"]).toEqual(plain.failures[0] as never);
   });
 
   test("full keeps an error's message and stack", () => {
@@ -246,6 +377,110 @@ describe("a signal's identity", () => {
 
     expect(encoded).not.toHaveProperty("channel");
     expect(encoded).not.toHaveProperty("name");
+  });
+
+  /** One event, encoded at `policy` and sent through the transport. */
+  function routed(event: object, policy: EncodePolicy): Record<string, unknown> {
+    const encoded = encodeRecord(recordOf(event), policy);
+    const received = acrossTheWire(Ingest.payloadSchema, {
+      attachmentId: "attachment-1",
+      records: [{ ...encoded, category: "state", timeline: "state", reason: "refresh", workId: 1 }],
+      droppedSince: 0,
+    });
+
+    return received.records[0] as unknown as Record<string, unknown>;
+  }
+
+  function throwing(): never {
+    throw new Error("routing field read");
+  }
+
+  /**
+   * The routing fields are read outside the field walk, so its guards never see
+   * them. A read that throws, or a value that is not a string, costs that field:
+   * the record still crosses, and the payload is still what `fields` says.
+   */
+  test("a routing field that cannot be read costs that field, not the record", () => {
+    for (const policy of ["none", "shape", "full"] as const) {
+      const noRecord = routed(
+        {
+          _tag: "RuntimeSignalPublished",
+          get record() {
+            return throwing();
+          },
+          at: 1000,
+        },
+        policy
+      );
+
+      expect(noRecord["tag"]).toBe("RuntimeSignalPublished");
+      expect(noRecord).not.toHaveProperty("channel");
+      expect(noRecord).not.toHaveProperty("name");
+
+      const noSignal = routed(
+        {
+          _tag: "RuntimeSignalSubscriberFailureObserved",
+          subscriber: "audit-log",
+          signal: {
+            get signal() {
+              return throwing();
+            },
+          },
+          at: 1000,
+        },
+        policy
+      );
+
+      expect(noSignal).not.toHaveProperty("channel");
+      expect(noSignal).not.toHaveProperty("name");
+
+      const noChannel = routed(
+        {
+          _tag: "RuntimeSignalPublished",
+          record: {
+            signal: {
+              get channel() {
+                return throwing();
+              },
+              name: "checkout_started",
+            },
+          },
+          at: 1000,
+        },
+        policy
+      );
+
+      expect(noChannel).not.toHaveProperty("channel");
+      expect(noChannel["name"]).toBe("checkout_started");
+
+      const numbered = routed(
+        {
+          _tag: "RuntimeSignalPublished",
+          record: { signal: { channel: "app.analytics", name: 7 } },
+          at: 1000,
+        },
+        policy
+      );
+
+      expect(numbered["channel"]).toBe("app.analytics");
+      expect(numbered).not.toHaveProperty("name");
+    }
+
+    const unreadable = routed(
+      {
+        _tag: "RuntimeSignalPublished",
+        get record() {
+          return throwing();
+        },
+        at: 1000,
+      },
+      "shape"
+    );
+
+    expect((unreadable["fields"] as Record<string, unknown>)["record"]).toEqual({
+      _: "opaque",
+      type: "unreadable",
+    });
   });
 });
 
@@ -445,6 +680,418 @@ describe("values that fight back", () => {
     expect(encoded["before"]).toBe("kept");
     expect(encoded["after"]).toBe("also kept");
     expect(encoded["bad"]).toEqual({ _: "opaque", type: "unreadable" });
+  });
+
+  /**
+   * The throw comes from reading the field, not from walking what it held, so
+   * it happens in the object's own walk. Guarding only the walk below a field
+   * would still trade the whole object for one getter.
+   */
+  test("a getter that throws costs its own field, not the object", () => {
+    const encoded = createValueEncoder("full").value({
+      id: "order-42",
+      get total(): never {
+        throw new Error("x");
+      },
+      status: "open",
+    });
+
+    expect(encoded).toEqual({
+      id: "order-42",
+      total: { _: "opaque", type: "unreadable" },
+      status: "open",
+    });
+  });
+
+  /** A proxy over `target` whose read of `throwing` throws. */
+  function throwingOn<T extends object>(target: T, throwing: string): T {
+    return new Proxy(target, {
+      get: (inner, key) => {
+        if (key === throwing) {
+          throw new Error("x");
+        }
+
+        return Reflect.get(inner, key) as unknown;
+      },
+    });
+  }
+
+  test("an array entry that throws costs that entry, not the array", () => {
+    expect(createValueEncoder("full").value(throwingOn(["a", "b", "c"], "1"))).toEqual([
+      "a",
+      { _: "opaque", type: "unreadable" },
+      "c",
+    ]);
+  });
+
+  test("an array whose length read throws keeps its entries", () => {
+    expect(createValueEncoder("full").value(throwingOn(["a", "b"], "length"))).toEqual(["a", "b"]);
+  });
+
+  /**
+   * Without `length`, the array's extent comes from its own keys: every index
+   * key, enumerable or not, and nothing past the largest array index, which is
+   * `2 ** 32 - 2`. `"4294967295"` is an ordinary key on an array.
+   */
+  test("an array whose length read throws is as long as its index keys say", () => {
+    const hidden = ["a"];
+    Object.defineProperty(hidden, "2", { value: "c", enumerable: false });
+
+    const named = Object.assign(["a"], { "4294967295": "x" });
+
+    expect(crossed(throwingOn(hidden, "length"), "full")).toEqual(["a", null, "c"]);
+    expect(crossed(throwingOn(named, "length"), "full")).toEqual(["a"]);
+  });
+
+  test("a collection whose size read throws keeps its entries", () => {
+    class SizelessMap extends Map<string, number> {
+      override get size(): number {
+        throw new Error("x");
+      }
+    }
+
+    class SizelessSet extends Set<string> {
+      override get size(): number {
+        throw new Error("x");
+      }
+    }
+
+    const encoder = createValueEncoder("full");
+
+    expect(encoder.value(new SizelessMap([["a", 1]]))).toEqual({
+      _: "map",
+      entries: [["a", 1]],
+      size: 1,
+    });
+    expect(encoder.value(new SizelessSet(["a", "b"]))).toEqual({
+      _: "set",
+      values: ["a", "b"],
+      size: 2,
+    });
+  });
+
+  test("a collection whose iteration throws partway keeps what it read", () => {
+    class BrokenMap extends Map<string, number> {
+      override *entries(): MapIterator<[string, number]> {
+        yield ["a", 1];
+        throw new Error("x");
+      }
+    }
+
+    class BrokenSet extends Set<string> {
+      override *values(): SetIterator<string> {
+        yield "a";
+        throw new Error("x");
+      }
+    }
+
+    const encoder = createValueEncoder("full");
+
+    expect(
+      encoder.value(
+        new BrokenMap([
+          ["a", 1],
+          ["b", 2],
+        ])
+      )
+    ).toEqual({
+      _: "map",
+      entries: [
+        ["a", 1],
+        [
+          { _: "opaque", type: "unreadable" },
+          { _: "opaque", type: "unreadable" },
+        ],
+      ],
+      size: 2,
+    });
+    expect(encoder.value(new BrokenSet(["a", "b"]))).toEqual({
+      _: "set",
+      values: ["a", { _: "opaque", type: "unreadable" }],
+      size: 2,
+    });
+  });
+
+  /**
+   * A map and a set whose iterators hand out `steps` as they are, then end.
+   * Each step is the app's own object, so reading it runs the app's code.
+   */
+  function iteratingWith(steps: ReadonlyArray<unknown>): {
+    readonly map: Map<unknown, unknown>;
+    readonly set: Set<unknown>;
+  } {
+    function scripted(): object {
+      let index = 0;
+
+      return {
+        next: () => (index < steps.length ? steps[index++] : { done: true, value: undefined }),
+        [Symbol.iterator]() {
+          return this;
+        },
+      };
+    }
+
+    class ScriptedMap extends Map<unknown, unknown> {
+      override entries(): MapIterator<[unknown, unknown]> {
+        return scripted() as MapIterator<[unknown, unknown]>;
+      }
+    }
+
+    class ScriptedSet extends Set<unknown> {
+      override values(): SetIterator<unknown> {
+        return scripted() as SetIterator<unknown>;
+      }
+    }
+
+    return { map: new ScriptedMap(), set: new ScriptedSet() };
+  }
+
+  function entriesOf(value: unknown): unknown {
+    return (createValueEncoder("full").value(value) as { readonly entries: unknown }).entries;
+  }
+
+  function valuesOf(value: unknown): unknown {
+    return (createValueEncoder("full").value(value) as { readonly values: unknown }).values;
+  }
+
+  const unreadable = { _: "opaque", type: "unreadable" };
+
+  /** A map entry's key and value come from one read of the step's `value`. */
+  test("a collection step's value is read once", () => {
+    let reads = 0;
+    const { map } = iteratingWith([
+      {
+        done: false,
+        get value(): [number, number] {
+          reads++;
+          return [reads, reads];
+        },
+      },
+    ]);
+
+    expect(entriesOf(map)).toEqual([[1, 1]]);
+  });
+
+  /** The iterator protocol ends on any truthy `done`, as a spread does. */
+  test("a collection step whose done is truthy but not true ends the walk", () => {
+    expect(entriesOf(iteratingWith([{ done: 1, value: ["phantom", 1] }]).map)).toEqual([]);
+    expect(valuesOf(iteratingWith([{ done: "yes", value: "phantom" }]).set)).toEqual([]);
+  });
+
+  /**
+   * `entries()` and `values()` are read as a spread reads them: through the
+   * iterable they return, which need not be an iterator itself.
+   */
+  test("a collection whose entries or values is an iterable rather than an iterator", () => {
+    class ListedMap extends Map<string, number> {
+      override entries(): MapIterator<[string, number]> {
+        return [["good", 1]] as unknown as MapIterator<[string, number]>;
+      }
+    }
+
+    class ListedSet extends Set<string> {
+      override values(): SetIterator<string> {
+        return ["good"] as unknown as SetIterator<string>;
+      }
+    }
+
+    expect(entriesOf(new ListedMap())).toEqual([["good", 1]]);
+    expect(valuesOf(new ListedSet())).toEqual(["good"]);
+  });
+
+  /**
+   * A step whose `value` cannot be read is still a step: the iterator said it
+   * was not done, so the walk goes on past it.
+   */
+  test("a collection step whose value or pair half throws costs that step", () => {
+    const throwing = {
+      done: false,
+      get value(): never {
+        throw new Error("x");
+      },
+    };
+    const halfReadable = {
+      done: false,
+      value: {
+        get 0(): never {
+          throw new Error("x");
+        },
+        1: 2,
+      },
+    };
+    const { map } = iteratingWith([
+      { done: false, value: ["a", 1] },
+      throwing,
+      halfReadable,
+      { done: false, value: ["d", 4] },
+    ]);
+    const { set } = iteratingWith([
+      { done: false, value: "a" },
+      throwing,
+      { done: false, value: "c" },
+    ]);
+
+    expect(entriesOf(map)).toEqual([
+      ["a", 1],
+      [unreadable, unreadable],
+      [unreadable, 2],
+      ["d", 4],
+    ]);
+    expect(valuesOf(set)).toEqual(["a", unreadable, "c"]);
+  });
+
+  /**
+   * Without a readable `done` there is no telling whether the walk is over, so
+   * it stops there, as it does when `next` throws, and keeps what it read.
+   */
+  test("a collection step whose done throws, or that is not an object, ends the walk", () => {
+    const throwing = {
+      get done(): never {
+        throw new Error("x");
+      },
+      value: "b",
+    };
+
+    for (const broken of [throwing, 7]) {
+      const { map, set } = iteratingWith([
+        { done: false, value: ["a", 1] },
+        broken,
+        { done: false, value: ["c", 3] },
+      ]);
+
+      expect(entriesOf(map)).toEqual([
+        ["a", 1],
+        [unreadable, unreadable],
+      ]);
+      expect(valuesOf(set)).toEqual([["a", 1], unreadable]);
+    }
+  });
+
+  /**
+   * An event field is read before any value walk starts, so the walk's own
+   * guards never see the throw.
+   */
+  test("an event getter that throws costs its own field, not the record", () => {
+    const event = {
+      _tag: "Probe",
+      kept: 1,
+      get broken(): never {
+        throw new Error("x");
+      },
+    };
+
+    for (const policy of ["shape", "full"] as const) {
+      expect(encodeRecord(recordOf(event), policy).fields).toEqual({
+        kept: 1,
+        broken: { _: "opaque", type: "unreadable" },
+      });
+    }
+  });
+
+  /**
+   * A function's name is read off the function, which can make the read throw
+   * or answer with something a template string cannot hold, like a symbol.
+   */
+  test("a function whose name read throws or is not a string costs only its name", () => {
+    const throwing = Object.defineProperty(function handler() {}, "name", {
+      get(): never {
+        throw new Error("x");
+      },
+    });
+    const symbolic = Object.defineProperty(function handler() {}, "name", {
+      value: Symbol("name"),
+    });
+    const anonymous = { _: "opaque", type: "function:anonymous" };
+
+    for (const handler of [throwing, symbolic]) {
+      expect(createValueEncoder("full").value([1, handler, 3])).toEqual([1, anonymous, 3]);
+      expect(
+        createValueEncoder("full").value(
+          new Map<string, unknown>([
+            ["a", handler],
+            ["b", 2],
+          ])
+        )
+      ).toEqual({
+        _: "map",
+        entries: [
+          ["a", anonymous],
+          ["b", 2],
+        ],
+        size: 2,
+      });
+      expect(encodeRecord(recordOf({ _tag: "Probe", handler, kept: 1 }), "full").fields).toEqual({
+        handler: anonymous,
+        kept: 1,
+      });
+    }
+  });
+
+  /** A class instance with readable fields whose `constructor` read throws. */
+  function orderWithThrowingConstructor(): object {
+    const prototype = Object.create(Object.prototype, {
+      constructor: {
+        get(): never {
+          throw new Error("x");
+        },
+      },
+    }) as object;
+
+    return Object.assign(Object.create(prototype) as object, {
+      id: "order-42",
+      status: "open",
+    });
+  }
+
+  /**
+   * The type name is read after the fields, from the prototype, so a throw
+   * there is the same kind of loss as a throwing getter: one label, not the
+   * fields already read.
+   */
+  test("a constructor that throws costs the type name, not the fields", () => {
+    expect(createValueEncoder("full").value(orderWithThrowingConstructor())).toEqual({
+      id: "order-42",
+      status: "open",
+      _type: "object",
+    });
+  });
+
+  /** At `"shape"` the type name is the whole label, so only the name falls back. */
+  test("a constructor that throws costs the type name, not the label, at shape", () => {
+    expect(createValueEncoder("shape").value(orderWithThrowingConstructor())).toBe("object{?}");
+  });
+
+  /**
+   * At `"shape"` an array is its first element's name and its length, read
+   * apart: an unreadable first element is named so, and an unreadable length
+   * is `?`, and neither costs the other.
+   */
+  test("an array's first element and length are read apart, at shape", () => {
+    const encoder = createValueEncoder("shape");
+
+    expect(encoder.value(throwingOn(["a", "b"], "0"))).toBe("unreadable[2]");
+    expect(encoder.value(throwingOn(["a", "b"], "length"))).toBe("string[?]");
+  });
+
+  /** An unreadable value is not a failure, so it is not named as one. */
+  test("an array of an unreadable value is named for it, at shape", () => {
+    const { proxy, revoke } = Proxy.revocable({ a: 1 }, {});
+    revoke();
+
+    expect(createValueEncoder("shape").value([proxy])).toBe("unreadable[1]");
+    expect(createValueEncoder("shape").value([new Error("x")])).toBe("error[1]");
+  });
+
+  /** The tag is one more read; a throw there costs the tag, not the key list. */
+  test("a tag that throws costs the tag, not the keys, at shape", () => {
+    const tagged = {
+      id: 1,
+      get _tag(): never {
+        throw new Error("x");
+      },
+    };
+
+    expect(createValueEncoder("shape").value(tagged)).toBe("{id,_tag}");
   });
 });
 
@@ -650,6 +1297,28 @@ describe("failure encoding", () => {
     expect(frames[1]?.["message"]).toBe("upstream unavailable (503)");
   });
 
+  /** The payload's own walk guards each field; copying it out has to as well. */
+  test("full keeps a failure's readable payload when one of its getters throws", () => {
+    const failure = Object.defineProperties(new Error("boom"), {
+      status: { value: 503, enumerable: true },
+      endpoint: {
+        enumerable: true,
+        get(): never {
+          throw new Error("x");
+        },
+      },
+    });
+    const encoded = encodeRecord(recordOf({ _tag: "Probe" }, [failure]), "full");
+    const { causes } = encoded.failures[0] as {
+      readonly causes: ReadonlyArray<Record<string, unknown>>;
+    };
+
+    expect(causes[0]?.["fields"]).toEqual({
+      status: 503,
+      endpoint: { _: "opaque", type: "unreadable" },
+    });
+  });
+
   /**
    * `shape`'s contract is structure without contents, and an error's own
    * payload is contents. The stack goes with it for a different reason: at this
@@ -810,4 +1479,379 @@ describe("failure encoding", () => {
       "upstream unavailable (503)"
     );
   });
+
+  /**
+   * The failure list is encoded the way `Array.map` would: a hole stays a hole,
+   * and goes over JSON as `null`, rather than becoming a described `undefined`.
+   */
+  test.each([
+    "none",
+    "shape",
+    "full",
+  ] as const)("a hole in failures stays a hole at %s", (policy) => {
+    const failures: Array<unknown> = [];
+    failures[1] = new Error("second");
+    const encoded = encodeRecord(recordWith(undefined, failures), policy);
+
+    expect(encoded.failures).toHaveLength(2);
+    expect(0 in encoded.failures).toBe(false);
+    expect(JSON.stringify(encoded.failures).startsWith("[null,")).toBe(true);
+  });
+
+  /**
+   * The length is read once, as `Array.map` reads it: a failure whose getter
+   * appends another while it is encoded yields one encoded failure, not two.
+   */
+  test.each([
+    "none",
+    "shape",
+    "full",
+  ] as const)("a failure appended while encoding is not encoded at %s", (policy) => {
+    const failures: Array<unknown> = [];
+    const failure = new Error("first");
+    let appended = false;
+    Object.defineProperty(failure, "message", {
+      get: () => {
+        if (!appended) {
+          appended = true;
+          failures.push(new Error("late"));
+        }
+        return "first";
+      },
+    });
+    failures.push(failure);
+    const encoded = encodeRecord(recordWith(undefined, failures), policy);
+
+    expect(appended).toBe(true);
+    expect(encoded.failures).toHaveLength(1);
+  });
+});
+
+/**
+ * A number with no JSON form fails the transport, not just the reader.
+ *
+ * The NDJSON codec validates every `Unknown` hole as a JSON value and rejects
+ * `NaN` and both infinities outright, so one such field used to fail the whole
+ * `Frond.Ingest` batch — every record in it, not only the one that held it.
+ * Through the real codec on purpose: `JSON.stringify` alone would turn each of
+ * them into `null` and pass, hiding both the failure and the collision with a
+ * field that really was `null`.
+ *
+ * The values are the event's own fields so that both policies encode each one
+ * as a value. At `"shape"` a nested object is a key list, and no number inside
+ * it would reach the wire to be tested.
+ */
+describe("numbers with no JSON form", () => {
+  const event = {
+    _tag: "Probe",
+    rate: Number.NaN,
+    upper: Number.POSITIVE_INFINITY,
+    lower: Number.NEGATIVE_INFINITY,
+    empty: null,
+    finite: 42,
+  };
+
+  for (const policy of ["shape", "full"] as const) {
+    test(`an event field crosses the transport distinguishable, at ${policy}`, () => {
+      const encoded = encodeRecord(recordOf(event), policy);
+      // `recordOf` fills the routing fields with placeholders the encoder does
+      // not read; the wire schema does, so they are swapped for real members.
+      const record = {
+        ...encoded,
+        category: "state",
+        timeline: "state",
+        reason: "refresh",
+        workId: 1,
+      } as const;
+
+      const received = acrossTheWire(Ingest.payloadSchema, {
+        attachmentId: "attachment-1",
+        records: [record],
+        droppedSince: 0,
+      });
+
+      expect(received.records[0]?.fields).toEqual({
+        rate: { _: "opaque", type: "number:NaN" },
+        upper: { _: "opaque", type: "number:Infinity" },
+        lower: { _: "opaque", type: "number:-Infinity" },
+        empty: null,
+        finite: 42,
+      });
+    });
+  }
+
+  /**
+   * A type name is read off the app's own prototype, and nothing makes it a
+   * string: a `name` the app set to a number is a number.
+   */
+  test("a type name that is not a string falls back to the generic one", () => {
+    const prototype = { constructor: { name: Number.POSITIVE_INFINITY } };
+    const order = Object.assign(Object.create(prototype) as object, { id: "order-42" });
+
+    expect(crossed(order, "full")).toEqual({ id: "order-42", _type: "object" });
+    expect(crossed(order, "shape")).toBe("object{?}");
+  });
+
+  /**
+   * A collection's size is read through its own getter, which a subclass can
+   * override to say anything. The entries are what was really there.
+   */
+  test("a collection whose size has no JSON form is sized by its entries", () => {
+    class EndlessMap extends Map<string, number> {
+      override get size(): number {
+        return Number.POSITIVE_INFINITY;
+      }
+    }
+
+    class EndlessSet extends Set<string> {
+      override get size(): number {
+        return Number.NaN;
+      }
+    }
+
+    expect(crossed(new EndlessMap([["a", 1]]), "full")).toEqual({
+      _: "map",
+      entries: [["a", 1]],
+      size: 1,
+    });
+    expect(crossed(new EndlessSet(["a", "b"]), "full")).toEqual({
+      _: "set",
+      values: ["a", "b"],
+      size: 2,
+    });
+  });
+
+  /**
+   * A date crosses as what its `toISOString` returns, and an override can
+   * return anything. An invalid date already crosses as unreadable (the
+   * built-in throws); an answer that is not a string crosses the same way.
+   */
+  test("a date whose toISOString is not a string crosses as unreadable", () => {
+    const answers: ReadonlyArray<unknown> = [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      10n,
+      Symbol("iso"),
+    ];
+
+    for (const answer of answers) {
+      const date = Object.assign(new Date(0), { toISOString: () => answer });
+
+      expect(crossed(date, "full")).toEqual({ _: "opaque", type: "unreadable" });
+    }
+
+    expect(crossed(new Date(Number.NaN), "full")).toEqual({ _: "opaque", type: "unreadable" });
+    expect(crossed(new Date(0), "full")).toBe("1970-01-01T00:00:00.000Z");
+  });
+
+  /**
+   * Not a number, but the same failure: `map` skips a hole and leaves one in
+   * its result, and the codec rejects a hole as it rejects `undefined`.
+   */
+  test("a sparse array crosses with its holes as null", () => {
+    const sparse: Array<number> = [1];
+    sparse[2] = 3;
+
+    expect(crossed(sparse, "full")).toEqual([1, null, 3]);
+  });
+
+  /** A real array cannot do this; a proxy over one can. */
+  test("an array whose length has no JSON form still says it was cut", () => {
+    const endless = new Proxy(["a"], {
+      get: (target, key) =>
+        key === "length" ? Number.POSITIVE_INFINITY : Reflect.get(target, key),
+    });
+
+    expect((crossed(endless, "full") as ReadonlyArray<unknown>).at(-1)).toEqual({
+      _: "elided",
+      by: "entries",
+    });
+  });
+});
+
+/**
+ * A key JSON carries as data but assignment does not.
+ *
+ * `JSON.parse` makes `__proto__` an own key like any other, so an app holding a
+ * parsed payload holds one. Assigned with `out[key] =`, it sets the output's
+ * prototype instead, and the codec then rejects the whole batch.
+ */
+describe("a key named __proto__", () => {
+  const parsed = (): unknown => JSON.parse('{"__proto__":{"flag":1},"good":2}');
+
+  function expectOwnPrototypeKey(received: unknown): void {
+    expect(Object.getPrototypeOf(received)).toBe(Object.prototype);
+    expect(Object.prototype.hasOwnProperty.call(received, "__proto__")).toBe(true);
+    expect(JSON.stringify(received)).toBe('{"__proto__":{"flag":1},"good":2}');
+  }
+
+  test("crosses the transport as an own key, at full", () => {
+    expectOwnPrototypeKey(crossed(parsed(), "full"));
+  });
+
+  test("crosses the transport as an own key of a failure's payload, at full", () => {
+    const failure = Object.assign(new Error("boom"), { response: parsed() });
+    const encoded = encodeRecord(recordOf({ _tag: "Probe" }, [failure]), "full");
+    const received = acrossTheWire(Ingest.payloadSchema, {
+      attachmentId: "attachment-1",
+      records: [{ ...encoded, category: "state", timeline: "state", reason: "refresh", workId: 1 }],
+      droppedSince: 0,
+    });
+    const { causes } = received.records[0]?.failures[0] as {
+      readonly causes: ReadonlyArray<{ readonly fields?: { readonly response?: unknown } }>;
+    };
+
+    expectOwnPrototypeKey(causes[0]?.fields?.response);
+  });
+
+  test("survives as an own key of the payload itself, at full", () => {
+    // Defined rather than assigned, for the reason this block exists.
+    const failure = Object.defineProperties(new Error("boom"), {
+      ["__proto__"]: { value: { flag: 1 }, enumerable: true, writable: true, configurable: true },
+      status: { value: 500, enumerable: true, writable: true, configurable: true },
+    });
+    const encoded = encodeRecord(recordOf({ _tag: "Probe" }, [failure]), "full");
+    const { causes } = encoded.failures[0] as {
+      readonly causes: ReadonlyArray<{ readonly fields?: unknown }>;
+    };
+
+    expect(JSON.stringify(causes[0]?.fields)).toBe('{"__proto__":{"flag":1},"status":500}');
+  });
+});
+
+describe("aggregate failures", () => {
+  /** What the runtime builds when two of a node's dependencies fail together. */
+  function twoDependenciesFailed(cause: unknown): Graph.DependencyFailures {
+    const failed = (dependency: string): Graph.DependencyFailed =>
+      new Graph.DependencyFailed({
+        nodeId: "orders:v1" as Graph.NodeId,
+        tag: "orders",
+        dependency,
+        dependencyNodeId: `${dependency}:v1` as Graph.NodeId,
+        cause,
+      });
+
+    return new Graph.DependencyFailures({
+      nodeId: "orders:v1" as Graph.NodeId,
+      tag: "orders",
+      failures: [failed("rates"), failed("prices")],
+    });
+  }
+
+  function ingested(failure: unknown, policy: EncodePolicy): unknown {
+    const encoded = encodeRecord(recordOf({ _tag: "Probe" }, [failure]), policy);
+    const received = acrossTheWire(Ingest.payloadSchema, {
+      attachmentId: "attachment-1",
+      records: [{ ...encoded, category: "state", timeline: "state", reason: "refresh", workId: 1 }],
+      droppedSince: 0,
+    });
+
+    return received.records[0]?.failures[0];
+  }
+
+  function nestedFrames(descriptor: unknown): ReadonlyArray<Record<string, unknown>> {
+    const { causes } = descriptor as {
+      readonly causes: ReadonlyArray<{
+        readonly failures?: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>;
+      }>;
+    };
+
+    return causes.flatMap((frame) => (frame.failures ?? []).flat());
+  }
+
+  for (const policy of ["none", "shape", "full"] as const) {
+    for (const ratio of [1, Number.NaN]) {
+      test(`two failed dependencies cross the transport with ratio ${ratio}, at ${policy}`, () => {
+        const received = ingested(twoDependenciesFailed({ ratio }), policy);
+
+        expect(nestedFrames(received).length).toBeGreaterThan(0);
+      });
+    }
+
+    test(`a nested frame is reduced like the frame that holds it, at ${policy}`, () => {
+      const frames = nestedFrames(
+        encodeRecord(recordOf({ _tag: "Probe" }, [twoDependenciesFailed({ ratio: 1 })]), policy)
+          .failures[0]
+      );
+
+      expect(frames.length).toBeGreaterThan(0);
+
+      for (const frame of frames) {
+        expect(frame).not.toHaveProperty("preview");
+        expect(Object.values(frame)).not.toContain(undefined);
+
+        if (policy !== "full") {
+          expect(frame).not.toHaveProperty("stack");
+        }
+
+        if (policy === "none") {
+          expect(frame).not.toHaveProperty("path");
+          expect(frame).not.toHaveProperty("valueKind");
+        }
+      }
+    });
+  }
+
+  /**
+   * `cancellation` is the one frame field that is itself a record, and core
+   * fills both of its keys whether the failure had them or not.
+   */
+  /**
+   * Core builds the cancellation it hands over as plain data, so this is not
+   * reachable through `describeError` today; it is tested directly so that
+   * staying true does not depend on core.
+   */
+  test("a cancellation's fields are each read once", () => {
+    let reads = 0;
+    const cancellation = {
+      get detail(): number {
+        reads += 1;
+        return reads;
+      },
+    };
+
+    expect(compact(cancellation)).toEqual({ detail: 1 });
+    expect(reads).toBe(1);
+  });
+
+  test("a cancellation without a detail crosses the transport", () => {
+    const received = ingested({ message: "stopped", cancellation: { _tag: "Stopped" } }, "shape");
+
+    expect(received).toMatchObject({ causes: [{ cancellation: { _tag: "Stopped" } }] });
+  });
+});
+
+/**
+ * A failure's `path` is core's list of the key names it walked, and core keeps
+ * a hole in it where the failure's own list had one. The codec rejects a hole
+ * as it rejects `undefined`, so one hole would fail the whole batch.
+ */
+describe("a failure path with holes", () => {
+  for (const policy of ["shape", "full"] as const) {
+    test(`crosses the transport with each hole as core writes undefined, at ${policy}`, () => {
+      const sparse: Array<string> = ["a"];
+      sparse[2] = "c";
+
+      for (const [path, expected] of [
+        [new Array(2), ["undefined", "undefined"]],
+        [sparse, ["a", "undefined", "c"]],
+      ] as const) {
+        const failure = Object.assign(new Error("boom"), { path });
+        const encoded = encodeRecord(recordOf({ _tag: "Probe" }, [failure]), policy);
+        const received = acrossTheWire(Ingest.payloadSchema, {
+          attachmentId: "attachment-1",
+          records: [
+            { ...encoded, category: "state", timeline: "state", reason: "refresh", workId: 1 },
+          ],
+          droppedSince: 0,
+        });
+        const { causes } = received.records[0]?.failures[0] as {
+          readonly causes: ReadonlyArray<{ readonly path?: unknown }>;
+        };
+
+        expect(causes[0]?.path).toEqual(expected);
+      }
+    });
+  }
 });

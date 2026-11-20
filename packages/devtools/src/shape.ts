@@ -1,5 +1,10 @@
 import { describeError } from "./cause.ts";
-import { type ShapeDescriptor, UNREADABLE } from "./descriptors.ts";
+import {
+  describeNonFiniteNumber,
+  type ShapeDescriptor,
+  typeName,
+  UNREADABLE,
+} from "./descriptors.ts";
 
 const MAX_STRING_LENGTH = 256;
 const MAX_KEYS = 32;
@@ -26,6 +31,8 @@ const MAX_DEPTH = 3;
  * string[42]            an array of 42, named by its first element
  * {id,name}[3]          the same, where that element is an object
  * unknown[0]            an empty array: nothing to name it by
+ * unreadable[2]         the first element could not be read
+ * string[?]             the length could not be read
  * Map(3) / Set(3)       collections, by size
  * function / symbol / bigint    values with no JSON form
  * {…} / […]             the depth bound stopped the walk here
@@ -53,9 +60,13 @@ export function describeShape(value: unknown, depth: number): unknown {
   }
 
   switch (typeof value) {
-    case "boolean":
-    case "number": {
+    case "boolean": {
       return value;
+    }
+    case "number": {
+      // `value - value` is zero for every finite number and `NaN` for the rest:
+      // one subtraction, so a finite number stays as cheap as a boolean.
+      return value - value === 0 ? value : describeNonFiniteNumber(value);
     }
     case "bigint":
     case "function":
@@ -63,9 +74,9 @@ export function describeShape(value: unknown, depth: number): unknown {
       return typeof value;
     }
     case "string": {
-      // The one descriptor that stays an object at this policy, because it is
-      // the one carrying content: `head` is app data, and a reader has to be
-      // able to tell it from a string that crossed whole.
+      // An object at this policy, like a non-finite number's marker, because it
+      // carries content: `head` is app data, and a reader has to be able to
+      // tell it from a string that crossed whole.
       return value.length <= MAX_STRING_LENGTH
         ? value
         : ({
@@ -101,12 +112,10 @@ function describeStructureUnguarded(value: object, depth: number): unknown {
   }
 
   if (Array.isArray(value)) {
-    const first = value[0];
-
     // Named by its first element rather than by every one of them: a
     // homogeneous array is the common case and the first entry settles it, and
     // a heterogeneous one is not summarizable at any length worth spending.
-    return `${first === undefined ? "unknown" : shapeName(first, depth + 1)}[${value.length}]`;
+    return `${firstElementName(value, depth + 1)}[${lengthLabel(value)}]`;
   }
 
   if (value instanceof Map) {
@@ -123,17 +132,58 @@ function describeStructureUnguarded(value: object, depth: number): unknown {
   // far as this encoder is willing to go, and `{?}` says the fields exist rather
   // than letting a bare type name read as "it has none".
   if (prototype !== null && prototype !== Object.prototype) {
-    return `${(value.constructor as { readonly name?: string } | undefined)?.name ?? "object"}{?}`;
+    return `${typeName(value)}{?}`;
   }
 
+  // A fresh array, so cut in place rather than copied.
   const keys = Object.keys(value);
-  const shown = keys.length > MAX_KEYS ? [...keys.slice(0, MAX_KEYS), "…"] : keys;
+  if (keys.length > MAX_KEYS) {
+    keys.length = MAX_KEYS;
+    keys.push("…");
+  }
   // `_tag` is the one nested field that survives verbatim. A discriminant is
   // structure, not data — and a failure feed that says "an object with these
   // keys" instead of "GraphNodeAcquireFailed" is not worth reading.
-  const tag = (value as { readonly _tag?: unknown })._tag;
+  //
+  // Read on its own guard: a getter that throws here costs the tag, not the
+  // key list already read.
+  let tag: unknown;
 
-  return `${typeof tag === "string" ? tag : ""}{${shown.join(",")}}`;
+  try {
+    tag = (value as { readonly _tag?: unknown })._tag;
+  } catch {
+    tag = undefined;
+  }
+
+  return `${typeof tag === "string" ? tag : ""}{${keys.join(",")}}`;
+}
+
+/**
+ * What an array's first element is, read on its own guard so a throw costs the
+ * name and not the length beside it.
+ */
+function firstElementName(value: ReadonlyArray<unknown>, depth: number): string {
+  let first: unknown;
+
+  try {
+    first = value[0];
+  } catch {
+    return "unreadable";
+  }
+
+  return first === undefined ? "unknown" : shapeName(first, depth);
+}
+
+/**
+ * An array's length as the label writes it, or `?` when it cannot be read or
+ * written: a proxy can make the read throw, or answer with a symbol.
+ */
+function lengthLabel(value: ReadonlyArray<unknown>): string {
+  try {
+    return `${value.length}`;
+  } catch {
+    return "?";
+  }
 }
 
 /**
@@ -156,6 +206,12 @@ function shapeName(value: unknown, depth: number): string {
   const described = describeStructure(value, depth);
 
   // An `Error` element describes as a cause chain, which is an object. Its
-  // descriptor names it `error`, so the array says the same.
-  return typeof described === "string" ? described : "error";
+  // descriptor names it `error`, so the array says the same. An element that
+  // could not be read describes as the unreadable marker, also an object, and
+  // is named for that instead: it is not a failure.
+  if (typeof described === "string") {
+    return described;
+  }
+
+  return described === UNREADABLE ? "unreadable" : "error";
 }
