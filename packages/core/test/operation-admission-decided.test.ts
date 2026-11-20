@@ -137,7 +137,11 @@ describe("join admission and decided operations", () => {
         yield* Deferred.succeed(gate, undefined);
         const second = yield* handle.action("write", "same").pipe(Effect.forkDetach);
         yield* Deferred.await(secondStarted);
-        const third = yield* handle.action("write", "same").pipe(Effect.forkDetach);
+        // Start the call now: a plain fork starts on the next setImmediate, and
+        // the macrotask below is a timer the event loop may run first.
+        const third = yield* handle
+          .action("write", "same")
+          .pipe(Effect.forkDetach({ startImmediately: true }));
         yield* Effect.promise(macrotask);
         yield* Deferred.succeed(secondGate, undefined);
         expect(yield* Fiber.join(second)).toMatchObject({ _tag: "Success", value: "same:2" });
