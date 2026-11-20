@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/frondruntime/frond/compare/core-v0.6.0...core-v0.6.1) (2026-11-20)
+
+
+### Bug Fixes
+
+* **core:** cancelling a settled operation interrupts its pending sinks ([#30](https://github.com/frondruntime/frond/issues/30)) ([a766004](https://github.com/frondruntime/frond/commit/a7660044305354c6ac3b3a3de3ff921943389d56))
+
 ## [0.6.0](https://github.com/frondruntime/frond/compare/core-v0.5.0...core-v0.6.0) (2026-11-20)
 
 

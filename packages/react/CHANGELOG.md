@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.1](https://github.com/frondruntime/frond/compare/react-v0.6.0...react-v0.6.1) (2026-11-20)
+
+
+### Miscellaneous Chores
+
+* **react:** Synchronize frondruntime versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @frondruntime/core bumped to 0.6.1
+  * peerDependencies
+    * @frondruntime/core bumped from 0.6.0 to 0.6.1
+
 ## [0.6.0](https://github.com/frondruntime/frond/compare/react-v0.5.0...react-v0.6.0) (2026-11-20)
 
 
