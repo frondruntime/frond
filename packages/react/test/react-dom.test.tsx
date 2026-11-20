@@ -1,5 +1,5 @@
 import "./setup";
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   createRuntime,
   type Dep,
@@ -15,7 +15,7 @@ import {
   resultCommit,
 } from "@frondruntime/core";
 import { createFrondTestHarness, readySpec } from "@frondruntime/core/testing";
-import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { Deferred, Effect } from "effect";
 import {
   Activity,
@@ -42,6 +42,10 @@ import {
 import { assertStableKeySet } from "../src/nodeInputMap";
 import { makeReactNodeStore } from "../src/nodeStore";
 import { TestFrondProvider } from "../src/testing";
+
+afterEach(() => {
+  cleanup();
+});
 
 type Profile = {
   readonly timezone: string;

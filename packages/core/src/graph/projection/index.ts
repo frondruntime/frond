@@ -1,4 +1,3 @@
-import { Clock, Effect, Match } from "effect";
 import type { GraphNodeCellView, GraphNodeState } from "../cell/cellModel";
 import {
   type CellPhaseProjection,
@@ -10,18 +9,6 @@ import { idleOperation } from "../operations/nodeOperation";
 import { effectiveResultValidity } from "../resultValidity";
 import type { NodeId, NodeRead, NodeSnapshot, ProjectionContext } from "../types";
 
-export function toSnapshot(
-  cell: GraphNodeCellView,
-  context?: ProjectionContext | undefined
-): Effect.Effect<NodeSnapshot> {
-  return Effect.gen(function* () {
-    const state = yield* cell.state.get;
-    const projectionContext =
-      context === undefined ? { now: yield* Clock.currentTimeMillis } : context;
-    return projectNodeSnapshot(cell, state, projectionContext);
-  });
-}
-
 export function projectNodeSnapshot(
   cell: GraphNodeCellView,
   state: GraphNodeState,
@@ -29,107 +16,102 @@ export function projectNodeSnapshot(
 ): NodeSnapshot {
   const projection = projectCellPhase(state.phase);
 
-  return Match.value(projection).pipe(
-    Match.tag("Idle", (projected) => projectedNodeSnapshot(cell, projected, state, context.now)),
-    Match.tag("Pending", (projected) => projectedNodeSnapshot(cell, projected, state, context.now)),
-    Match.tag("ReadinessError", (projected) =>
-      projectedNodeSnapshot(cell, projected, state, context.now)
-    ),
-    Match.tag("Ready", (projected) => projectedNodeSnapshot(cell, projected, state, context.now)),
-    Match.tag("Releasing", (projected) =>
-      projectedNodeSnapshot(cell, projected, state, context.now)
-    ),
-    Match.tag("Invalid", (projected) => projectedNodeSnapshot(cell, projected, state, context.now)),
-    Match.tag(
-      "Removed",
-      () =>
-        ({
-          _tag: "Unwired",
-          nodeId: cell.nodeId,
-          status: { _tag: "Unwired" },
-          tag: cell.tag,
-          kind: cell.kind,
-          key: cell.key,
-          label: cell.label,
-          liveDemand: projectLiveDemand([]),
-          operation: idleOperation,
-          revision: cell.state.getRevisionSync(),
-        }) satisfies NodeSnapshot
-    ),
-    Match.exhaustive
-  );
-}
-
-export function toNodeRead(cell: GraphNodeCellView): Effect.Effect<NodeRead> {
-  return Effect.gen(function* () {
-    const state = yield* cell.state.get;
-
-    return projectNodeRead(cell, state);
-  });
+  switch (projection._tag) {
+    case "Idle": {
+      const projected = projection;
+      return projectedNodeSnapshot(cell, projected, state, context.now);
+    }
+    case "Pending": {
+      const projected = projection;
+      return projectedNodeSnapshot(cell, projected, state, context.now);
+    }
+    case "ReadinessError": {
+      const projected = projection;
+      return projectedNodeSnapshot(cell, projected, state, context.now);
+    }
+    case "Ready": {
+      const projected = projection;
+      return projectedNodeSnapshot(cell, projected, state, context.now);
+    }
+    case "Invalid": {
+      const projected = projection;
+      return projectedNodeSnapshot(cell, projected, state, context.now);
+    }
+    case "Removed": {
+      return {
+        _tag: "Unwired",
+        nodeId: cell.nodeId,
+        status: { _tag: "Unwired" },
+        tag: cell.tag,
+        kind: cell.kind,
+        key: cell.key,
+        label: cell.label,
+        liveDemand: projectLiveDemand([]),
+        operation: idleOperation,
+        revision: cell.state.getRevisionSync(),
+      } satisfies NodeSnapshot;
+    }
+    default: {
+      const unreachable: never = projection;
+      return unreachable;
+    }
+  }
 }
 
 export function projectNodeRead(cell: GraphNodeCellView, state: GraphNodeState): NodeRead {
   const projection = projectCellPhase(state.phase);
 
-  return Match.value(projection).pipe(
-    Match.tag("Removed", () => unwiredNodeRead(cell.nodeId)),
-    Match.tag(
-      "Idle",
-      (projected) =>
-        ({
-          _tag: "Idle",
-          ...nodeReadFields(cell, projected),
-        }) satisfies NodeRead
-    ),
-    Match.tag(
-      "Pending",
-      (projected) =>
-        ({
-          _tag: "Pending",
-          ...nodeReadFields(cell, projected),
-        }) satisfies NodeRead
-    ),
-    Match.tag(
-      "Ready",
-      (projected) =>
-        ({
-          _tag: "Ready",
-          ...nodeReadFields(cell, projected),
-          node: projected.node,
-        }) satisfies NodeRead
-    ),
-    Match.tag(
-      "ReadinessError",
-      (projected) =>
-        ({
-          _tag: "Error",
-          ...nodeReadFields(cell, projected),
-          error: projectedFailureValue(projected.failure),
-        }) satisfies NodeRead
-    ),
-    Match.tag(
-      "Releasing",
-      (projected) =>
-        ({
-          _tag: "Idle",
-          ...nodeReadFields(cell, projected),
-        }) satisfies NodeRead
-    ),
-    Match.tag(
-      "Invalid",
-      (projected) =>
-        ({
-          _tag: "Invalid",
-          nodeId: cell.nodeId,
-          tag: cell.tag,
-          status: projected.status,
-          nodeLookup: projected.nodeLookup,
-          error: projectedFailureValue(projected.failure),
-          resultValidity: projected.resultValidity,
-        }) satisfies NodeRead
-    ),
-    Match.exhaustive
-  );
+  switch (projection._tag) {
+    case "Removed": {
+      return unwiredNodeRead(cell.nodeId);
+    }
+    case "Idle": {
+      const projected = projection;
+      return {
+        _tag: "Idle",
+        ...nodeReadFields(cell, projected),
+      } satisfies NodeRead;
+    }
+    case "Pending": {
+      const projected = projection;
+      return {
+        _tag: "Pending",
+        ...nodeReadFields(cell, projected),
+      } satisfies NodeRead;
+    }
+    case "Ready": {
+      const projected = projection;
+      return {
+        _tag: "Ready",
+        ...nodeReadFields(cell, projected),
+        node: projected.node,
+      } satisfies NodeRead;
+    }
+    case "ReadinessError": {
+      const projected = projection;
+      return {
+        _tag: "Error",
+        ...nodeReadFields(cell, projected),
+        error: projectedFailureValue(projected.failure),
+      } satisfies NodeRead;
+    }
+    case "Invalid": {
+      const projected = projection;
+      return {
+        _tag: "Invalid",
+        nodeId: cell.nodeId,
+        tag: cell.tag,
+        status: projected.status,
+        nodeLookup: projected.nodeLookup,
+        error: projectedFailureValue(projected.failure),
+        resultValidity: projected.resultValidity,
+      } satisfies NodeRead;
+    }
+    default: {
+      const unreachable: never = projection;
+      return unreachable;
+    }
+  }
 }
 
 function nodeReadFields(
@@ -182,40 +164,40 @@ function projectedNodeSnapshot(
     revision: cell.state.getRevisionSync(),
   };
 
-  return Match.value(projection).pipe(
-    Match.tag(
-      "Ready",
-      ({ result, status, node }) =>
-        ({
-          ...base,
-          _tag: "Ready",
-          status,
-          node,
-          result,
-        }) satisfies NodeSnapshot
-    ),
-    Match.tag(
-      "Pending",
-      ({ attempt, status }) =>
-        ({
-          ...base,
-          _tag: "Pending",
-          status,
-          attempt,
-        }) satisfies NodeSnapshot
-    ),
-    Match.tag("Idle", (projected) =>
-      snapshotWithProjectedFailure(
+  switch (projection._tag) {
+    case "Ready": {
+      const { result, status, node } = projection;
+      return {
+        ...base,
+        _tag: "Ready",
+        status,
+        node,
+        result,
+      } satisfies NodeSnapshot;
+    }
+    case "Pending": {
+      const { attempt, status } = projection;
+      return {
+        ...base,
+        _tag: "Pending",
+        status,
+        attempt,
+      } satisfies NodeSnapshot;
+    }
+    case "Idle": {
+      const projected = projection;
+      return snapshotWithProjectedFailure(
         {
           ...base,
           _tag: "Idle",
           status: projected.status,
         } satisfies NodeSnapshot,
         projected.failure
-      )
-    ),
-    Match.tag("ReadinessError", (projected) =>
-      snapshotWithProjectedFailure(
+      );
+    }
+    case "ReadinessError": {
+      const projected = projection;
+      return snapshotWithProjectedFailure(
         {
           ...base,
           _tag: "ReadinessError",
@@ -223,10 +205,11 @@ function projectedNodeSnapshot(
           error: projectedFailureValue(projected.failure),
         } satisfies NodeSnapshot,
         projected.failure
-      )
-    ),
-    Match.tag("Invalid", (projected) =>
-      snapshotWithProjectedFailure(
+      );
+    }
+    case "Invalid": {
+      const projected = projection;
+      return snapshotWithProjectedFailure(
         {
           ...base,
           _tag: "Invalid",
@@ -235,20 +218,13 @@ function projectedNodeSnapshot(
           error: projectedFailureValue(projected.failure),
         } satisfies NodeSnapshot,
         projected.failure
-      )
-    ),
-    Match.tag("Releasing", (projected) =>
-      snapshotWithProjectedFailure(
-        {
-          ...base,
-          _tag: "Releasing",
-          status: projected.status,
-        } satisfies NodeSnapshot,
-        projected.failure
-      )
-    ),
-    Match.exhaustive
-  );
+      );
+    }
+    default: {
+      const unreachable: never = projection;
+      return unreachable;
+    }
+  }
 }
 
 function projectedFailureValue(

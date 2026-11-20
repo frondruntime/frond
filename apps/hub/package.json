@@ -46,6 +46,7 @@
   },
   "dependencies": {
     "@effect/platform-bun": "4.0.5",
+    "@effect/platform-node-shared": "4.0.5",
     "@frondruntime/core": "0.5.0",
     "@frondruntime/devtools": "0.5.0",
     "@frondruntime/react": "0.5.0",

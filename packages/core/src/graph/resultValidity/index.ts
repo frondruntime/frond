@@ -1,4 +1,4 @@
-import { Duration, Match } from "effect";
+import { Duration } from "effect";
 import {
   GraphInvariantViolation,
   type NodeId,
@@ -6,15 +6,18 @@ import {
   type ResultCommit,
   ResultCommitTag,
   type ResultValidity,
-  type ResultValidityChangedReason,
   type ResultValidityPolicy,
 } from "../types";
+import { plainDataEqual } from "./plainDataEqual";
 
 export interface ResultState {
   readonly result: unknown;
   readonly resultValidity: ResultValidity;
   readonly resultLoadedAt?: number | undefined;
   readonly resultValidityCommit: "default" | "explicit";
+  // Set when patchResult staged this state; a shared patch keeps the result
+  // reference, so readers learn of the write from this mark, not identity.
+  readonly resultPatched?: true | undefined;
 }
 
 export interface ResultValidityContext {
@@ -31,6 +34,7 @@ export interface ResultCommitOptions {
 }
 
 export interface DriverResultCommitOptions extends ResultCommitOptions {
+  readonly retainEqual?: { readonly result: unknown } | undefined;
   readonly returned: unknown;
   readonly staged: ResultState;
 }
@@ -49,16 +53,27 @@ export function normalizeResultValidityPolicy(
     return staticResultValidityPolicy;
   }
 
-  return Match.value(policy).pipe(
-    Match.tag("Static", () => staticResultValidityPolicy),
-    Match.tag("Manual", () => ({ _tag: "Manual" }) as const),
-    Match.tag("TimeBound", ({ staleAfter, expireAfter }) =>
-      normalizeTimeBoundPolicy(staleAfter, expireAfter, context)
-    ),
-    Match.exhaustive
-  );
+  switch (policy._tag) {
+    case "Static": {
+      return staticResultValidityPolicy;
+    }
+    case "Manual": {
+      return { _tag: "Manual" } as const;
+    }
+    case "TimeBound": {
+      const { staleAfter, expireAfter } = policy;
+      return normalizeTimeBoundPolicy(staleAfter, expireAfter, context);
+    }
+    default: {
+      const unreachable: never = policy;
+      return unreachable;
+    }
+  }
 }
 
+// A patch staged earlier in the same operation stays marked through a later
+// setResult or returned result: a shared patch may still be the committed
+// reference, and readers learn of it only from the mark.
 export function commitResultState(
   next: unknown,
   previous: ResultState | undefined,
@@ -85,6 +100,7 @@ export function commitResultState(
       resultLoadedAt: loadedAt,
       resultValidity: effectiveResultValidity(validity, policy, loadedAt, now),
       resultValidityCommit: hasExplicitMetadata ? "explicit" : "default",
+      resultPatched: previous?.resultPatched,
     };
   }
 
@@ -103,6 +119,7 @@ export function commitResultState(
     resultValidity: effectiveResultValidity(validity, policy, loadedAt, now),
     resultValidityCommit:
       defaultValidity === "preserve" ? (previous?.resultValidityCommit ?? "default") : "default",
+    resultPatched: previous?.resultPatched,
   };
 }
 
@@ -111,24 +128,32 @@ export function commitDriverOperationResult(
   now: number,
   options: DriverResultCommitOptions
 ): ResultState {
-  if (options.returned === undefined) {
-    return options.staged;
-  }
-
-  const returnedState = commitResultState(options.returned, options.staged, policy, now, {
-    context: options.context,
-    defaultLoadedAt: options.defaultLoadedAt,
-    defaultValidity: options.defaultValidity,
-  });
-
-  if (options.staged.resultValidityCommit !== "explicit") {
-    return returnedState;
-  }
-
+  const result =
+    options.returned === undefined
+      ? options.staged
+      : commitResultState(options.returned, options.staged, policy, now, {
+          context: options.context,
+          defaultLoadedAt: options.defaultLoadedAt,
+          defaultValidity: options.defaultValidity,
+        });
+  if (
+    options.retainEqual === undefined &&
+    (options.returned === undefined || options.staged.resultValidityCommit !== "explicit")
+  )
+    return result;
   return {
-    ...returnedState,
-    resultValidity: options.staged.resultValidity,
-    resultValidityCommit: "explicit",
+    result:
+      options.retainEqual !== undefined && plainDataEqual(options.retainEqual.result, result.result)
+        ? options.retainEqual.result
+        : result.result,
+    resultLoadedAt: result.resultLoadedAt,
+    resultValidity:
+      options.staged.resultValidityCommit === "explicit"
+        ? options.staged.resultValidity
+        : result.resultValidity,
+    resultValidityCommit:
+      options.staged.resultValidityCommit === "explicit" ? "explicit" : result.resultValidityCommit,
+    resultPatched: result.resultPatched,
   };
 }
 
@@ -157,28 +182,6 @@ export function effectiveResultValidity(
 
 export function validityChanged(left: ResultValidity, right: ResultValidity): boolean {
   return left._tag !== right._tag || validityAt(left) !== validityAt(right);
-}
-
-export function resultValiditySpanAttributes(input: {
-  readonly previous?: ResultValidity | undefined;
-  readonly next?: ResultValidity | undefined;
-  readonly reason?: ResultValidityChangedReason | undefined;
-}): Record<string, string | number> {
-  const attributes: Record<string, string | number> = {};
-
-  if (input.previous !== undefined) {
-    attributes["frond.result.validity.previous"] = input.previous._tag;
-  }
-
-  if (input.next !== undefined) {
-    attributes["frond.result.validity.next"] = input.next._tag;
-  }
-
-  if (input.reason !== undefined) {
-    attributes["frond.result.validity.reason"] = input.reason;
-  }
-
-  return attributes;
 }
 
 function normalizeTimeBoundPolicy(
@@ -274,38 +277,32 @@ export function validateResultValidity(
     readonly expiredAt?: unknown;
   };
 
-  return Match.value(tagged._tag).pipe(
-    Match.when(
-      "Current",
-      () =>
-        ({
-          _tag: "Current",
-          currentAt:
-            tagged.currentAt === undefined
-              ? undefined
-              : validateValidityAt(tagged.currentAt, "currentAt", context),
-        }) satisfies ResultValidity
-    ),
-    Match.when(
-      "Stale",
-      () =>
-        ({
-          _tag: "Stale",
-          staleAt: validateValidityAt(tagged.staleAt, "staleAt", context),
-        }) satisfies ResultValidity
-    ),
-    Match.when(
-      "Expired",
-      () =>
-        ({
-          _tag: "Expired",
-          expiredAt: validateValidityAt(tagged.expiredAt, "expiredAt", context),
-        }) satisfies ResultValidity
-    ),
-    Match.orElse(() => {
+  switch (tagged._tag) {
+    case "Current": {
+      return {
+        _tag: "Current",
+        currentAt:
+          tagged.currentAt === undefined
+            ? undefined
+            : validateValidityAt(tagged.currentAt, "currentAt", context),
+      } satisfies ResultValidity;
+    }
+    case "Stale": {
+      return {
+        _tag: "Stale",
+        staleAt: validateValidityAt(tagged.staleAt, "staleAt", context),
+      } satisfies ResultValidity;
+    }
+    case "Expired": {
+      return {
+        _tag: "Expired",
+        expiredAt: validateValidityAt(tagged.expiredAt, "expiredAt", context),
+      } satisfies ResultValidity;
+    }
+    default: {
       throw invalidResultValidity(value, context);
-    })
-  );
+    }
+  }
 }
 
 export function resultValidityInvariantFailure(
@@ -353,10 +350,22 @@ function invalidResultValidity(
 }
 
 function validityAt(validity: ResultValidity): number | undefined {
-  return Match.value(validity).pipe(
-    Match.tag("Current", ({ currentAt }) => currentAt),
-    Match.tag("Stale", ({ staleAt }) => staleAt),
-    Match.tag("Expired", ({ expiredAt }) => expiredAt),
-    Match.exhaustive
-  );
+  switch (validity._tag) {
+    case "Current": {
+      const { currentAt } = validity;
+      return currentAt;
+    }
+    case "Stale": {
+      const { staleAt } = validity;
+      return staleAt;
+    }
+    case "Expired": {
+      const { expiredAt } = validity;
+      return expiredAt;
+    }
+    default: {
+      const unreachable: never = validity;
+      return unreachable;
+    }
+  }
 }

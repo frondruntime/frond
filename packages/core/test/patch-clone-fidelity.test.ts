@@ -87,6 +87,63 @@ function slotOf(result: CounterResult): Internal {
 }
 
 describe("patchResult clone fidelity", () => {
+  test.each([
+    [false, true],
+    [true, false],
+    [false, false],
+  ])("patching count preserves the protected id data descriptor", async (writable, configurable) => {
+    type Payload = { readonly id: string; count: number };
+    type Spec = NodeSpec<{
+      readonly mode: "async";
+      readonly args: Args.None;
+      readonly key: Key.Singleton;
+      readonly result: Payload;
+      readonly actions: { readonly increment: ActionContract<void, void> };
+    }>;
+
+    class ProtectedCounterNode extends NodeBase<Spec> {
+      static readonly spec = serviceSpec.async<Spec>({
+        tag: tag("patch-clone/protected-id"),
+        key: () => Key.singleton(),
+        acquire: Driver.Acquire((): Payload => {
+          const result: Payload = { id: "protected", count: 0 };
+          Object.defineProperty(result, "id", { writable, configurable });
+          return result;
+        }),
+        actions: {
+          increment: Driver.Action((ctx) => {
+            ctx.patchResult((draft) => {
+              draft.count += 1;
+            });
+          }),
+        },
+      });
+    }
+
+    const harness = createFrondTestHarness();
+    try {
+      await harness.start();
+      const node = await harness.startNode(ProtectedCounterNode, Args.none);
+      const before = node.result;
+      const descriptor = Object.getOwnPropertyDescriptor(before, "id");
+      expect(Object.isExtensible(before)).toBe(true);
+      expect(descriptor).toEqual({
+        value: "protected",
+        enumerable: true,
+        writable,
+        configurable,
+      });
+
+      await node.actions.increment();
+
+      expect(node.result.count).toBe(1);
+      expect(before.count).toBe(0);
+      expect(Object.getOwnPropertyDescriptor(node.result, "id")).toEqual(descriptor);
+    } finally {
+      await harness.teardown();
+    }
+  });
+
   test("a committed patch keeps non-enumerable symbol slots on the cloned result", async () => {
     const harness = createFrondTestHarness();
     await harness.start();

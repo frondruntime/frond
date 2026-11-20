@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Effect } from "effect";
+import { Cause, Effect } from "effect";
 import { Driver, Key, NodeBase, type NodeSpec, serviceSpec, tag } from "../src";
 import { createFrondTestHarness } from "../src/testing";
 
@@ -26,10 +26,11 @@ async function outcome(
   }
 }
 
-// The Promise surface runs through the runtime bridge (`Effect.runPromise`), so
-// interruption rejects as that bridge's interruption Error, not a bare Cause.
+// 0.6 intended change: 0.5 rejected an aborted readiness caller with Effect's squashed
+// "All fibers interrupted without error" Error. 0.6 rejects it with the interruption Cause,
+// the rejection an aborted action caller gets through `unwrapEffect`.
 function isInterruption(cause: unknown): boolean {
-  return cause instanceof Error && /interrupted/i.test(cause.message);
+  return Cause.isCause(cause) && Cause.hasInterruptsOnly(cause);
 }
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));

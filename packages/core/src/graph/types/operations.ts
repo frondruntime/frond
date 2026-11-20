@@ -156,11 +156,6 @@ export type OperationAdmission = {
   readonly outcome: "started" | "joined" | "queued" | "rejected";
 };
 
-export type OperationAdmissionKey = {
-  readonly _tag: "Refresh";
-  readonly nodeId: NodeId;
-};
-
 export interface GraphTask<A> {
   readonly await: Effect.Effect<A>;
 }

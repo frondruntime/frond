@@ -1,4 +1,5 @@
-import { Deferred, Effect } from "effect";
+import type { Context } from "effect";
+import { Effect, Exit } from "effect";
 import type { GraphNodeCell } from "../cell/cellModel";
 import {
   type CellBase,
@@ -7,63 +8,52 @@ import {
   phaseBase,
 } from "../cell/cellPhase";
 import { beginReadinessAttemptState, failReadinessAttemptState } from "../cell/cellTransitions";
+import { finishObserverWork } from "../driverExecution/effectRunner";
+import { type GraphCancel, GraphReply, type GraphResume, noCancel } from "../queue/reply";
 import { GraphInvariantViolation, type NodeRead, type ResultValidity } from "../types";
 import { recordSourceFailure } from "./sourceFailures";
 
-export function runReadinessAttempt(
-  cell: GraphNodeCell,
-  base: CellBase,
-  body: (attempt: CellReadinessAttempt) => Effect.Effect<NodeRead>
-): Effect.Effect<NodeRead> {
-  return Effect.gen(function* () {
-    const current = yield* cell.state.get;
-    const attemptId = current.nextAttemptId + 1;
-    const deferred = yield* Deferred.make<NodeRead>();
-    const attempt = makeCellReadinessAttempt(attemptId, deferred);
-
-    yield* cell.state.transition((latest) => [
-      undefined,
-      beginReadinessAttemptState({ latest, attemptId, base, attempt }),
-    ]);
-    yield* cell.notifyChanged(cell.nodeId);
-
-    return yield* body(attempt);
-  });
-}
-
-export function failAttempt(
+export function startFailAttempt(
   cell: GraphNodeCell,
   attempt: CellReadinessAttempt,
   cause: unknown,
-  resultValidity?: ResultValidity | undefined
-): Effect.Effect<NodeRead> {
-  return Effect.gen(function* () {
-    const status = { _tag: "Wired", run: { _tag: "Error", error: cause } } as const;
-    yield* cell.state.transition((latest) => [
-      undefined,
-      failReadinessAttemptState({ latest, cause, resultValidity }),
-    ]);
-    yield* cell.notifyChanged(cell.nodeId);
-    // Source: this attempt produced the failure. Ensures that later observe
-    // the stored failure read it from the cell and do not notify again.
-    recordSourceFailure(cause);
-    yield* cell.notifyReadinessFailed(cell.nodeId, cause);
-
-    const latest = yield* cell.state.get;
-    const handle = failedReadFromPhase(cell, latest.phase, cause, status);
-    yield* completeAttempt(attempt, handle);
-    return handle;
+  resultValidity: ResultValidity | undefined,
+  context: Context.Context<never> | undefined,
+  resume: GraphResume<NodeRead>
+): GraphCancel {
+  const phase = cell.state.getSync().phase;
+  if (phase._tag !== "Acquiring" || phase.attempt.attemptId !== attempt.attemptId)
+    return attempt.listen(resume);
+  const status = { _tag: "Wired", run: { _tag: "Error", error: cause } } as const;
+  cell.state.updateSync((latest) => {
+    failReadinessAttemptState({ latest, cause, resultValidity });
   });
+  finishObserverWork(
+    cell.notifyChanged(cell.nodeId),
+    context,
+    () => {
+      recordSourceFailure(cause);
+      finishObserverWork(
+        cell.notifyReadinessFailed(cell.nodeId, cause),
+        context,
+        () => {
+          const handle = failedReadFromPhase(cell, cell.state.getSync().phase, cause, status);
+          attempt.resolve(handle);
+          resume(Exit.succeed(handle));
+        },
+        cell.jobs
+      );
+    },
+    cell.jobs
+  );
+  return noCancel;
 }
 
 export function completeAttempt(
   attempt: CellReadinessAttempt,
   handle: NodeRead
 ): Effect.Effect<void> {
-  return Deferred.succeed(attempt.deferred, handle).pipe(
-    Effect.tap(() => Effect.sync(() => attempt.resolve(handle))),
-    Effect.asVoid
-  );
+  return Effect.sync(() => attempt.resolve(handle));
 }
 
 function resultValidityFromPhase(phase: CellPhase): ResultValidity | undefined {
@@ -110,19 +100,30 @@ function failedReadFromPhase(
   };
 }
 
-function makeCellReadinessAttempt(
-  attemptId: number,
-  deferred: Deferred.Deferred<NodeRead>
-): CellReadinessAttempt {
-  let resolve!: (handle: NodeRead) => void;
-  const promise = new Promise<NodeRead>((resolvePromise) => {
-    resolve = resolvePromise;
+export function beginReadinessAttempt(cell: GraphNodeCell, base: CellBase): CellReadinessAttempt {
+  const attemptId = cell.state.getSync().nextAttemptId + 1;
+  const reply = new GraphReply<NodeRead>();
+  let resolvePromise!: (handle: NodeRead) => void;
+  const promise = new Promise<NodeRead>((resolve) => {
+    resolvePromise = resolve;
   });
-
-  return {
+  let settled = false;
+  const attempt: CellReadinessAttempt = {
     attemptId,
-    deferred,
+    get await() {
+      return reply.await;
+    },
+    listen: reply.listen,
     promise,
-    resolve,
+    resolve(handle) {
+      if (settled) return;
+      settled = true;
+      reply.settle(Exit.succeed(handle));
+      resolvePromise(handle);
+    },
   };
+  cell.state.updateSync((latest) => {
+    beginReadinessAttemptState({ latest, attemptId, base, attempt });
+  });
+  return attempt;
 }

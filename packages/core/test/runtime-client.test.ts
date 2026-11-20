@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { Cause } from "effect";
+import { Cause, Exit } from "effect";
 import type { NodeId } from "../src/graph";
 import { FrondNodeConstructionUnavailable } from "../src/node";
 import { FrondRuntimeClosed, FrondRuntimeInvariantViolation } from "../src/runtime";
-import type { RuntimeSubmission } from "../src/runtime/types";
-import { createUnsafeRuntimeClient } from "../src/runtime/unsafeClient";
+import { runtimeCore } from "../src/runtime/core";
+import type { RuntimeCommand, RuntimeSubmission } from "../src/runtime/types";
 import { Signals } from "../src/signals";
 import {
   effectBridgeRunner as bridgeRunner,
@@ -1355,11 +1355,27 @@ describe("runtime client", () => {
     expect(updateResult).toMatchObject({ _tag: "Invalid", nodeId: handle.nodeId });
   });
 
+  test("a structural host proxy that answers null for unknown keys still builds a client", () => {
+    const nodeId = 'services/structural-null-host:v1:"singleton"' as NodeId;
+    const host = {
+      getStatusSync: () => "running",
+      readNodeSnapshotSync: () => ({ _tag: "Missing", nodeId }),
+      submit: () => Effect.never,
+    };
+    const lenient = new Proxy(host, {
+      get: (target, property) => (property in target ? Reflect.get(target, property) : null),
+    });
+
+    const client = createRuntimeClient(lenient as never, bridgeRunner);
+
+    expect(client.__unsafe.refresh(nodeId)._tag).toBe("Unwired");
+  });
+
   test("__unsafe reports fire-and-forget submit failures", async () => {
     const nodeId = 'services/unsafe-submit-failure:v1:"singleton"' as NodeId;
     const failure = new FrondRuntimeClosed({ operation: "GraphRefreshNode" });
     const failures: Array<{ readonly command: string; readonly cause: unknown }> = [];
-    const unsafe = createUnsafeRuntimeClient(
+    const unsafe = createRuntimeClient(
       {
         getStatusSync: () => "running",
         readNodeSnapshotSync: () =>
@@ -1380,13 +1396,149 @@ describe("runtime client", () => {
         },
       } as never,
       bridgeRunner
-    );
+    ).__unsafe;
 
     expect(unsafe.refresh(nodeId)).toEqual({ _tag: "Scheduled", nodeId });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(failures).toEqual([{ command: "GraphRefreshNode", cause: failure }]);
+  });
+
+  test("__unsafe runs a core-less host's Effect recorder for a rejected submission", async () => {
+    const nodeId = 'services/unsafe-submit-failure:v1:"singleton"' as NodeId;
+    const failure = new FrondRuntimeClosed({ operation: "GraphRefreshNode" });
+    const failures: Array<{ readonly command: string; readonly cause: unknown }> = [];
+    const unsafe = createRuntimeClient(
+      {
+        getStatusSync: () => "running",
+        readNodeSnapshotSync: () =>
+          ({
+            _tag: "Found",
+            snapshot: {
+              _tag: "Ready",
+              node: {},
+              result: "ready",
+              resultValidity: { _tag: "Current" },
+              operation: { _tag: "Idle" },
+              operationFailure: undefined,
+            },
+          }) as never,
+        submit: () => Effect.fail(failure),
+        // The host service's form: the recorder returns an Effect to run.
+        recordUnsafeScheduleFailure: (command: { readonly _tag: string }, cause: unknown) =>
+          Effect.sync(() => {
+            failures.push({ command: command._tag, cause });
+          }),
+      } as never,
+      bridgeRunner
+    ).__unsafe;
+
+    expect(unsafe.refresh(nodeId)).toEqual({ _tag: "Scheduled", nodeId });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(failures).toEqual([{ command: "GraphRefreshNode", cause: failure }]);
+  });
+
+  test("__unsafe on a real runtime records a rejected submission as a runtime event", async () => {
+    const runtime = createRuntime();
+    await runtime.submit({ _tag: "RuntimeStart" });
+    const handle = runtime.client.node(ProfileNode, {});
+    await handle.ensureReady();
+    const failures: Array<string> = [];
+    runtime.observe((record) => {
+      if (record.event._tag === "RuntimeObserverFailureObserved")
+        failures.push(record.event.eventTag);
+    });
+
+    // The stop in the same tick interrupts the scheduled update, so its
+    // submission rejects and the client hands the failure to the host.
+    expect(runtime.client.__unsafe.updateNode(handle.nodeId, () => undefined)._tag).toBe(
+      "Scheduled"
+    );
+    // The failure is recorded before the stop settles.
+    await runtime.submit({ _tag: "RuntimeStop" });
+
+    expect(failures).toEqual(["GraphUnsafeUpdateNode"]);
+  });
+
+  test("__unsafe leaves no diagnostic sink running once the runtime has stopped", async () => {
+    const sink = { started: 0, finalized: 0 };
+    const events: Array<string> = [];
+    const runtime = createRuntime({
+      sinks: [
+        {
+          name: "blocking-diagnostics",
+          handle: (record) =>
+            record.event._tag === "RuntimeObserverFailureObserved"
+              ? Effect.sync(() => {
+                  sink.started += 1;
+                }).pipe(
+                  Effect.andThen(Effect.never),
+                  Effect.ensuring(
+                    Effect.sync(() => {
+                      sink.finalized += 1;
+                    })
+                  )
+                )
+              : Effect.void,
+        },
+      ],
+    });
+    await runtime.submit({ _tag: "RuntimeStart" });
+    const handle = runtime.client.node(ProfileNode, {});
+    await handle.ensureReady();
+    runtime.observe((record) => {
+      events.push(record.event._tag);
+    });
+
+    runtime.client.__unsafe.updateNode(handle.nodeId, () => undefined);
+    await runtime.submit({ _tag: "RuntimeStop" });
+    await runtime.submit({ _tag: "RuntimeStop" });
+
+    // The interrupted update records before the stop sweeps observer work, so
+    // the sweep ends the sink it started.
+    expect(sink).toEqual({ started: 1, finalized: 1 });
+    expect(events.slice(-3)).toEqual([
+      "RuntimeObserverFailureObserved",
+      "GraphSystemStopped",
+      "RuntimeStopped",
+    ]);
+  });
+
+  test("a failure recorded after the stop swept observer work starts no sink", async () => {
+    let started = 0;
+    const runtime = createRuntime({
+      sinks: [
+        {
+          name: "blocking-diagnostics",
+          handle: (record) =>
+            record.event._tag === "RuntimeObserverFailureObserved"
+              ? Effect.sync(() => {
+                  started += 1;
+                }).pipe(Effect.andThen(Effect.never))
+              : Effect.void,
+        },
+      ],
+    });
+    await runtime.submit({ _tag: "RuntimeStart" });
+    await runtime.submit({ _tag: "RuntimeStop" });
+    const core = runtimeCore(runtime);
+    if (core === undefined) throw new Error("Expected a runtime core");
+
+    let recorded: Exit.Exit<void> | undefined;
+    core.recordUnsafeScheduleFailure(
+      { _tag: "GraphRefreshNode" } as RuntimeCommand,
+      new Error("late"),
+      undefined,
+      (exit) => {
+        recorded = exit;
+      }
+    );
+
+    expect(started).toBe(0);
+    expect(recorded !== undefined && Exit.isSuccess(recorded)).toBe(true);
   });
 
   test("handle created from a bare effect-mode descriptor dispatches effect-mode actions", async () => {

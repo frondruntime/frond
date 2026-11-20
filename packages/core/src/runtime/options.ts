@@ -49,10 +49,11 @@ const defaultSignalBufferSize = 128;
 
 export function normalizeRuntimeOptions(options: RuntimeOptions = {}): NormalizedRuntimeConfig {
   const runtimeId = options.runtimeId ?? makeRuntimeId();
+  const syncClock = normalizeRuntimeSyncClock(options.syncClock);
 
   return {
     runtimeId,
-    syncClock: normalizeRuntimeSyncClock(options.syncClock),
+    syncClock,
     inputIngestionEnabled: options.inputIngestionEnabled ?? true,
     eventBus: {
       runtimeId,
@@ -67,7 +68,10 @@ export function normalizeRuntimeOptions(options: RuntimeOptions = {}): Normalize
       }),
       subscribers: [...(options.signalSubscribers ?? [])],
     },
-    graphConfig: normalizeGraphSystemConfigBase(runtimeOwnedGraphOptions(runtimeId, options)),
+    graphConfig: normalizeGraphSystemConfigBase({
+      ...runtimeOwnedGraphOptions(runtimeId, options),
+      syncClock,
+    }),
   };
 }
 

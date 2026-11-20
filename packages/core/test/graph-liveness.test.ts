@@ -1,10 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { Deferred, Fiber } from "effect";
-import type { ActiveNodeLiveDemandSnapshot, NodeId, NodeLiveDemandSnapshot } from "../src/graph";
+import { Cause, Deferred, Exit, Fiber } from "effect";
+import type {
+  ActiveNodeLiveDemandSnapshot,
+  NodeId,
+  NodeLiveDemandSnapshot,
+  NodeLiveLeaseId,
+} from "../src/graph";
+import type { GraphNodeCell, GraphNodeState } from "../src/graph/cell/cellModel";
+import { idleCell } from "../src/graph/cell/cellPhase";
+import { makeGraphCellState } from "../src/graph/cell/cellState";
+import { startAcquireNodeLiveLease } from "../src/graph/liveness";
 import {
   bridgeObservedResultLease,
   makeResultObservedReporter,
 } from "../src/graph/liveness/resultObservationBridge";
+import type { GraphJob } from "../src/graph/queue/jobQueue";
 import type { NodeLiveLeaseHeldResult, NodeLiveLeaseResult } from "../src/graph/types/liveness";
 import {
   type ActionContract,
@@ -106,6 +116,62 @@ describe("graph liveness", () => {
     expect(observedScopes).toEqual(["first", "second"]);
   });
 
+  test("result observation bridge rejects an empty-cause failure with its squashed error", async () => {
+    await expect(
+      bridgeObservedResultLease((resume) => resume(Exit.failCause(Cause.empty)))
+    ).rejects.toThrow("Empty cause");
+  });
+
+  test("a live delivery ends with the cause of a change notice that dies or interrupts itself", () => {
+    // No public observer lets a cause through, so the notice is injected on the cell.
+    const deliver = (notice: Effect.Effect<void>) => {
+      const posted: Array<GraphJob> = [];
+      const exits: Array<Exit.Exit<NodeLiveLeaseResult>> = [];
+      const cell = {
+        nodeId: "node:live-notice-cause" as NodeId,
+        tag: "graph/resources/live-notice-cause",
+        descriptor: { driver: { live: { _tag: "Missing" } } },
+        state: makeGraphCellState<GraphNodeState>({
+          nextOperationId: 0,
+          nextAttemptId: 0,
+          nextLiveGeneration: 0,
+          phase: idleCell({ args: {}, liveLeases: [] }),
+        }),
+        jobs: {
+          post: (job: GraphJob) => posted.push(job),
+          observerFibers: new Set(),
+          hasPendingJobs: () => posted.length > 0,
+        },
+        notifyChanged: () => notice,
+      } as unknown as GraphNodeCell;
+      startAcquireNodeLiveLease(
+        { nextLiveLeaseId: () => "live-lease:1" as NodeLiveLeaseId },
+        { _tag: "Found", cell },
+        { nodeId: cell.nodeId, source: "manual", scope: { pair: "A" } },
+        1_000,
+        undefined,
+        undefined,
+        (exit) => exits.push(exit)
+      );
+      return { posted, exits };
+    };
+    const marker = new Error("change notice died");
+
+    const died = deliver(Effect.die(marker));
+    const interrupted = deliver(Effect.interrupt);
+
+    expect(died.posted).toEqual([]);
+    expect(died.exits).toHaveLength(1);
+    const diedExit = died.exits[0];
+    expect(diedExit?._tag === "Failure" && Cause.squash(diedExit.cause)).toBe(marker);
+    expect(interrupted.posted).toEqual([]);
+    expect(interrupted.exits).toHaveLength(1);
+    const interruptedExit = interrupted.exits[0];
+    expect(
+      interruptedExit?._tag === "Failure" && Cause.hasInterruptsOnly(interruptedExit.cause)
+    ).toBe(true);
+  });
+
   test("result observation bridge treats pure interruption as cancellation", async () => {
     const nodeId = "node:result-observation-interrupt" as NodeId;
     const observedScopes: Array<unknown> = [];
@@ -116,7 +182,7 @@ describe("graph liveness", () => {
           observedScopes.push(scope);
 
           return scope === "first"
-            ? bridgeObservedResultLease(Effect.interrupt)
+            ? bridgeObservedResultLease((resume) => resume(Exit.interrupt()))
             : Promise.resolve({ _tag: "Missing" } as const);
         },
         notifyLiveFailures: (_nodeId, graphFailures) =>

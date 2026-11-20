@@ -16,7 +16,7 @@ export function withRuntimeSpan<A, E, R>(
   name: string,
   attributes: Record<string, unknown>
 ): Effect.Effect<A, E, R> {
-  return effect.pipe(Effect.withSpan(name, { attributes }));
+  return Effect.withSpan(effect, name, { attributes, captureStackTrace: false });
 }
 
 export function runtimeCommandSpanName(command: RuntimeCommand): string {

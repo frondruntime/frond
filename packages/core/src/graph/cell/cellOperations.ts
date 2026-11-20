@@ -1,21 +1,17 @@
-import { Clock, Deferred, Effect } from "effect";
+import { Effect } from "effect";
 import type { RuntimeCancellationReason } from "../../cancellation";
 import { runtimeCancellationDetail } from "../../cancellation";
+import { runEffectEdge } from "../driverExecution/effectRunner";
 import { releaseCell } from "../lifecycle/cleanup";
 import {
-  acquireNodeLiveLease,
-  makeLiveDeliveryInterrupt,
-  releaseNodeLiveLease,
   rollbackNodeLiveLease,
+  startAcquireNodeLiveLease,
+  startReleaseNodeLiveLease,
 } from "../liveness";
-import {
-  refreshInCell,
-  runActionInCell,
-  unsafeUpdateNodeInCell,
-  updateNodeArgsInCell,
-} from "../operations";
+import { runActionInCell, unsafeUpdateNodeInCell, updateNodeArgsInCell } from "../operations";
 import type { GraphOperationEnvironment } from "../operations/dependencies";
-import { ensureReadyCell } from "../readiness";
+import { startRefresh } from "../operations/refreshOperation";
+import { startReadiness } from "../readiness";
 import { completeAttempt } from "../readiness/readinessAttempt";
 import {
   type AcquireNodeLiveLeaseRequest,
@@ -37,18 +33,19 @@ import {
   type UpdateNodeArgsRequest,
   type UpdateNodeArgsResult,
 } from "../types";
-import { type GraphCellOperation, interruptCellOperation } from "./cellActor";
 import type { GraphNodeCell } from "./cellModel";
-import { phaseBase, phaseReadinessAttempt } from "./cellPhase";
+import { type CellReadinessAttempt, phaseBase, phaseReadinessAttempt } from "./cellPhase";
+import type { GraphCellOperation } from "./cellQueue";
 import { failReadinessAttemptState } from "./cellTransitions";
 
 export function ensureReadyOperation(
   env: GraphOperationEnvironment,
-  cell: GraphNodeCell
+  cell: GraphNodeCell,
+  attempt?: CellReadinessAttempt
 ): GraphCellOperation<NodeRead> {
   return {
-    effect: ensureReadyCell(env, cell),
-    interrupt: (reply, reason) => completeEvictedReadiness(cell, reply, reason),
+    start: (context, resume) => startReadiness(env, cell, attempt, context, resume),
+    interrupt: (reason) => completeEvictedReadiness(cell, reason),
   };
 }
 
@@ -58,8 +55,9 @@ export function runActionOperation(
   request: ActionRequest
 ): GraphCellOperation<ActionResult> {
   return {
-    effect: runActionInCell(env, (current) => ensureReadyCell(env, current), cell, request),
-    interrupt: (reply, reason) => completeInterruptedAction(cell, request, reply, reason),
+    start: (context, resume, decided) =>
+      runActionInCell(env, cell, request, context, resume, decided),
+    interrupt: (reason) => completeInterruptedAction(cell, request, reason),
   };
 }
 
@@ -69,8 +67,8 @@ export function refreshOperation(
   request: RefreshRequest
 ): GraphCellOperation<RefreshResult> {
   return {
-    effect: refreshInCell(env, cell, request),
-    interrupt: (reply, reason) => completeInterruptedRefresh(cell, reply, reason),
+    start: (context, resume, decided) => startRefresh(env, cell, request, context, resume, decided),
+    interrupt: (reason) => completeInterruptedRefresh(cell, reason),
   };
 }
 
@@ -80,8 +78,8 @@ export function updateArgsOperation(
   request: UpdateNodeArgsRequest
 ): GraphCellOperation<UpdateNodeArgsResult> {
   return {
-    effect: updateNodeArgsInCell(env, cell, request),
-    interrupt: (reply, reason) => completeInterruptedUpdateArgs(cell, reply, reason),
+    start: (context, resume) => updateNodeArgsInCell(env, cell, request, context, resume),
+    interrupt: (reason) => completeInterruptedUpdateArgs(cell, reason),
   };
 }
 
@@ -90,8 +88,7 @@ export function unsafeUpdateNodeOperation(
   request: UnsafeUpdateNodeRequest
 ): GraphCellOperation<UnsafeUpdateNodeResult> {
   return {
-    effect: unsafeUpdateNodeInCell(cell, request),
-    interrupt: interruptCellOperation,
+    start: (context, resume) => unsafeUpdateNodeInCell(cell, request, context, resume),
   };
 }
 
@@ -100,30 +97,31 @@ export function acquireLiveLeaseOperation(
   cell: GraphNodeCell,
   request: AcquireNodeLiveLeaseRequest
 ): GraphCellOperation<NodeLiveLeaseResult> {
-  const liveInterrupt = makeLiveDeliveryInterrupt();
   let preparedLeaseId: NodeLiveLeaseId | undefined;
 
   return {
-    effect: acquireNodeLiveLease(
-      env.state,
-      { _tag: "Found", cell },
-      request,
-      env.driverTimeouts.live,
-      liveInterrupt,
-      (leaseId) => {
-        preparedLeaseId = leaseId;
-      }
-    ),
-    interrupt: (reply, reason) =>
-      Effect.gen(function* () {
-        liveInterrupt.abort();
-
-        if (preparedLeaseId !== undefined) {
-          yield* rollbackNodeLiveLease(env.state, cell, preparedLeaseId, env.driverTimeouts.live);
-        }
-
-        yield* interruptCellOperation(reply, reason);
-      }),
+    start: (context, resume) =>
+      startAcquireNodeLiveLease(
+        env.state,
+        { _tag: "Found", cell },
+        request,
+        env.driverTimeouts.live,
+        (leaseId) => {
+          preparedLeaseId = leaseId;
+        },
+        context,
+        resume
+      ),
+    // The cancel has already aborted the hook in flight, and its interruption
+    // runs alongside this one; a lease added before the cancel is rolled back
+    // so its demand never sticks.
+    interrupt: () =>
+      preparedLeaseId === undefined
+        ? Effect.interrupt
+        : rollbackNodeLiveLease(env.state, cell, preparedLeaseId, env.driverTimeouts.live).pipe(
+            Effect.andThen(Effect.interrupt)
+          ),
+    interruptsWorkAlongside: true,
   };
 }
 
@@ -132,41 +130,44 @@ export function releaseLiveLeaseOperation(
   cell: GraphNodeCell,
   request: ReleaseNodeLiveLeaseRequest
 ): GraphCellOperation<NodeLiveLeaseResult> {
-  const liveInterrupt = makeLiveDeliveryInterrupt();
-
   return {
-    effect: releaseNodeLiveLease(
-      { _tag: "Found", cell },
-      request,
-      env.driverTimeouts.live,
-      liveInterrupt
-    ),
-    interrupt: (reply, reason) =>
-      Effect.sync(() => {
-        liveInterrupt.abort();
-      }).pipe(Effect.flatMap(() => interruptCellOperation(reply, reason))),
+    start: (context, resume) =>
+      startReleaseNodeLiveLease(
+        { _tag: "Found", cell },
+        request,
+        env.driverTimeouts.live,
+        context,
+        resume
+      ),
+    interruptsWorkAlongside: true,
   };
 }
 
 export function releaseOperation(
   env: GraphOperationEnvironment,
   cell: GraphNodeCell,
-  reason?: string | undefined
+  _reason?: string | undefined
 ): GraphCellOperation<void> {
-  return {
-    effect: releaseCell(cell, env.driverTimeouts.release, env.driverTimeouts.live, {
+  const release = releaseCell(
+    env.state,
+    cell,
+    env.driverTimeouts.release,
+    env.driverTimeouts.live,
+    {
       _tag: "NodeReleased",
-    }).pipe(Effect.asVoid),
-    interrupt: (reply) => interruptCellOperation(reply, { _tag: "Released", detail: reason }),
+    }
+  ).pipe(Effect.asVoid);
+  return {
+    start: (context, resume) => runEffectEdge(release, context, resume),
+    interruptsWorkAlongside: true,
   };
 }
 
 function completeInterruptedAction(
   cell: GraphNodeCell,
   request: ActionRequest,
-  reply: Deferred.Deferred<ActionResult>,
   cancellation: RuntimeCancellationReason | undefined
-): Effect.Effect<void> {
+): Effect.Effect<ActionResult> {
   const eviction = nodeEvicted(cell, cancellation);
   const result = {
     _tag: "Failure",
@@ -182,9 +183,8 @@ function completeInterruptedAction(
 
   return Effect.gen(function* () {
     const current = yield* cell.state.get;
-    const completedAt = yield* Clock.currentTimeMillis;
+    const completedAt = cell.syncClock.now();
 
-    yield* Deferred.succeed(reply, result).pipe(Effect.asVoid);
     yield* cell.notifyActionCompleted({
       nodeId: cell.nodeId,
       operation: currentActionOperation(current.phase),
@@ -193,17 +193,17 @@ function completeInterruptedAction(
       result,
       completedAt,
     });
+    return result;
   });
 }
 
 function completeInterruptedRefresh(
   cell: GraphNodeCell,
-  reply: Deferred.Deferred<RefreshResult>,
   cancellation: RuntimeCancellationReason | undefined
-): Effect.Effect<void> {
+): Effect.Effect<RefreshResult> {
   const eviction = nodeEvicted(cell, cancellation);
 
-  return Deferred.succeed(reply, {
+  return Effect.succeed({
     _tag: "Failure",
     nodeId: cell.nodeId,
     error: new RefreshFailed({
@@ -211,17 +211,16 @@ function completeInterruptedRefresh(
       tag: cell.tag,
       cause: eviction,
     }),
-  }).pipe(Effect.asVoid);
+  });
 }
 
 function completeInterruptedUpdateArgs(
   cell: GraphNodeCell,
-  reply: Deferred.Deferred<UpdateNodeArgsResult>,
   cancellation: RuntimeCancellationReason | undefined
-): Effect.Effect<void> {
+): Effect.Effect<UpdateNodeArgsResult> {
   const eviction = nodeEvicted(cell, cancellation);
 
-  return Deferred.succeed(reply, {
+  return Effect.succeed({
     _tag: "Failure",
     nodeId: cell.nodeId,
     error: new UpdateNodeArgsFailed({
@@ -229,14 +228,13 @@ function completeInterruptedUpdateArgs(
       tag: cell.tag,
       cause: eviction,
     }),
-  }).pipe(Effect.asVoid);
+  });
 }
 
 function completeEvictedReadiness(
   cell: GraphNodeCell,
-  reply: Deferred.Deferred<NodeRead>,
   cancellation: RuntimeCancellationReason | undefined
-): Effect.Effect<void> {
+): Effect.Effect<NodeRead> {
   return Effect.gen(function* () {
     const error = nodeEvicted(cell, cancellation);
     const status = { _tag: "Wired", run: { _tag: "Error", error } } as const;
@@ -261,15 +259,14 @@ function completeEvictedReadiness(
           } satisfies NodeRead);
     const attemptLookup = phaseReadinessAttempt(current.phase);
 
-    if (attemptLookup._tag === "Found") {
-      yield* completeAttempt(attemptLookup.attempt, handle);
-    }
-
     yield* cell.state.transition((latest) => [
       undefined,
       failReadinessAttemptState({ latest, cause: error }),
     ]);
-    yield* Deferred.succeed(reply, handle).pipe(Effect.asVoid);
+    if (attemptLookup._tag === "Found") {
+      yield* completeAttempt(attemptLookup.attempt, handle);
+    }
+    return handle;
   });
 }
 

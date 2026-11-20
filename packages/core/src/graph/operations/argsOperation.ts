@@ -1,15 +1,10 @@
-import { Effect } from "effect";
+import { type Context, Exit } from "effect";
 import type { GraphNodeCell } from "../cell/cellModel";
-import {
-  mapPhaseBase,
-  mapPhaseReady,
-  phaseArgs,
-  phaseReadyData,
-  projectCellPhase,
-} from "../cell/cellPhase";
+import { phaseArgs, phaseBase, phaseReadyData, projectCellPhase } from "../cell/cellPhase";
 import { resolveStaticDependencyIds } from "../planning/dependencyDefinitions";
 import { type GraphOutcome, graphFailure, graphSuccess } from "../planning/outcome";
 import { updateReadyNodeRuntimeState } from "../planning/readyNodeRuntime";
+import { type GraphCancel, type GraphResume, noCancel } from "../queue/reply";
 import {
   GraphInvariantViolation,
   type UpdateNodeArgsRequest,
@@ -17,104 +12,84 @@ import {
 } from "../types";
 import type { GraphOperationEnvironment } from "./dependencies";
 import { makeUpdateArgsFailure } from "./operationFailures";
-import { runBackgroundOperation } from "./operationState";
-import { runRefreshDriver } from "./refreshOperation";
+import { startBackgroundOperation } from "./operationState";
+import { startRefreshDriver } from "./refreshOperation";
 
 export function updateNodeArgsInCell(
   env: GraphOperationEnvironment,
   cell: GraphNodeCell,
-  request: UpdateNodeArgsRequest
-): Effect.Effect<UpdateNodeArgsResult> {
-  return runBackgroundOperation(cell, "args", () => reconcileNodeArgs(env, cell, request));
+  request: UpdateNodeArgsRequest,
+  context: Context.Context<never> | undefined,
+  resume: GraphResume<UpdateNodeArgsResult>
+): GraphCancel {
+  const sameDependencies = validateStaticDependencies(env, cell, request.args);
+  const phase = cell.state.getSync().phase;
+  const projection = projectCellPhase(phase);
+  const failure =
+    sameDependencies._tag === "Failure"
+      ? sameDependencies.failure
+      : projection._tag === "Removed"
+        ? { _tag: "Unwired" }
+        : projection.status._tag !== "Wired"
+          ? projection.status
+          : undefined;
+  if (failure !== undefined)
+    return startBackgroundOperation(
+      cell,
+      "args",
+      (_operation, done) => {
+        done(Exit.succeed(makeUpdateArgsFailure(cell, request, failure)));
+        return noCancel;
+      },
+      context,
+      resume
+    );
+  const ready = phaseReadyData(phase);
+  const previousArgs = phaseArgs(phase);
+  setArgs(cell, request.args);
+  const shouldRefresh =
+    ready._tag === "Found" && cell.descriptor.driver.refresh._tag === "Available";
+  return startBackgroundOperation(
+    cell,
+    "args",
+    (_operation, done) => {
+      if (!shouldRefresh) {
+        done(Exit.succeed({ _tag: "Success", nodeId: cell.nodeId, shouldRefresh }));
+        return noCancel;
+      }
+      return startRefreshDriver(
+        env,
+        cell,
+        { target: { _tag: "NodeId", nodeId: cell.nodeId } },
+        context,
+        (exit) => {
+          if (exit._tag === "Failure") {
+            done(Exit.failCause(exit.cause));
+            return;
+          }
+          if (exit.value._tag === "Failure") {
+            setArgs(cell, previousArgs);
+            done(Exit.succeed(makeUpdateArgsFailure(cell, request, exit.value.error)));
+          } else done(Exit.succeed({ _tag: "Success", nodeId: cell.nodeId, shouldRefresh }));
+        }
+      );
+    },
+    context,
+    resume
+  );
 }
 
-function reconcileNodeArgs(
-  env: GraphOperationEnvironment,
-  cell: GraphNodeCell,
-  request: UpdateNodeArgsRequest
-): Effect.Effect<UpdateNodeArgsResult> {
-  return Effect.gen(function* () {
-    const sameDependencies = validateStaticDependencies(env, cell, request.args);
-
-    if (sameDependencies._tag === "Failure") {
-      return makeUpdateArgsFailure(cell, request, sameDependencies.failure);
+function setArgs(cell: GraphNodeCell, args: unknown): void {
+  cell.state.updateSync((latest) => {
+    const ready = phaseReadyData(latest.phase);
+    if (ready._tag === "Found") ready.ready.args = args;
+    else {
+      const base = phaseBase(latest.phase);
+      if (base._tag === "Found") base.base.args = args;
     }
-
-    const current = yield* cell.state.get;
-    const projection = projectCellPhase(current.phase);
-
-    if (projection._tag === "Removed" || projection.status._tag !== "Wired") {
-      return makeUpdateArgsFailure(
-        cell,
-        request,
-        projection._tag === "Removed" ? { _tag: "Unwired" } : projection.status
-      );
-    }
-
-    const currentReady = phaseReadyData(current.phase);
-
-    if (currentReady._tag === "Found") {
-      updateReadyNodeRuntimeState({ node: currentReady.ready.node, args: request.args });
-    }
-
-    yield* cell.state.transition((latest) => [
-      undefined,
-      {
-        ...latest,
-        phase: mapPhaseBase(latest.phase, (base) => ({ ...base, args: request.args })),
-      },
-    ]);
-
-    const { refresh } = cell.descriptor.driver;
-    const shouldRefresh = projection.status.run._tag === "Ready" && refresh._tag === "Available";
-
-    if (shouldRefresh) {
-      const previousReady = phaseReadyData(current.phase);
-      const refreshResult = yield* runRefreshDriver(env, cell, {
-        target: {
-          _tag: "NodeId",
-          nodeId: cell.nodeId,
-        },
-      });
-
-      if (refreshResult._tag === "Failure") {
-        const previousArgs = phaseArgs(current.phase);
-
-        if (previousReady._tag === "Found") {
-          updateReadyNodeRuntimeState({
-            node: previousReady.ready.node,
-            args: previousArgs,
-            result: previousReady.ready.result,
-          });
-        }
-        yield* cell.state.transition((latest) => [
-          undefined,
-          {
-            ...latest,
-            phase:
-              previousReady._tag === "Missing"
-                ? mapPhaseBase(latest.phase, (base) => ({ ...base, args: previousArgs }))
-                : mapPhaseReady(
-                    mapPhaseBase(latest.phase, (base) => ({ ...base, args: previousArgs })),
-                    (readyData) => ({
-                      ...readyData,
-                      result: previousReady.ready.result,
-                      resultValidity: previousReady.ready.resultValidity,
-                      resultLoadedAt: previousReady.ready.resultLoadedAt,
-                    })
-                  ),
-          },
-        ]);
-        return makeUpdateArgsFailure(cell, request, refreshResult.error);
-      }
-    }
-
-    return {
-      _tag: "Success",
-      nodeId: cell.nodeId,
-      shouldRefresh,
-    } satisfies UpdateNodeArgsResult;
   });
+  const ready = phaseReadyData(cell.state.getSync().phase);
+  if (ready._tag === "Found") updateReadyNodeRuntimeState({ node: ready.ready.node, args });
 }
 
 function validateStaticDependencies(

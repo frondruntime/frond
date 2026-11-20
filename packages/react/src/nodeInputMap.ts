@@ -1,5 +1,5 @@
 import type * as Frond from "@frondruntime/core";
-import { getReactArgsFingerprint } from "./argsFingerprint";
+import { getReactArgsFingerprint, validatedNodeIdResolver } from "./argsFingerprint";
 import { FrondReactUsageError } from "./errors";
 import type { ReactNodeInputMap, ReactNodeRuntime } from "./types";
 
@@ -28,10 +28,12 @@ export function prepareReactNodeMap(input: {
 }): PreparedReactNodeMap {
   const entries: Array<PreparedReactNodeMapEntry> = [];
   const keys = Object.keys(input.map).sort();
-  const identityParts: Array<string> = [];
-  const argsIdentityParts: Array<string> = [];
+  let identity = "";
+  let argsIdentity = "";
+  const resolveValidated = validatedNodeIdResolver(input.runtime);
 
-  for (const key of keys) {
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index] as string;
     const entry = input.map[key];
 
     if (entry === undefined) {
@@ -42,8 +44,15 @@ export function prepareReactNodeMap(input: {
     }
 
     const [spec, args] = entry;
-    const nodeId = input.runtime.resolveNodeIdSync({ spec, args });
-    const argsFingerprint = getReactArgsFingerprint(args);
+    // One canonicalization per entry on a runtime from `createRuntime`: the
+    // fingerprint validates args, then resolution skips its own pass.
+    const validatedFingerprint =
+      resolveValidated === undefined ? undefined : getReactArgsFingerprint(args);
+    const nodeId =
+      resolveValidated === undefined
+        ? input.runtime.resolveNodeIdSync({ spec, args })
+        : resolveValidated({ spec, args });
+    const argsFingerprint = validatedFingerprint ?? getReactArgsFingerprint(args);
     const preparedEntry = {
       key,
       spec,
@@ -53,15 +62,16 @@ export function prepareReactNodeMap(input: {
     };
 
     entries.push(preparedEntry);
-    identityParts.push(`${key}:${nodeId}`);
-    argsIdentityParts.push(`${key}:${nodeId}:${argsFingerprint}`);
+    const separator = index === 0 ? "" : "|";
+    identity += `${separator}${key}:${nodeId}`;
+    argsIdentity += `${separator}${key}:${nodeId}:${argsFingerprint}`;
   }
 
   return {
     entries,
     keys,
-    identity: identityParts.join("|"),
-    argsIdentity: argsIdentityParts.join("|"),
+    identity,
+    argsIdentity,
   };
 }
 
@@ -92,5 +102,11 @@ function sameKeys(left: ReadonlyArray<string>, right: ReadonlyArray<string>): bo
     return false;
   }
 
-  return left.every((entry, index) => entry === right[index]);
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+
+  return true;
 }

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { getReactArgsFingerprint } from "../src/argsFingerprint";
+import { createRuntime } from "@frondruntime/core";
+import { getReactArgsFingerprint, validatedNodeIdResolver } from "../src/argsFingerprint";
 
 describe("React args fingerprint", () => {
   test("uses canonical keys and rejects opaque args", () => {
@@ -18,5 +19,17 @@ describe("React args fingerprint", () => {
     const second = { page: 1, payload: "x".repeat(3_000) };
 
     expect(getReactArgsFingerprint(first)).toBe(getReactArgsFingerprint(second));
+  });
+});
+
+describe("validatedNodeIdResolver", () => {
+  test("a runtime from createRuntime exposes its validated resolver", () => {
+    expect(validatedNodeIdResolver(createRuntime())).toBeFunction();
+  });
+
+  test("a Proxy over a runtime falls back to its public resolver", () => {
+    const runtime = createRuntime();
+
+    expect(validatedNodeIdResolver(new Proxy(runtime, {}))).toBeUndefined();
   });
 });

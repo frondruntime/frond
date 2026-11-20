@@ -1,7 +1,11 @@
 import { Cause, Effect, Exit } from "effect";
+import { corePromise } from "../../runtime/promiseFacade";
 import { canonicalKey } from "../planning/canonicalKey";
+import { type GraphResume, noCancel } from "../queue/reply";
 import type { GraphFailure, NodeId, NodeLiveScopeKey, ObservedResultLease } from "../types";
 import { GraphInvariantViolation } from "../types";
+
+const missingObservedLease: ObservedResultLease = { _tag: "Missing" };
 
 type ResultObservedReporterState = {
   readonly reportResultObserved: (
@@ -22,21 +26,20 @@ type ResultObservedReporterNode = {
 };
 
 export function bridgeObservedResultLease(
-  effect: Effect.Effect<ObservedResultLease>
+  start: (resume: GraphResume<ObservedResultLease>) => void
 ): Promise<ObservedResultLease> {
   // Boundary: MobX/node observation callbacks are synchronous, while graph live
-  // lease acquisition is Effect-native. This named bridge keeps that escape
-  // local to result observation.
-  return Effect.runPromiseExit(effect).then((exit) => {
-    if (Exit.isSuccess(exit)) {
-      return exit.value;
-    }
-
-    if (Cause.hasInterruptsOnly(exit.cause)) {
-      return { _tag: "Missing" } as const;
-    }
-
-    throw Cause.squash(exit.cause);
+  // lease acquisition settles through the job queue. This named bridge keeps
+  // that escape local to result observation. An interrupted lease call reads
+  // as Missing; any other failure rejects with its squashed value, an empty
+  // cause included.
+  return corePromise<ObservedResultLease, never>((resume) => {
+    start((exit) => {
+      if (Exit.isSuccess(exit)) resume(exit);
+      else if (Cause.hasInterruptsOnly(exit.cause)) resume(Exit.succeed(missingObservedLease));
+      else resume(Exit.die(Cause.squash(exit.cause)));
+    });
+    return noCancel;
   });
 }
 

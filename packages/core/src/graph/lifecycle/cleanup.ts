@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import type { GraphNodeCell, GraphNodeState } from "../cell/cellModel";
+import type { GraphNodeCell, GraphNodeState, GraphPlanState } from "../cell/cellModel";
 import { phaseReadyData, type ReadyData } from "../cell/cellPhase";
 import { completeReleaseState } from "../cell/cellTransitions";
 import { makeDisposeContext } from "../driverExecution/driverContext";
@@ -60,6 +60,7 @@ export function teardownReadyData(
 }
 
 export function releaseCell(
+  state: GraphPlanState,
   cell: GraphNodeCell,
   timeout: DriverOperationTimeoutMs,
   liveTimeout: DriverOperationTimeoutMs,
@@ -77,7 +78,16 @@ export function releaseCell(
             liveStopReason
           )
         : [];
+    // Read before the release: `completeReleaseState` rewrites `current.phase`
+    // in place.
+    const releasesInvalid = current.phase._tag === "Invalid";
     yield* cell.state.replace(releasedGraphNodeState(current, cleanupFailures));
+    // Release takes an Invalid cell back to Idle. Planning never stamps a
+    // closure that holds an Invalid cell, so no stamp should cover this one;
+    // the bump keeps that true even if one did.
+    if (releasesInvalid) {
+      state.wiringGeneration += 1;
+    }
     return cleanupFailures;
   });
 }

@@ -1,17 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { Context, Fiber, Tracer } from "effect";
+import { Context, Exit, Fiber, Tracer } from "effect";
 import {
   createErrorReport,
   createRuntimeEventReports,
   createRuntimeReportSink,
 } from "../src/diagnostics";
 import type { NodeId } from "../src/graph";
+import { noCancel } from "../src/graph/queue/reply";
 import { FrondRuntimeClosed, FrondRuntimeInvariantViolation, type RuntimeId } from "../src/runtime";
 import { bridgeRuntimeHost } from "../src/runtime/bridge";
 import { runRuntimeGraphCommand } from "../src/runtime/graphCommands";
 import { makeRuntimeHost } from "../src/runtime/host";
 import { FrondRuntimeLive } from "../src/runtime/live";
 import { makeRuntimeOperationStartRegistry } from "../src/runtime/operationStarts";
+import { corePromise } from "../src/runtime/promiseFacade";
 import { FrondRuntime } from "../src/runtime/types";
 import { waitForRuntimeEvent, waitForRuntimeNodeRead } from "../src/testing";
 import {
@@ -333,7 +335,7 @@ describe("runtime events", () => {
     ).toBe(true);
   });
 
-  test("runtime bridge maps host Effect methods through the supplied runner", async () => {
+  test("runtime bridge bypasses the Effect runner for registered core methods", async () => {
     const calls: Array<"run" | "runSync"> = [];
     const host = await Effect.runPromise(
       makeRuntimeHost({ runtimeId: "bridge-runtime" as RuntimeId })
@@ -355,7 +357,13 @@ describe("runtime events", () => {
     await runtime.getSnapshot();
     subscription.unsubscribe();
 
-    expect(calls).toEqual(["runSync", "run", "runSync", "run"]);
+    expect(calls).toEqual([]);
+
+    // A spread drops the host's core, and the bridge has no Effect fallback.
+    expect(() => bridgeRuntimeHost({ ...host })).toThrow(
+      "bridgeRuntimeHost requires a host built by makeRuntimeHost."
+    );
+    expect(calls).toEqual([]);
   });
 
   test("FrondRuntimeLive scoped finalizer stops the runtime and runs graph cleanup", async () => {
@@ -1112,22 +1120,29 @@ describe("runtime events", () => {
       priority: "background",
     } as const;
 
+    const graphSystem = {} as import("../src/graph").GraphSystemService;
+    const graphCore = {
+      submitRefreshNode: (_request, _context, resume) => {
+        resume(Exit.die(new Error("refresh submit failed")));
+        return noCancel;
+      },
+    } as import("../src/graph/system/core").GraphSystemCore;
     await expect(
-      Effect.runPromise(
-        runRuntimeGraphCommand({
-          command: {
-            _tag: "GraphRefreshNode",
-            request: { target: { _tag: "NodeId", nodeId } },
+      corePromise((resume) =>
+        runRuntimeGraphCommand(
+          {
+            command: { _tag: "GraphRefreshNode", request: { target: { _tag: "NodeId", nodeId } } },
+            graphSystem,
+            graphCore,
+            syncClock: { now: () => 0 },
+            work: submittedWork,
+            emit: () => Effect.void,
+            syncProjectionContext: () => ({ now: 0 }),
+            operationStarts,
           },
-          graphSystem: {
-            submitRefreshNode: () => Effect.fail(new Error("refresh submit failed")),
-          } as never,
-          runtimeId,
-          work: submittedWork,
-          emit: () => Effect.void,
-          syncProjectionContext: () => ({ now: 0 }),
-          operationStarts,
-        })
+          undefined,
+          resume
+        )
       )
     ).rejects.toThrow("refresh submit failed");
 

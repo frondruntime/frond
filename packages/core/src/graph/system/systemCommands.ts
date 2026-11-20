@@ -1,19 +1,18 @@
-import { Clock, Deferred, Effect, Match, Semaphore } from "effect";
+import { type Context, type Effect, Exit } from "effect";
 import type { ActionAdmission } from "../../driver";
 import { canonicalKey } from "../../keys";
-import type { GraphCellActorRegistry } from "../cell/actorRegistry";
-import type { GraphCellTask } from "../cell/cellActor";
-import { type GraphNodeCellLookup, lookupGraphNodeCell } from "../cell/cellLookup";
+import { lookupGraphNodeCell } from "../cell/cellLookup";
 import type { GraphNodeCell, GraphPlanState } from "../cell/cellModel";
 import {
-  ensureReadyOperation,
   refreshOperation,
   releaseOperation,
   runActionOperation,
   unsafeUpdateNodeOperation,
   updateArgsOperation,
 } from "../cell/cellOperations";
-import { submitToCellActor } from "../cell/cellSubmission";
+import type { GraphCellTask } from "../cell/cellQueue";
+import type { GraphCellQueueRegistry } from "../cell/queueRegistry";
+import { finishObserverWork } from "../driverExecution/effectRunner";
 import type { GraphOperationEnvironment } from "../operations/dependencies";
 import {
   makeActionFailure,
@@ -22,23 +21,43 @@ import {
   makeMissingUnsafeUpdateNodeFailure,
 } from "../operations/operationFailures";
 import { resolveEffectiveNodeId } from "../planning/identity";
-import { ensurePlannedNode } from "../planning/plan";
+import { ensurePlannedNodeSync } from "../planning/plan";
+import { type GraphGate, planTask } from "../queue/graphGate";
+import {
+  type CoreCall,
+  callbackEffect,
+  completedTask,
+  type GraphCancel,
+  GraphReply,
+  type GraphResume,
+  noCancel,
+} from "../queue/reply";
+import { submitReadiness } from "../readiness/submission";
 import {
   type ActionRequest,
   type ActionResult,
   GraphInvariantViolation,
   type GraphSystemService,
   type NodeId,
-  type NodeRead,
   type RefreshRequest,
-  type RefreshSubmission,
-  type UnsafeUpdateNodeRequest,
-  type UpdateNodeArgsRequest,
 } from "../types";
 import { registerAdmittedTask } from "./admissionRegistration";
-import type { RefreshAdmissionController } from "./refreshAdmission";
+import type { CoreRefreshSubmission, RefreshAdmissionController } from "./refreshAdmission";
+
+export type GraphCommandsCore = {
+  readonly [K in Exclude<keyof GraphSystemCommands, "core" | "submitRefreshDirect">]: CoreCall<
+    GraphSystemCommands[K]
+  >;
+};
 
 export interface GraphSystemCommands {
+  readonly core: GraphCommandsCore;
+  /** `core.submitRefreshNode`, typed with the callback task it submits. */
+  readonly submitRefreshDirect: (
+    request: RefreshRequest,
+    context: Context.Context<never> | undefined,
+    resume: GraphResume<CoreRefreshSubmission>
+  ) => GraphCancel;
   readonly ensureReadyNode: GraphSystemService["ensureReadyNode"];
   readonly runAction: GraphSystemService["runAction"];
   readonly submitRefreshNode: GraphSystemService["submitRefreshNode"];
@@ -55,364 +74,232 @@ export interface GraphSystemCommands {
 
 export function makeGraphSystemCommands(options: {
   readonly state: GraphPlanState;
-  readonly planningSemaphore: ReturnType<typeof Semaphore.makeUnsafe>;
-  readonly actorRegistry: GraphCellActorRegistry;
+  readonly gate: GraphGate;
+  readonly queueRegistry: GraphCellQueueRegistry;
   readonly graphEnv: GraphOperationEnvironment;
   readonly refreshAdmission: RefreshAdmissionController;
 }): GraphSystemCommands {
   const activeActionAdmissions = new Map<string, GraphCellTask<ActionResult>>();
+  const { state, gate, queueRegistry, graphEnv } = options;
+  const resolveTarget = (target: ActionRequest["target"]) =>
+    lookupGraphNodeCell(
+      state,
+      target._tag === "NodeRequest"
+        ? ensurePlannedNodeSync(state, target.request).nodeId
+        : target.nodeId
+    );
 
-  function runAction(request: ActionRequest) {
-    return Effect.gen(function* () {
-      const submission = yield* submitToTargetCell(request.target, (cell) =>
-        submitActionWithAdmission(cell, request)
-      );
-
-      return yield* Match.value(submission).pipe(
-        Match.tag("Submitted", ({ task }) => task.await),
-        Match.tag("Missing", ({ nodeId }) =>
-          Effect.gen(function* () {
-            const result = makeMissingNodeActionFailure(nodeId, request);
-            const completedAt = yield* Clock.currentTimeMillis;
-            yield* options.graphEnv.state.notifyActionCompleted({
-              nodeId,
-              action: request.action,
-              input: request.input,
-              result,
-              completedAt,
-            });
-            return result;
-          })
-        ),
-        Match.exhaustive
-      );
-    });
-  }
-
-  function submitActionWithAdmission(
-    cell: GraphNodeCell,
-    request: ActionRequest
-  ): Effect.Effect<GraphCellTask<ActionResult>> {
-    return Effect.gen(function* () {
-      const action = cell.descriptor.driver.actions.read(request.action);
-
-      if (action._tag === "Missing" || action.admission.policy === "queue") {
-        // Queue actions each own their actor task (one awaiter), so awaiter
-        // interruption can safely abort the in-flight action.
-        return yield* options.actorRegistry.submit(
-          cell,
-          runActionOperation(options.graphEnv, cell, request),
-          { interruptible: true }
-        );
-      }
-
-      const admissionKey = readActionAdmissionKey(cell, request, action.admission);
-
-      if (admissionKey._tag === "Failure") {
-        return yield* immediateActionTaskWithCompletion(
-          cell,
-          request,
-          makeActionFailure(cell, request, admissionKey.cause)
-        );
-      }
-
-      const active = activeActionAdmissions.get(admissionKey.key);
-
-      if (active !== undefined) {
-        if (action.admission.policy === "join") {
-          return active;
-        }
-
-        return yield* immediateActionTaskWithCompletion(
-          cell,
-          request,
-          makeActionFailure(
-            cell,
-            request,
-            new GraphInvariantViolation({
-              nodeId: cell.nodeId,
-              tag: cell.tag,
-              invariant: "action admission rejected a concurrent request",
-              cause: { action: request.action },
-            })
-          )
-        );
-      }
-
-      // Reject actions have a single awaiter (concurrent requests are rejected
-      // above), so they may be interrupted. Join actions are shared across
-      // awaiters and must not be — one joiner leaving cannot abort the rest.
-      return yield* registerAdmittedTask({
-        active: activeActionAdmissions,
-        key: admissionKey.key,
-        start: (onComplete) =>
-          options.actorRegistry.submit(cell, runActionOperation(options.graphEnv, cell, request), {
-            onComplete,
-            interruptible: action.admission.policy === "reject",
-          }),
-      });
-    });
-  }
-
-  function immediateActionTaskWithCompletion(
-    cell: GraphNodeCell,
+  const completedAction = (
+    nodeId: NodeId,
     request: ActionRequest,
     result: ActionResult
-  ): Effect.Effect<GraphCellTask<ActionResult>> {
-    return Effect.gen(function* () {
-      const reply = yield* Deferred.make<ActionResult>();
-      const completedAt = yield* Clock.currentTimeMillis;
-      yield* options.graphEnv.state.notifyActionCompleted({
-        nodeId: cell.nodeId,
+  ): GraphCellTask<ActionResult> => {
+    const reply = new GraphReply<ActionResult>();
+    finishObserverWork(
+      state.notifyActionCompleted({
+        nodeId,
         action: request.action,
         input: request.input,
         result,
-        completedAt,
-      });
-      yield* Deferred.succeed(reply, result).pipe(Effect.asVoid);
-      return { await: Deferred.await(reply) };
-    });
-  }
-
-  function ensureReadyNode(request: Parameters<GraphSystemService["ensureReadyNode"]>[0]) {
-    return Effect.gen(function* () {
-      const submission = yield* Semaphore.withPermit(
-        options.planningSemaphore,
-        Effect.gen(function* () {
-          const handle = yield* ensurePlannedNode(options.state, request);
-          return yield* Match.value(lookupGraphNodeCell(options.state, handle.nodeId)).pipe(
-            Match.tag("Missing", () => Effect.succeed({ _tag: "Missing", handle } as const)),
-            Match.tag("Found", ({ cell }) =>
-              Effect.gen(function* () {
-                const task = yield* options.actorRegistry.submit(
-                  cell,
-                  ensureReadyOperation(options.graphEnv, cell)
-                );
-                return { _tag: "Submitted", task } as const;
-              })
-            ),
-            Match.exhaustive
-          );
-        })
-      );
-
-      return yield* Match.value(submission).pipe(
-        Match.tag("Submitted", ({ task }) => task.await),
-        Match.tag("Missing", ({ handle }) => Effect.succeed(handle)),
-        Match.exhaustive
-      );
-    });
-  }
-
-  function refreshNode(request: RefreshRequest) {
-    return Effect.gen(function* () {
-      const submission = yield* submitRefreshNode(request);
-
-      return yield* Match.value(submission).pipe(
-        Match.tag("Started", ({ task }) => task.await),
-        Match.tag("Joined", ({ task }) => task.await),
-        Match.tag("Missing", ({ result }) => Effect.succeed(result)),
-        Match.exhaustive
-      );
-    });
-  }
-
-  function submitRefreshNode(request: RefreshRequest): Effect.Effect<RefreshSubmission> {
-    return Semaphore.withPermit(
-      options.planningSemaphore,
-      Effect.gen(function* () {
-        const lookup = yield* resolveTargetCellWithinPermit(request.target);
-
-        return yield* options.refreshAdmission.submit({
-          request,
-          cellLookup: lookup,
-          start: (cell, onComplete) =>
-            options.actorRegistry.submit(cell, refreshOperation(options.graphEnv, cell, request), {
-              onComplete,
-            }),
-        });
-      })
+        completedAt: state.syncClock.now(),
+      }),
+      undefined,
+      () => reply.settle(Exit.succeed(result)),
+      state.jobs
     );
+    return reply;
+  };
+
+  function submitAction(
+    cell: GraphNodeCell,
+    request: ActionRequest,
+    context: Context.Context<never> | undefined
+  ): GraphCellTask<ActionResult> {
+    const action = cell.descriptor.driver.actions.read(request.action);
+    if (action._tag === "Missing" || action.admission.policy === "queue")
+      return queueRegistry.submitSync(cell, runActionOperation(graphEnv, cell, request), context, {
+        interruptible: true,
+      });
+    const key = readActionAdmissionKey(cell, request, action.admission);
+    if (key._tag === "Failure")
+      return completedAction(cell.nodeId, request, makeActionFailure(cell, request, key.cause));
+    const active = activeActionAdmissions.get(key.key);
+    if (active !== undefined) {
+      if (action.admission.policy === "join") return active;
+      return completedAction(
+        cell.nodeId,
+        request,
+        makeActionFailure(
+          cell,
+          request,
+          new GraphInvariantViolation({
+            nodeId: cell.nodeId,
+            tag: cell.tag,
+            invariant: "action admission rejected a concurrent request",
+            cause: { action: request.action },
+          })
+        )
+      );
+    }
+    return registerAdmittedTask({
+      active: activeActionAdmissions,
+      key: key.key,
+      start: (onComplete) =>
+        queueRegistry.submitSync(cell, runActionOperation(graphEnv, cell, request), context, {
+          onComplete,
+          // A join call never joins a decided operation no caller is attached to.
+          onDecided: action.admission.policy === "join" ? onComplete : undefined,
+          interruptible: action.admission.policy === "reject",
+        }),
+    });
   }
 
-  function updateNodeArgs(request: UpdateNodeArgsRequest) {
-    return Effect.gen(function* () {
-      const submission = yield* Semaphore.withPermit(
-        options.planningSemaphore,
-        Effect.gen(function* () {
-          const nextNodeId = resolveEffectiveNodeId(options.state, {
+  const core: GraphCommandsCore = {
+    runAction: (request, context, resume) =>
+      planTask(
+        gate,
+        (context) => {
+          const lookup = resolveTarget(request.target);
+          return lookup._tag === "Missing"
+            ? completedAction(
+                lookup.nodeId,
+                request,
+                makeMissingNodeActionFailure(lookup.nodeId, request)
+              )
+            : submitAction(lookup.cell, request, context);
+        },
+        context,
+        resume
+      ),
+    ensureReadyNode: (request, context, resume) =>
+      planTask(
+        gate,
+        (context) => {
+          const handle = ensurePlannedNodeSync(state, request);
+          const cell = state.nodes.get(handle.nodeId);
+          return cell === undefined
+            ? completedTask(handle)
+            : submitReadiness(queueRegistry, graphEnv, cell, context);
+        },
+        context,
+        resume,
+        true
+      ),
+    submitRefreshNode: submitRefreshDirect,
+    refreshNode: (request, context, resume) =>
+      planTask(
+        gate,
+        (context) => {
+          const submission = planRefresh(request, context);
+          return submission._tag === "Missing" ? completedTask(submission.result) : submission.task;
+        },
+        context,
+        resume
+      ),
+    updateNodeArgs: (request, context, resume) => {
+      let submitted = false;
+      const cancel = planTask(
+        gate,
+        (context) => {
+          const nextNodeId = resolveEffectiveNodeId(state, {
             spec: request.spec,
             args: request.args,
           });
-
-          if (nextNodeId !== request.nodeId) {
-            return {
-              _tag: "Missing",
-              nodeId: request.nodeId,
-              cause: `same-identity args update resolved ${nextNodeId}`,
-            } as const;
-          }
-
-          return yield* Match.value(lookupGraphNodeCell(options.state, request.nodeId)).pipe(
-            Match.tag("Missing", ({ nodeId }) =>
-              Effect.succeed({ _tag: "Missing", nodeId } as const)
-            ),
-            Match.tag("Found", ({ cell }) =>
-              Effect.gen(function* () {
-                const task = yield* options.actorRegistry.submit(
-                  cell,
-                  updateArgsOperation(options.graphEnv, cell, request)
-                );
-                return { _tag: "Submitted", task } as const;
-              })
-            ),
-            Match.exhaustive
+          if (nextNodeId !== request.nodeId)
+            return completedTask(
+              makeMissingNodeUpdateArgsFailure(
+                request.nodeId,
+                request,
+                `same-identity args update resolved ${nextNodeId}`
+              )
+            );
+          const cell = state.nodes.get(request.nodeId);
+          if (cell === undefined)
+            return completedTask(makeMissingNodeUpdateArgsFailure(request.nodeId, request));
+          submitted = true;
+          return queueRegistry.submitSync(
+            cell,
+            updateArgsOperation(graphEnv, cell, request),
+            context
           );
-        })
-      );
-
-      return yield* Match.value(submission).pipe(
-        Match.tag("Submitted", ({ task }) => task.await),
-        Match.tag("Missing", (missing) =>
-          Effect.succeed(
-            makeMissingNodeUpdateArgsFailure(
-              missing.nodeId,
-              request,
-              "cause" in missing ? missing.cause : undefined
-            )
-          )
-        ),
-        Match.exhaustive
-      );
-    });
-  }
-
-  function unsafeUpdateNode(request: UnsafeUpdateNodeRequest) {
-    return Effect.gen(function* () {
-      const submission = yield* submitToCellActor(
-        {
-          state: options.state,
-          planningSemaphore: options.planningSemaphore,
-          submit: options.actorRegistry.submit,
         },
-        request.nodeId,
-        (cell) => unsafeUpdateNodeOperation(cell, request)
+        context,
+        resume
       );
-
-      return yield* Match.value(submission).pipe(
-        Match.tag("Submitted", ({ task }) => task.await),
-        Match.tag("Missing", ({ nodeId }) =>
-          Effect.succeed(makeMissingUnsafeUpdateNodeFailure(nodeId, request))
-        ),
-        Match.exhaustive
-      );
+      // A submitted update is not interruptible and commits whatever its caller
+      // does, so its caller stays attached: the commit still reaches the handle's
+      // args and the event bus. Only an update not yet planned is withdrawn.
+      return () => (submitted ? noCancel() : cancel());
+    },
+    unsafeUpdateNode: (request, context, resume) =>
+      planTask(
+        gate,
+        (context) => {
+          const cell = state.nodes.get(request.nodeId);
+          return cell === undefined
+            ? completedTask(makeMissingUnsafeUpdateNodeFailure(request.nodeId, request))
+            : queueRegistry.submitSync(cell, unsafeUpdateNodeOperation(cell, request), context);
+        },
+        context,
+        resume
+      ),
+    releaseNode: (nodeId, reason, context, resume) =>
+      planTask(
+        gate,
+        (context) => {
+          const cell = state.nodes.get(nodeId);
+          return cell === undefined
+            ? completedTask(undefined)
+            : queueRegistry.submitSync(cell, releaseOperation(graphEnv, cell, reason), context);
+        },
+        context,
+        resume
+      ),
+    executeNodeAction: (nodeId, action, input, context, resume) =>
+      core.runAction({ target: { _tag: "NodeId", nodeId }, action, input }, context, resume),
+  };
+  function submitRefreshDirect(
+    request: RefreshRequest,
+    context: Context.Context<never> | undefined,
+    resume: GraphResume<CoreRefreshSubmission>
+  ): GraphCancel {
+    return gate.planDirect((context) => planRefresh(request, context), context, resume);
+  }
+  function planRefresh(
+    request: RefreshRequest,
+    context: Context.Context<never> | undefined
+  ): CoreRefreshSubmission {
+    return options.refreshAdmission.submit({
+      request,
+      cellLookup: resolveTarget(request.target),
+      start: (cell, onComplete) =>
+        queueRegistry.submitSync(cell, refreshOperation(graphEnv, cell, request), context, {
+          onComplete,
+          onDecided: onComplete,
+        }),
     });
   }
-
-  function releaseNode(nodeId: NodeId, reason?: string | undefined) {
-    return Effect.gen(function* () {
-      const submission = yield* Semaphore.withPermit(
-        options.planningSemaphore,
-        Match.value(lookupGraphNodeCell(options.state, nodeId)).pipe(
-          Match.tag("Missing", ({ nodeId }) =>
-            Effect.succeed({ _tag: "Missing", nodeId } as const)
-          ),
-          Match.tag("Found", ({ cell }) =>
-            Effect.gen(function* () {
-              const task = yield* options.actorRegistry.submit(
-                cell,
-                releaseOperation(options.graphEnv, cell, reason)
-              );
-              return { _tag: "Submitted", task } as const;
-            })
-          ),
-          Match.exhaustive
-        )
-      );
-
-      yield* Match.value(submission).pipe(
-        Match.tag("Submitted", ({ task }) => task.await),
-        Match.tag("Missing", () => Effect.void),
-        Match.exhaustive
-      );
-    });
-  }
-
-  function submitToTargetCell<A>(
-    target: ActionRequest["target"],
-    submit: (cell: GraphNodeCell) => Effect.Effect<GraphCellTask<A>>
-  ): Effect.Effect<
-    | {
-        readonly _tag: "Submitted";
-        readonly task: GraphCellTask<A>;
-      }
-    | {
-        readonly _tag: "Missing";
-        readonly nodeId: NodeId;
-      }
-  > {
-    return Semaphore.withPermit(
-      options.planningSemaphore,
-      resolveTargetCellWithinPermit(target).pipe(
-        Effect.flatMap((lookup) =>
-          Match.value(lookup).pipe(
-            Match.tag("Missing", ({ nodeId }) =>
-              Effect.succeed({ _tag: "Missing", nodeId } as const)
-            ),
-            Match.tag("Found", ({ cell }) =>
-              Effect.gen(function* () {
-                const task = yield* submit(cell);
-                return { _tag: "Submitted", task } as const;
-              })
-            ),
-            Match.exhaustive
-          )
-        )
-      )
-    );
-  }
-
-  function resolveTargetCellWithinPermit(
-    target: ActionRequest["target"]
-  ): Effect.Effect<GraphNodeCellLookup> {
-    return Effect.gen(function* () {
-      const handle =
-        target._tag === "NodeRequest"
-          ? yield* ensurePlannedNode(options.state, target.request)
-          : ({
-              _tag: "Unwired",
-              nodeId: target.nodeId,
-              status: { _tag: "Unwired" },
-            } satisfies NodeRead);
-
-      return lookupGraphNodeCell(options.state, handle.nodeId);
-    });
-  }
-
-  function executeNodeAction(
-    nodeId: NodeId,
-    action: string,
-    input: unknown
-  ): Effect.Effect<ActionResult> {
-    return runAction({
-      target: {
-        _tag: "NodeId",
-        nodeId,
-      },
-      action,
-      input,
-    });
-  }
-
   return {
-    ensureReadyNode,
-    runAction,
-    submitRefreshNode,
-    refreshNode,
-    updateNodeArgs,
-    unsafeUpdateNode,
-    releaseNode,
-    executeNodeAction,
+    core,
+    submitRefreshDirect,
+    ensureReadyNode: (request) =>
+      callbackEffect((context, resume) => core.ensureReadyNode(request, context, resume)),
+    runAction: (request) =>
+      callbackEffect((context, resume) => core.runAction(request, context, resume)),
+    submitRefreshNode: (request) =>
+      callbackEffect((context, resume) => core.submitRefreshNode(request, context, resume)),
+    refreshNode: (request) =>
+      callbackEffect((context, resume) => core.refreshNode(request, context, resume)),
+    updateNodeArgs: (request) =>
+      callbackEffect((context, resume) => core.updateNodeArgs(request, context, resume)),
+    unsafeUpdateNode: (request) =>
+      callbackEffect((context, resume) => core.unsafeUpdateNode(request, context, resume)),
+    releaseNode: (nodeId, reason) =>
+      callbackEffect((context, resume) => core.releaseNode(nodeId, reason, context, resume)),
+    executeNodeAction: (nodeId, action, input) =>
+      callbackEffect((context, resume) =>
+        core.executeNodeAction(nodeId, action, input, context, resume)
+      ),
   };
 }
 

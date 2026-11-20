@@ -1,67 +1,71 @@
-import { Clock, Effect } from "effect";
+import { type Context, Exit } from "effect";
 import type { GraphNodeCell } from "../cell/cellModel";
 import { phaseReadyData, projectCellPhase } from "../cell/cellPhase";
+import { type GraphCancel, type GraphResume, noCancel } from "../queue/reply";
 import { effectiveResultValidity } from "../resultValidity";
-import {
-  GraphInvariantViolation,
-  type RefreshRequest,
-  type RefreshResult,
-  ResultExpired,
-} from "../types";
+import { type RefreshRequest, type RefreshResult, ResultExpired } from "../types";
 import type { GraphOperationEnvironment } from "./dependencies";
-import { runReadyDriverOperation } from "./driverOperationSkeleton";
+import { startReadyDriverOperation } from "./driverOperationSkeleton";
 import { makeRefreshFailure } from "./operationFailures";
-import { runBackgroundOperation } from "./operationState";
+import { startBackgroundOperation } from "./operationState";
 
-export function refreshInCell(
+export function startRefresh(
   env: GraphOperationEnvironment,
   cell: GraphNodeCell,
-  request: RefreshRequest
-): Effect.Effect<RefreshResult> {
-  return runBackgroundOperation(cell, "refresh", () => runRefreshDriver(env, cell, request));
+  request: RefreshRequest,
+  context: Context.Context<never> | undefined,
+  resume: GraphResume<RefreshResult>,
+  decided?: () => void
+): GraphCancel {
+  return startBackgroundOperation(
+    cell,
+    "refresh",
+    (_operation, settled) => startRefreshDriver(env, cell, request, context, settled, decided),
+    context,
+    resume
+  );
 }
 
-export function runRefreshDriver(
+export function startRefreshDriver(
   env: GraphOperationEnvironment,
   cell: GraphNodeCell,
-  request: RefreshRequest
-): Effect.Effect<RefreshResult> {
-  return Effect.gen(function* () {
-    const current = yield* cell.state.get;
-    const projection = projectCellPhase(current.phase);
+  request: RefreshRequest,
+  context: Context.Context<never> | undefined,
+  resume: GraphResume<RefreshResult>,
+  decided?: () => void
+): GraphCancel {
+  const complete = (result: RefreshResult) => {
+    resume(Exit.succeed(result));
+    return noCancel;
+  };
+  const current = cell.state.getSync();
+  const ready = phaseReadyData(current.phase);
 
-    if (projection._tag !== "Ready") {
-      return makeRefreshFailure(
+  if (ready._tag === "Missing") {
+    // Only the Ready and Operating phases hold ready data, and they are the
+    // only phases `projectCellPhase` projects as "Ready": project the rest for
+    // the failure status.
+    const projection = projectCellPhase(current.phase);
+    return complete(
+      makeRefreshFailure(
         cell,
         request,
         projection._tag === "Removed" ? { _tag: "Unwired" } : projection.status
-      );
-    }
-
-    const ready = phaseReadyData(current.phase);
-
-    if (ready._tag === "Missing") {
-      return makeRefreshFailure(
-        cell,
-        request,
-        new GraphInvariantViolation({
-          nodeId: cell.nodeId,
-          tag: cell.tag,
-          invariant: "refresh requires ready graph-owned node data",
-        })
-      );
-    }
-    const readyData = ready.ready;
-    const clock = yield* Clock.Clock;
-    const resultValidity = effectiveResultValidity(
-      readyData.resultValidity,
-      readyData.resultValidityPolicy,
-      readyData.resultLoadedAt,
-      clock.currentTimeMillisUnsafe()
+      )
     );
+  }
+  const readyData = ready.ready;
+  const clock = cell.syncClock;
+  const resultValidity = effectiveResultValidity(
+    readyData.resultValidity,
+    readyData.resultValidityPolicy,
+    readyData.resultLoadedAt,
+    clock.now()
+  );
 
-    if (resultValidity._tag === "Expired") {
-      return makeRefreshFailure(
+  if (resultValidity._tag === "Expired") {
+    return complete(
+      makeRefreshFailure(
         cell,
         request,
         new ResultExpired({
@@ -69,20 +73,22 @@ export function runRefreshDriver(
           tag: cell.tag,
           resultValidity,
         })
-      );
-    }
+      )
+    );
+  }
 
-    const { refresh } = cell.descriptor.driver;
+  const { refresh } = cell.descriptor.driver;
 
-    if (refresh._tag === "Missing") {
-      return {
-        _tag: "Success",
-        nodeId: cell.nodeId,
-        value: readyData.result,
-      } satisfies RefreshResult;
-    }
+  if (refresh._tag === "Missing") {
+    return complete({
+      _tag: "Success",
+      nodeId: cell.nodeId,
+      value: readyData.result,
+    } satisfies RefreshResult);
+  }
 
-    return yield* runReadyDriverOperation<unknown, RefreshResult>({
+  return startReadyDriverOperation<unknown, RefreshResult>(
+    {
       env,
       cell,
       phase: current.phase,
@@ -100,6 +106,7 @@ export function runRefreshDriver(
       },
       commitInput: ({ value, currentResultState, now }) => ({
         context: cell,
+        retainEqual: readyData,
         returned: value,
         staged: currentResultState,
         defaultLoadedAt: now(),
@@ -107,6 +114,7 @@ export function runRefreshDriver(
       previousValidity: readyData.resultValidity,
       validityReason: "refresh",
       run: (ctx) => refresh.run(ctx),
+      onDecided: decided,
       makeFailure: (cause) => makeRefreshFailure(cell, request, cause),
       makeSuccess: ({ committedResultState }) =>
         ({
@@ -114,6 +122,8 @@ export function runRefreshDriver(
           nodeId: cell.nodeId,
           value: committedResultState.result,
         }) satisfies RefreshResult,
-    });
-  });
+    },
+    context,
+    resume
+  );
 }

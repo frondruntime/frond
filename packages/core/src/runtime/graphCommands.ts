@@ -1,11 +1,15 @@
-import { Clock, Effect, Match } from "effect";
+import { type Context, type Effect, Exit } from "effect";
+import { finishObserverWork } from "../graph/driverExecution/effectRunner";
+import { type GraphCancel, type GraphResume, noCancel } from "../graph/queue/reply";
+import type { GraphSystemCore } from "../graph/system/core";
+import type { CoreRefreshSubmission } from "../graph/system/refreshAdmission";
 import type { GraphFailure } from "../graph/types/failures";
 import type { NodeId } from "../graph/types/ids";
 import type { ActionRequest } from "../graph/types/operations";
 import type { NodeSnapshotLookup, ProjectionContext } from "../graph/types/reads";
 import type { GraphSystemService } from "../graph/types/service";
-import { canonicalArgs, type KeyError } from "../keys";
-import { nodeSpanAttributes, withRuntimeSpan } from "./observability";
+import { canonicalArgs, isKeyError, type KeyError } from "../keys";
+import { nodeSpanAttributes } from "./observability";
 import type { RuntimeOperationStartRegistry } from "./operationStarts";
 import type { RuntimeCommand, RuntimeEvent, RuntimeId, RuntimeSubmission } from "./types";
 import type { RuntimeWorkContext } from "./work";
@@ -16,391 +20,359 @@ export type RuntimeGraphCommand = Extract<
   { readonly _tag: RuntimeGraphCommandTag }
 >;
 
-export function runRuntimeGraphCommand(input: {
-  readonly command: RuntimeGraphCommand;
-  readonly graphSystem: GraphSystemService;
-  readonly runtimeId: RuntimeId;
-  readonly work: RuntimeWorkContext;
-  readonly emit: (event: RuntimeEvent) => Effect.Effect<void>;
-  readonly syncProjectionContext: () => ProjectionContext;
-  readonly operationStarts: RuntimeOperationStartRegistry;
-}): Effect.Effect<RuntimeSubmission, KeyError> {
-  return Match.value(input.command).pipe(
-    Match.tag("GraphEnsureNode", ({ request }) =>
-      withRuntimeSpan(
-        Effect.gen(function* () {
-          yield* validateArgs(request.args);
-
-          const at = yield* Clock.currentTimeMillis;
-          const read = yield* input.graphSystem.ensureNode(request);
-
-          yield* input.emit({
-            _tag: "GraphNodeEnsured",
-            nodeId: read.nodeId,
-            status: read.status,
-            at,
-          });
-
-          return { _tag: "GraphNodeEnsured", read } satisfies RuntimeSubmission;
-        }),
-        "frond.graph.ensureNode",
-        nodeSpanAttributes({ runtimeId: input.runtimeId, reason: "readiness", work: input.work })
-      )
-    ),
-    Match.tag("GraphEnsureReadyNode", ({ request }) =>
-      withRuntimeSpan(
-        Effect.gen(function* () {
-          yield* validateArgs(request.args);
-
-          const at = yield* Clock.currentTimeMillis;
-          const read = yield* input.graphSystem.ensureReadyNode(request);
-
-          yield* input.emit({
-            _tag: "GraphNodeReadyEnsured",
-            nodeId: read.nodeId,
-            status: read.status,
-            at,
-          });
-
-          return { _tag: "GraphNodeReadyEnsured", read } satisfies RuntimeSubmission;
-        }),
-        "frond.graph.ensureReady",
-        nodeSpanAttributes({ runtimeId: input.runtimeId, reason: "readiness", work: input.work })
-      )
-    ),
-    Match.tag("GraphEnsureReadyNodeById", ({ nodeId }) =>
-      withRuntimeSpan(
-        Effect.gen(function* () {
-          const at = yield* Clock.currentTimeMillis;
-          const read = yield* input.graphSystem.ensureReadyNodeById(nodeId);
-
-          yield* input.emit({
-            _tag: "GraphNodeReadyEnsured",
-            nodeId: read.nodeId,
-            status: read.status,
-            at,
-          });
-
-          return { _tag: "GraphNodeReadyEnsured", read } satisfies RuntimeSubmission;
-        }),
-        "frond.graph.ensureReady",
-        nodeSpanAttributes({
-          runtimeId: input.runtimeId,
-          nodeId,
-          reason: "readiness",
-          work: input.work,
-        })
-      )
-    ),
-    Match.tag("GraphRunAction", ({ request }) =>
-      withRuntimeSpan(
-        Effect.gen(function* () {
-          yield* validateTargetArgs(request.target);
-
-          const nodeId = graphTargetNodeId(input.graphSystem, request.target);
-          // Boundary: runtime records command metadata before graph actor
-          // admission, then graph operation observers emit start/completion
-          // events from the real actor-owned operation boundary.
-          const cancelPendingStart = input.operationStarts.registerAction(
-            nodeId,
-            request.action,
-            request.input,
-            input.work
+export function runRuntimeGraphCommand(
+  input: {
+    readonly command: RuntimeGraphCommand;
+    readonly graphSystem: GraphSystemService;
+    readonly graphCore: GraphSystemCore;
+    readonly syncClock: { readonly now: () => number };
+    readonly work: RuntimeWorkContext;
+    readonly emit: (event: RuntimeEvent) => Effect.Effect<void>;
+    readonly syncProjectionContext: () => ProjectionContext;
+    readonly operationStarts: RuntimeOperationStartRegistry;
+  },
+  context: Context.Context<never> | undefined,
+  resume: GraphResume<RuntimeSubmission, KeyError>
+): GraphCancel {
+  const command = input.command;
+  const graph = input.graphCore;
+  const at = input.syncClock.now();
+  const complete = (submission: RuntimeSubmission, event?: RuntimeEvent) => {
+    if (event === undefined) resume(Exit.succeed(submission));
+    else
+      finishObserverWork(
+        input.emit(event),
+        context,
+        () => resume(Exit.succeed(submission)),
+        graph.jobs
+      );
+  };
+  const fail = (exit: Exit.Failure<unknown, never>) => resume(Exit.failCause(exit.cause));
+  try {
+    switch (command._tag) {
+      case "GraphEnsureNode":
+        canonicalArgs(command.request.args);
+        return graph.ensureNode(command.request, context, (exit) => {
+          if (exit._tag === "Failure") {
+            fail(exit);
+            return;
+          }
+          complete(
+            { _tag: "GraphNodeEnsured", read: exit.value },
+            { _tag: "GraphNodeEnsured", nodeId: exit.value.nodeId, status: exit.value.status, at }
           );
-
-          const result = yield* input.graphSystem
-            .runAction(request)
-            .pipe(Effect.ensuring(Effect.sync(cancelPendingStart)));
-
-          return { _tag: "GraphActionCompleted", result } satisfies RuntimeSubmission;
-        }),
-        "frond.graph.action",
-        nodeSpanAttributes({
-          runtimeId: input.runtimeId,
-          nodeId: graphTargetNodeIdIfKnown(request.target),
-          action: request.action,
-          reason: "action",
-          work: input.work,
-        })
-      )
-    ),
-    Match.tag("GraphRefreshNode", ({ request }) =>
-      withRuntimeSpan(
-        Effect.gen(function* () {
-          yield* validateTargetArgs(request.target);
-
-          const pendingNodeId = graphTargetNodeId(input.graphSystem, request.target);
-          const cancelPendingStart = input.operationStarts.registerRefresh(
-            pendingNodeId,
-            input.work
+        });
+      case "GraphEnsureReadyNode":
+      case "GraphEnsureReadyNodeById": {
+        const ready: GraphResume<import("../graph").NodeRead> = (exit) => {
+          if (exit._tag === "Failure") {
+            fail(exit);
+            return;
+          }
+          complete(
+            { _tag: "GraphNodeReadyEnsured", read: exit.value },
+            {
+              _tag: "GraphNodeReadyEnsured",
+              nodeId: exit.value.nodeId,
+              status: exit.value.status,
+              at,
+            }
           );
-          const result = yield* Effect.gen(function* () {
-            const submission = yield* input.graphSystem.submitRefreshNode(request);
-            return yield* Match.value(submission).pipe(
-              Match.tag("Started", ({ task }) =>
-                Effect.gen(function* () {
-                  const result = yield* task.await;
-                  const completedAt = yield* Clock.currentTimeMillis;
-                  yield* Match.value(result).pipe(
-                    Match.tag("Success", ({ nodeId, value }) =>
-                      input.emit({
-                        _tag: "GraphRefreshSucceeded",
-                        nodeId,
-                        value,
-                        at: completedAt,
-                      })
-                    ),
-                    Match.tag("Failure", ({ error, nodeId }) =>
-                      input.emit({
-                        _tag: "GraphRefreshFailed",
-                        nodeId,
-                        error,
-                        at: completedAt,
-                      })
-                    ),
-                    Match.exhaustive
-                  );
-                  return result;
-                })
-              ),
-              Match.tag("Joined", ({ task }) =>
-                Effect.sync(cancelPendingStart).pipe(Effect.flatMap(() => task.await))
-              ),
-              Match.tag("Missing", ({ result }) =>
-                Effect.sync(cancelPendingStart).pipe(Effect.as(result))
-              ),
-              Match.exhaustive
-            );
-          }).pipe(Effect.ensuring(Effect.sync(cancelPendingStart)));
-
-          return { _tag: "GraphRefreshCompleted", result } satisfies RuntimeSubmission;
-        }),
-        "frond.graph.refresh",
-        nodeSpanAttributes({
-          runtimeId: input.runtimeId,
-          nodeId: graphTargetNodeIdIfKnown(request.target),
-          reason: "refresh",
-          work: input.work,
-        })
-      )
-    ),
-    Match.tag("GraphUpdateNodeArgs", ({ request }) =>
-      withRuntimeSpan(
-        Effect.gen(function* () {
-          yield* validateArgs(request.args);
-
-          const cancelPendingStart = input.operationStarts.registerArgsUpdate(
-            request.nodeId,
-            input.work
+        };
+        if (command._tag === "GraphEnsureReadyNodeById")
+          return graph.ensureReadyNodeById(command.nodeId, context, ready);
+        canonicalArgs(command.request.args);
+        return graph.ensureReadyNode(command.request, context, ready);
+      }
+      case "GraphRunAction": {
+        validateTargetArgs(command.request.target);
+        const clear = input.operationStarts.registerAction(
+          graphTargetNodeId(input.graphSystem, command.request.target),
+          command.request.action,
+          command.request.input,
+          input.work
+        );
+        const cancel = graph.runAction(command.request, context, (exit) => {
+          clear();
+          if (exit._tag === "Failure") fail(exit);
+          else complete({ _tag: "GraphActionCompleted", result: exit.value });
+        });
+        return () => {
+          clear();
+          return cancel();
+        };
+      }
+      case "GraphRefreshNode": {
+        validateTargetArgs(command.request.target);
+        const clear = input.operationStarts.registerRefresh(
+          graphTargetNodeId(input.graphSystem, command.request.target),
+          input.work
+        );
+        let cancelTask: GraphCancel | undefined;
+        const cancelPlan = graph.submitRefreshNode(command.request, context, (exit) => {
+          if (exit._tag === "Failure") {
+            clear();
+            fail(exit);
+            return;
+          }
+          const submission = exit.value as CoreRefreshSubmission;
+          switch (submission._tag) {
+            case "Missing":
+              clear();
+              complete({ _tag: "GraphRefreshCompleted", result: submission.result });
+              break;
+            case "Joined":
+            case "Started":
+              if (submission._tag === "Joined") clear();
+              cancelTask = submission.task.listen((exit) => {
+                clear();
+                if (exit._tag === "Failure") {
+                  fail(exit);
+                  return;
+                }
+                const result = exit.value;
+                const event: RuntimeEvent | undefined =
+                  submission._tag === "Joined"
+                    ? undefined
+                    : result._tag === "Success"
+                      ? {
+                          _tag: "GraphRefreshSucceeded",
+                          nodeId: result.nodeId,
+                          value: result.value,
+                          at: input.syncClock.now(),
+                        }
+                      : {
+                          _tag: "GraphRefreshFailed",
+                          nodeId: result.nodeId,
+                          error: result.error,
+                          at: input.syncClock.now(),
+                        };
+                complete({ _tag: "GraphRefreshCompleted", result }, event);
+              });
+              break;
+          }
+        });
+        return () => {
+          clear();
+          return cancelTask === undefined ? cancelPlan() : cancelTask();
+        };
+      }
+      case "GraphUpdateNodeArgs": {
+        canonicalArgs(command.request.args);
+        const clear = input.operationStarts.registerArgsUpdate(command.request.nodeId, input.work);
+        const cancel = graph.updateNodeArgs(command.request, context, (exit) => {
+          clear();
+          if (exit._tag === "Failure") {
+            fail(exit);
+            return;
+          }
+          const result = exit.value;
+          complete(
+            { _tag: "GraphNodeArgsUpdateCompleted", result },
+            result._tag === "Success"
+              ? {
+                  _tag: "GraphNodeArgsUpdateSucceeded",
+                  nodeId: result.nodeId,
+                  shouldRefresh: result.shouldRefresh,
+                  at: input.syncClock.now(),
+                }
+              : {
+                  _tag: "GraphNodeArgsUpdateFailed",
+                  nodeId: result.nodeId,
+                  error: result.error,
+                  at: input.syncClock.now(),
+                }
           );
-          const result = yield* input.graphSystem
-            .updateNodeArgs(request)
-            .pipe(Effect.ensuring(Effect.sync(cancelPendingStart)));
-          const completedAt = yield* Clock.currentTimeMillis;
-
-          yield* Match.value(result).pipe(
-            Match.tag("Success", ({ nodeId, shouldRefresh }) =>
-              input.emit({
-                _tag: "GraphNodeArgsUpdateSucceeded",
-                nodeId,
-                shouldRefresh,
-                at: completedAt,
-              })
-            ),
-            Match.tag("Failure", ({ nodeId, error }) =>
-              input.emit({
-                _tag: "GraphNodeArgsUpdateFailed",
-                nodeId,
-                error,
-                at: completedAt,
-              })
-            ),
-            Match.exhaustive
+        });
+        return () => {
+          clear();
+          return cancel();
+        };
+      }
+      case "GraphUnsafeUpdateNode":
+        return graph.unsafeUpdateNode(command.request, context, (exit) => {
+          if (exit._tag === "Failure") {
+            fail(exit);
+            return;
+          }
+          const result = exit.value;
+          complete(
+            { _tag: "GraphUnsafeNodeUpdateCompleted", result },
+            result._tag === "Success"
+              ? {
+                  _tag: "GraphUnsafeNodeUpdated",
+                  nodeId: result.nodeId,
+                  label: command.request.label,
+                  at,
+                }
+              : {
+                  _tag: "GraphUnsafeNodeUpdateFailed",
+                  nodeId: result.nodeId,
+                  error: result.error,
+                  label: command.request.label,
+                  at,
+                }
           );
-
-          return { _tag: "GraphNodeArgsUpdateCompleted", result } satisfies RuntimeSubmission;
-        }),
-        "frond.graph.args",
-        nodeSpanAttributes({
-          runtimeId: input.runtimeId,
-          nodeId: request.nodeId,
-          reason: "args-update",
-          work: input.work,
-        })
-      )
-    ),
-    Match.tag("GraphUnsafeUpdateNode", ({ request }) =>
-      withRuntimeSpan(
-        Effect.gen(function* () {
-          const at = yield* Clock.currentTimeMillis;
-          const result = yield* input.graphSystem.unsafeUpdateNode(request);
-
-          yield* Match.value(result).pipe(
-            Match.tag("Success", ({ nodeId }) =>
-              input.emit({
-                _tag: "GraphUnsafeNodeUpdated",
-                nodeId,
-                label: request.label,
-                at,
-              })
-            ),
-            Match.tag("Failure", ({ error, nodeId }) =>
-              input.emit({
-                _tag: "GraphUnsafeNodeUpdateFailed",
-                nodeId,
-                label: request.label,
-                error,
-                at,
-              })
-            ),
-            Match.exhaustive
+        });
+      case "GraphReleaseNode":
+        return graph.releaseNode(command.nodeId, command.reason, context, (exit) => {
+          if (exit._tag === "Failure") {
+            fail(exit);
+            return;
+          }
+          const failure = projectedCleanupFailure(
+            input.graphSystem.readNodeSnapshotSync(command.nodeId, input.syncProjectionContext())
           );
-
-          return {
-            _tag: "GraphUnsafeNodeUpdateCompleted",
-            result,
-          } satisfies RuntimeSubmission;
-        }),
-        "frond.graph.unsafeUpdate",
-        nodeSpanAttributes({
-          runtimeId: input.runtimeId,
-          nodeId: request.nodeId,
-          reason: "unsafe-update",
-          work: input.work,
-        })
-      )
-    ),
-    Match.tag("GraphReleaseNode", ({ nodeId, reason }) =>
-      withRuntimeSpan(
-        Effect.gen(function* () {
-          const at = yield* Clock.currentTimeMillis;
-
-          yield* input.graphSystem.releaseNode(nodeId, reason);
-          const lookup = input.graphSystem.readNodeSnapshotSync(
-            nodeId,
-            input.syncProjectionContext()
+          complete(
+            { _tag: "GraphNodeReleased", nodeId: command.nodeId },
+            {
+              _tag: "GraphNodeReleased",
+              nodeId: command.nodeId,
+              reason: command.reason,
+              failure,
+              at,
+            }
           );
-          // Contract: release completion reports the projected retained failure,
-          // including live stop failures, while the command result remains void.
-          const failure = projectedCleanupFailure(lookup);
-          yield* input.emit({ _tag: "GraphNodeReleased", nodeId, reason, failure, at });
-
-          return { _tag: "GraphNodeReleased", nodeId } satisfies RuntimeSubmission;
-        }),
-        "frond.graph.release",
-        nodeSpanAttributes({
-          runtimeId: input.runtimeId,
-          nodeId,
-          reason: "release",
-          work: input.work,
-        })
-      )
-    ),
-    Match.tag("GraphEvictSubgraph", ({ request }) =>
-      withRuntimeSpan(
-        Effect.gen(function* () {
-          const at = yield* Clock.currentTimeMillis;
-          const result = yield* input.graphSystem.evictSubgraph(request);
-
-          yield* input.emit({
-            _tag: "GraphNodesEvicted",
-            nodeIds: result.nodeIds,
-            reason: request.reason,
-            failures: result.failures,
-            at,
-          });
-
-          return { _tag: "GraphSubgraphEvicted", result } satisfies RuntimeSubmission;
-        }),
-        "frond.graph.evict",
-        nodeSpanAttributes({
-          runtimeId: input.runtimeId,
-          reason: "eviction",
-          work: input.work,
-        })
-      )
-    ),
-    Match.tag("GraphAcquireNodeLiveLease", ({ request }) =>
-      withRuntimeSpan(
-        Effect.gen(function* () {
-          const result = yield* input.graphSystem.acquireNodeLiveLease(request);
-
-          return {
-            _tag: "GraphNodeLiveLeaseAcquired",
-            result,
-          } satisfies RuntimeSubmission;
-        }),
-        "frond.graph.live.acquire",
-        nodeSpanAttributes({
-          runtimeId: input.runtimeId,
-          nodeId: request.nodeId,
-          source: request.source,
-          reason: "live",
-          work: input.work,
-        })
-      )
-    ),
-    Match.tag("GraphReleaseNodeLiveLease", ({ request }) =>
-      withRuntimeSpan(
-        Effect.gen(function* () {
-          const result = yield* input.graphSystem.releaseNodeLiveLease(request);
-
-          return {
-            _tag: "GraphNodeLiveLeaseReleased",
-            result,
-          } satisfies RuntimeSubmission;
-        }),
-        "frond.graph.live.release",
-        nodeSpanAttributes({
-          runtimeId: input.runtimeId,
-          nodeId: request.nodeId,
-          reason: "live",
-          work: input.work,
-        })
-      )
-    ),
-    Match.exhaustive
-  );
+        });
+      case "GraphEvictSubgraph":
+        return graph.evictSubgraph(command.request, context, (exit) => {
+          if (exit._tag === "Failure") {
+            fail(exit);
+            return;
+          }
+          const result = exit.value;
+          complete(
+            { _tag: "GraphSubgraphEvicted", result },
+            {
+              _tag: "GraphNodesEvicted",
+              nodeIds: result.nodeIds,
+              reason: command.request.reason,
+              failures: result.failures,
+              at,
+            }
+          );
+        });
+      case "GraphAcquireNodeLiveLease":
+        return graph.acquireNodeLiveLease(command.request, context, (exit) => {
+          if (exit._tag === "Failure") fail(exit);
+          else complete({ _tag: "GraphNodeLiveLeaseAcquired", result: exit.value });
+        });
+      case "GraphReleaseNodeLiveLease":
+        return graph.releaseNodeLiveLease(command.request, context, (exit) => {
+          if (exit._tag === "Failure") fail(exit);
+          else complete({ _tag: "GraphNodeLiveLeaseReleased", result: exit.value });
+        });
+      default: {
+        const exhaustive: never = command;
+        return exhaustive;
+      }
+    }
+  } catch (cause) {
+    resume(isKeyError(cause) ? Exit.fail(cause) : Exit.die(cause));
+    return noCancel;
+  }
 }
 
+export function graphCommandSpanName(command: RuntimeGraphCommand): string {
+  switch (command._tag) {
+    case "GraphEnsureNode":
+      return "frond.graph.ensureNode";
+    case "GraphEnsureReadyNode":
+    case "GraphEnsureReadyNodeById":
+      return "frond.graph.ensureReady";
+    case "GraphRunAction":
+      return "frond.graph.action";
+    case "GraphRefreshNode":
+      return "frond.graph.refresh";
+    case "GraphUpdateNodeArgs":
+      return "frond.graph.args";
+    case "GraphUnsafeUpdateNode":
+      return "frond.graph.unsafeUpdate";
+    case "GraphReleaseNode":
+      return "frond.graph.release";
+    case "GraphEvictSubgraph":
+      return "frond.graph.evict";
+    case "GraphAcquireNodeLiveLease":
+      return "frond.graph.live.acquire";
+    case "GraphReleaseNodeLiveLease":
+      return "frond.graph.live.release";
+    default: {
+      const exhaustive: never = command;
+      return exhaustive;
+    }
+  }
+}
 function projectedCleanupFailure(lookup: NodeSnapshotLookup): GraphFailure | undefined {
   return lookup._tag === "Found"
     ? (lookup.snapshot.failure as GraphFailure | undefined)
     : undefined;
 }
-
-function validateTargetArgs(target: ActionRequest["target"]): Effect.Effect<void, KeyError> {
-  return Match.value(target).pipe(
-    Match.tag("NodeId", () => Effect.void),
-    Match.tag("NodeRequest", ({ request }) => validateArgs(request.args)),
-    Match.exhaustive
-  );
+function validateTargetArgs(target: ActionRequest["target"]): void {
+  if (target._tag === "NodeRequest") canonicalArgs(target.request.args);
+}
+function graphTargetNodeId(graph: GraphSystemService, target: ActionRequest["target"]): NodeId {
+  return target._tag === "NodeId" ? target.nodeId : graph.resolveNodeIdSync(target.request);
 }
 
-function validateArgs(args: unknown): Effect.Effect<void, KeyError> {
-  return Effect.try({
-    try: () => {
-      canonicalArgs(args);
-    },
-    catch: (cause) => cause as KeyError,
-  });
+/** Attribute construction belongs only to the Effect facade. */
+export function graphCommandSpanAttributes(
+  runtimeId: RuntimeId,
+  command: RuntimeGraphCommand,
+  work: RuntimeWorkContext
+): Record<string, unknown> {
+  let nodeId: NodeId | undefined;
+  let action: string | undefined;
+  let source: string | undefined;
+  let reason: string;
+  switch (command._tag) {
+    case "GraphEnsureNode":
+    case "GraphEnsureReadyNode":
+      reason = "readiness";
+      break;
+    case "GraphEnsureReadyNodeById":
+      nodeId = command.nodeId;
+      reason = "readiness";
+      break;
+    case "GraphRunAction":
+      nodeId = knownTargetNodeId(command.request.target);
+      action = command.request.action;
+      reason = "action";
+      break;
+    case "GraphRefreshNode":
+      nodeId = knownTargetNodeId(command.request.target);
+      reason = "refresh";
+      break;
+    case "GraphUpdateNodeArgs":
+      nodeId = command.request.nodeId;
+      reason = "args-update";
+      break;
+    case "GraphUnsafeUpdateNode":
+      nodeId = command.request.nodeId;
+      reason = "unsafe-update";
+      break;
+    case "GraphReleaseNode":
+      nodeId = command.nodeId;
+      reason = "release";
+      break;
+    case "GraphEvictSubgraph":
+      reason = "eviction";
+      break;
+    case "GraphAcquireNodeLiveLease":
+      nodeId = command.request.nodeId;
+      source = command.request.source;
+      reason = "live";
+      break;
+    case "GraphReleaseNodeLiveLease":
+      nodeId = command.request.nodeId;
+      reason = "live";
+      break;
+    default: {
+      const exhaustive: never = command;
+      return exhaustive;
+    }
+  }
+  return nodeSpanAttributes({ runtimeId, nodeId, action, source, reason, work });
 }
-
-function graphTargetNodeId(
-  graphSystem: GraphSystemService,
-  target: ActionRequest["target"]
-): NodeId {
-  return Match.value(target).pipe(
-    Match.tag("NodeId", ({ nodeId }) => nodeId),
-    Match.tag("NodeRequest", ({ request }) => graphSystem.resolveNodeIdSync(request)),
-    Match.exhaustive
-  );
-}
-
-function graphTargetNodeIdIfKnown(target: ActionRequest["target"]): NodeId | undefined {
-  return Match.value(target).pipe(
-    Match.tag("NodeId", ({ nodeId }) => nodeId),
-    Match.tag("NodeRequest", () => undefined),
-    Match.exhaustive
-  );
+function knownTargetNodeId(target: ActionRequest["target"]): NodeId | undefined {
+  return target._tag === "NodeId" ? target.nodeId : undefined;
 }

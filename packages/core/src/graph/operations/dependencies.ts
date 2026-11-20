@@ -1,11 +1,14 @@
-import { Clock, Effect, Match } from "effect";
+import { type Context, Effect, Exit } from "effect";
 import type { RuntimeSignalAccess } from "../../signals";
-import type { GraphCellTask } from "../cell/cellActor";
 import { lookupGraphNodeCell } from "../cell/cellLookup";
 import type { GraphNodeCell, GraphPlanState } from "../cell/cellModel";
 import { phaseReadyData, projectCellPhase } from "../cell/cellPhase";
+import type { GraphCellTask } from "../cell/cellQueue";
 import type { GraphRuntimeSpanAttributes } from "../config";
+import { singleFailure } from "../driverExecution/causePolicy";
+import { type GraphCancel, type GraphResume, noCancel } from "../queue/reply";
 import { effectiveResultValidity } from "../resultValidity";
+import type { CoreRefreshSubmission } from "../system/refreshAdmission";
 import {
   DependencyFailed,
   DependencyFailures,
@@ -16,7 +19,6 @@ import {
   type NodeRead,
   type NodeStatus,
   type RefreshResult,
-  type RefreshSubmission,
 } from "../types";
 
 export type EnsureReadyDependencySubmission =
@@ -33,10 +35,16 @@ export type EnsureReadyDependencySubmission =
 export interface GraphOperationEnvironment {
   readonly runtimeSpanAttributes: GraphRuntimeSpanAttributes;
   readonly state: GraphPlanState;
-  readonly submitEnsureReadyByNodeId: (
-    nodeId: NodeRead["nodeId"]
-  ) => Effect.Effect<EnsureReadyDependencySubmission>;
-  readonly submitRefreshByNodeId: (nodeId: NodeRead["nodeId"]) => Effect.Effect<RefreshSubmission>;
+  readonly submitEnsureReadyDirect: (
+    nodeId: NodeRead["nodeId"],
+    context: Context.Context<never> | undefined,
+    resume: GraphResume<EnsureReadyDependencySubmission>
+  ) => GraphCancel;
+  readonly submitRefreshDirect: (
+    nodeId: NodeRead["nodeId"],
+    context: Context.Context<never> | undefined,
+    resume: GraphResume<CoreRefreshSubmission>
+  ) => GraphCancel;
   readonly driverTimeouts: DriverOperationTimeouts;
   readonly signals: RuntimeSignalAccess;
 }
@@ -53,100 +61,116 @@ type DependencyValueResult =
       readonly failure: DependencyFailed;
     };
 
-export function ensureDependencyNodes(
-  env: GraphOperationEnvironment,
-  cell: GraphNodeCell
-): Effect.Effect<Record<string, object>, DependencyFailed | DependencyFailures> {
-  return Effect.gen(function* () {
-    const dependencyEntries = Object.entries(cell.dependencies);
-    const submissions = yield* Effect.forEach(
-      dependencyEntries,
-      ([dependencyName, dependencyNodeId]) =>
-        env.submitEnsureReadyByNodeId(dependencyNodeId).pipe(
-          Effect.map((submission) => ({
-            dependencyName,
-            dependencyNodeId,
-            submission,
-          }))
-        ),
-      { concurrency: "unbounded" }
-    );
-    const dependencyResults = yield* Effect.forEach(
-      submissions,
-      (submission) => captureDependencyValue(readyDependencyValue(cell, submission)),
-      { concurrency: "unbounded" }
-    );
+/**
+ * A dependent's collected dependency values. The sync path reads it directly;
+ * only the async readiness path turns it into an Exit, at its resume edge.
+ */
+type DependencyValuesResult =
+  | {
+      readonly _tag: "Success";
+      readonly value: Record<string, object>;
+    }
+  | {
+      readonly _tag: "Failure";
+      readonly failure: DependencyFailed | DependencyFailures;
+    };
 
-    return yield* finishDependencyValues(cell, dependencyResults);
-  });
+export function startDependencyNodes(
+  env: GraphOperationEnvironment,
+  cell: GraphNodeCell,
+  context: Context.Context<never> | undefined,
+  resume: GraphResume<Record<string, object>, DependencyFailed | DependencyFailures>
+): GraphCancel {
+  const names = Object.keys(cell.dependencies);
+  if (names.length === 0) {
+    resume(dependencyValuesExit(finishDependencyValues(cell, [])));
+    return noCancel;
+  }
+  const results: DependencyValueResult[] = [];
+  const cancels: GraphCancel[] = [];
+  let remaining = names.length;
+  let canceled = false;
+  const done = (result: DependencyValueResult) => {
+    if (canceled) return;
+    results.push(result);
+    remaining -= 1;
+    if (remaining === 0) resume(dependencyValuesExit(finishDependencyValues(cell, results)));
+  };
+  for (const name of names) {
+    const nodeId = cell.dependencies[name];
+    if (nodeId === undefined) throw new Error("Declared dependency has no node id");
+    cancels.push(
+      env.submitEnsureReadyDirect(nodeId, context, (exit) => {
+        if (canceled) return;
+        if (exit._tag === "Failure") {
+          done(dependencyFailure(cell, name, nodeId, singleFailure(exit.cause)));
+          return;
+        }
+        const submission = exit.value;
+        if (submission._tag === "Missing") {
+          done(
+            dependencyFailure(
+              cell,
+              name,
+              nodeId,
+              new GraphInvariantViolation({
+                nodeId,
+                tag: "unknown",
+                invariant: "dependency cell must exist before dependency readiness awaits",
+              })
+            )
+          );
+          return;
+        }
+        cancels.push(
+          submission.task.listen((exit) => {
+            if (exit._tag === "Failure") {
+              done(dependencyFailure(cell, name, nodeId, singleFailure(exit.cause)));
+              return;
+            }
+            done(readyDependencyValue(cell, name, nodeId, exit.value));
+          })
+        );
+      })
+    );
+  }
+  return () => {
+    canceled = true;
+    return Effect.forEach(cancels, (cancel) => cancel(), { discard: true });
+  };
 }
 
 function readyDependencyValue(
   cell: GraphNodeCell,
-  input: {
-    readonly dependencyName: string;
-    readonly dependencyNodeId: NodeRead["nodeId"];
-    readonly submission: EnsureReadyDependencySubmission;
-  }
-): Effect.Effect<readonly [string, object], DependencyFailed> {
-  return Effect.gen(function* () {
-    const { dependencyName, dependencyNodeId, submission } = input;
-    const dependencyHandle = yield* Match.value(submission).pipe(
-      Match.tag("Submitted", ({ task }) => task.await),
-      Match.tag("Missing", () =>
-        Effect.fail(
-          failDependency(
-            cell,
-            dependencyName,
-            dependencyNodeId,
-            new GraphInvariantViolation({
-              nodeId: dependencyNodeId,
-              tag: "unknown",
-              invariant: "dependency cell must exist before dependency readiness awaits",
-            })
-          )
-        )
-      ),
-      Match.exhaustive
+  name: string,
+  nodeId: NodeRead["nodeId"],
+  read: NodeRead
+): DependencyValueResult {
+  if (read.status._tag !== "Wired" || read.status.run._tag !== "Ready")
+    return dependencyFailure(cell, name, nodeId, nodeStatusCause(read.status));
+  if (read.resultValidity?._tag === "Expired")
+    return dependencyFailure(
+      cell,
+      name,
+      nodeId,
+      new DependencyResultExpired({
+        nodeId,
+        tag: read.tag ?? "unknown",
+        resultValidity: read.resultValidity,
+      })
     );
-
-    if (dependencyHandle.status._tag !== "Wired" || dependencyHandle.status.run._tag !== "Ready") {
-      return yield* failDependency(
-        cell,
-        dependencyName,
-        dependencyNodeId,
-        nodeStatusCause(dependencyHandle.status)
-      );
-    }
-
-    if (dependencyHandle.resultValidity?._tag === "Expired") {
-      return yield* failDependency(
-        cell,
-        dependencyName,
-        dependencyNodeId,
-        new DependencyResultExpired({
-          nodeId: dependencyNodeId,
-          tag: dependencyHandle.tag ?? "unknown",
-          resultValidity: dependencyHandle.resultValidity,
-        })
-      );
-    }
-
-    if (dependencyHandle._tag !== "Ready") {
-      return yield* failDependency(
-        cell,
-        dependencyName,
-        dependencyNodeId,
-        new GraphInvariantViolation({
-          nodeId: dependencyNodeId,
-          tag: "unknown",
-          invariant: "ready dependency must expose graph-owned node object",
-        })
-      );
-    }
-
-    return [dependencyName, dependencyHandle.node] as const;
-  });
+  if (read._tag !== "Ready")
+    return dependencyFailure(
+      cell,
+      name,
+      nodeId,
+      new GraphInvariantViolation({
+        nodeId,
+        tag: "unknown",
+        invariant: "ready dependency must expose graph-owned node object",
+      })
+    );
+  return { _tag: "Success", value: [name, read.node] };
 }
 
 /**
@@ -165,118 +189,100 @@ function nodeStatusCause(status: NodeStatus): unknown {
   return status;
 }
 
-export function collectDependencyValues(
+export function collectDependencyValuesSync(
   env: GraphOperationEnvironment,
   cell: GraphNodeCell
-): Effect.Effect<Record<string, object>, DependencyFailed | DependencyFailures> {
-  return Effect.gen(function* () {
-    const dependencyResults: Array<DependencyValueResult> = [];
-
-    for (const [dependencyName, dependencyNodeId] of Object.entries(cell.dependencies)) {
-      dependencyResults.push(
-        yield* captureDependencyValue(
-          currentDependencyValue(env, cell, dependencyName, dependencyNodeId)
-        )
-      );
-    }
-
-    return yield* finishDependencyValues(cell, dependencyResults);
-  });
+): DependencyValuesResult {
+  const results: DependencyValueResult[] = [];
+  for (const name in cell.dependencies) {
+    if (!Object.prototype.hasOwnProperty.call(cell.dependencies, name)) continue;
+    const nodeId = cell.dependencies[name];
+    if (nodeId === undefined) continue;
+    results.push(currentDependencyValue(env, cell, name, nodeId));
+  }
+  return finishDependencyValues(cell, results);
 }
 
-export function refreshDependencyValue(
+export function startRefreshDependency(
   env: GraphOperationEnvironment,
   cell: GraphNodeCell,
-  dependencyName: string
-): Effect.Effect<object, DependencyRefreshFailed | GraphInvariantViolation> {
-  return Effect.gen(function* () {
-    const dependencyNodeId = cell.dependencies[dependencyName];
-
-    // Object.prototype.hasOwnProperty.call instead of Object.hasOwn: consumer
-    // Hermes/React Native targets do not ship Object.hasOwn.
-    if (
-      dependencyNodeId === undefined ||
-      !Object.prototype.hasOwnProperty.call(cell.dependencies, dependencyName)
-    ) {
-      return yield* new GraphInvariantViolation({
-        nodeId: cell.nodeId,
-        tag: cell.tag,
-        invariant: "driver refreshDep requires a declared dependency name",
-        cause: { dependency: dependencyName },
-      });
-    }
-
-    const submission = yield* env.submitRefreshByNodeId(dependencyNodeId);
-    const refreshResult = yield* submissionResult(submission);
-
-    if (refreshResult._tag === "Failure") {
-      return yield* dependencyRefreshFailed(
-        cell,
-        dependencyName,
-        dependencyNodeId,
-        refreshResult.error
-      );
-    }
-
-    const dependencyValue = yield* currentDependencyValue(
-      env,
-      cell,
-      dependencyName,
-      dependencyNodeId
-    ).pipe(
-      Effect.matchEffect({
-        onFailure: (cause) =>
-          dependencyRefreshFailed(cell, dependencyName, dependencyNodeId, cause),
-        onSuccess: (value) => Effect.succeed(value),
-      })
-    );
-
-    return dependencyValue[1];
-  });
-}
-
-function submissionResult(submission: RefreshSubmission): Effect.Effect<RefreshResult> {
-  if (submission._tag === "Missing") {
-    return Effect.succeed(submission.result);
-  }
-
-  return submission.task.await;
-}
-
-function dependencyRefreshFailed(
-  cell: GraphNodeCell,
   dependencyName: string,
-  dependencyNodeId: NodeRead["nodeId"],
-  cause: unknown
-): Effect.Effect<never, DependencyRefreshFailed> {
-  return Effect.fail(
-    new DependencyRefreshFailed({
-      nodeId: cell.nodeId,
-      tag: cell.tag,
-      dependency: dependencyName,
-      dependencyNodeId,
-      cause,
-    })
-  );
-}
-
-function captureDependencyValue(
-  value: Effect.Effect<DependencyValue, DependencyFailed>
-): Effect.Effect<DependencyValueResult> {
-  return value.pipe(
-    Effect.match({
-      onFailure: (failure) => ({ _tag: "Failure", failure }) as const,
-      onSuccess: (entry) => ({ _tag: "Success", value: entry }) as const,
-    })
-  );
+  context: Context.Context<never> | undefined,
+  resume: GraphResume<object, DependencyRefreshFailed | GraphInvariantViolation>
+): GraphCancel {
+  const nodeId = cell.dependencies[dependencyName];
+  if (
+    nodeId === undefined ||
+    !Object.prototype.hasOwnProperty.call(cell.dependencies, dependencyName)
+  ) {
+    resume(
+      Exit.fail(
+        new GraphInvariantViolation({
+          nodeId: cell.nodeId,
+          tag: cell.tag,
+          invariant: "driver refreshDep requires a declared dependency name",
+          cause: { dependency: dependencyName },
+        })
+      )
+    );
+    return noCancel;
+  }
+  const fail = (cause: unknown) =>
+    resume(
+      Exit.fail(
+        new DependencyRefreshFailed({
+          nodeId: cell.nodeId,
+          tag: cell.tag,
+          dependency: dependencyName,
+          dependencyNodeId: nodeId,
+          cause,
+        })
+      )
+    );
+  const complete = (result: RefreshResult) => {
+    if (result._tag === "Failure") {
+      fail(result.error);
+      return;
+    }
+    const value = currentDependencyValue(env, cell, dependencyName, nodeId);
+    if (value._tag === "Failure") fail(value.failure);
+    else resume(Exit.succeed(value.value[1]));
+  };
+  let cancelTask: GraphCancel | undefined;
+  const cancelPlan = env.submitRefreshDirect(nodeId, context, (exit) => {
+    if (exit._tag === "Failure") {
+      resume(Exit.failCause(exit.cause));
+      return;
+    }
+    const submission = exit.value;
+    if (submission._tag === "Missing") {
+      complete(submission.result);
+      return;
+    }
+    cancelTask = submission.task.listen((exit) => {
+      if (exit._tag === "Failure") resume(Exit.failCause(exit.cause));
+      else complete(exit.value);
+    });
+  });
+  return () => (cancelTask === undefined ? cancelPlan() : cancelTask());
 }
 
 function finishDependencyValues(
   cell: GraphNodeCell,
   results: ReadonlyArray<DependencyValueResult>
-): Effect.Effect<Record<string, object>, DependencyFailed | DependencyFailures> {
+): DependencyValuesResult {
   const failures: Array<DependencyFailed> = [];
-  const deps: Record<string, object> = {};
+  const phase = cell.state.getSync().phase;
+  const previousDeps =
+    phase._tag === "Ready" || phase._tag === "Operating" ? phase.ready.deps : undefined;
+  let sameDeps = previousDeps !== undefined;
+  let previousCount = 0;
+  if (previousDeps !== undefined) {
+    for (const name in previousDeps) {
+      if (Object.prototype.hasOwnProperty.call(previousDeps, name)) previousCount += 1;
+    }
+    sameDeps = previousCount === results.length;
+  }
 
   for (const result of results) {
     if (result._tag === "Failure") {
@@ -285,16 +291,38 @@ function finishDependencyValues(
     }
 
     const [dependencyName, dependencyNode] = result.value;
-    deps[dependencyName] = dependencyNode;
+    if (
+      previousDeps === undefined ||
+      !Object.prototype.hasOwnProperty.call(previousDeps, dependencyName) ||
+      previousDeps[dependencyName] !== dependencyNode
+    ) {
+      sameDeps = false;
+    }
   }
 
-  const dependencyFailure = dependencyFailures(cell, failures);
+  const failure = dependencyFailures(cell, failures);
 
-  if (dependencyFailure !== undefined) {
-    return Effect.fail(dependencyFailure);
+  if (failure !== undefined) {
+    return { _tag: "Failure", failure };
   }
 
-  return Effect.succeed(deps);
+  // Dependency nodes are mutable. Their results changing does not replace a
+  // dependency entry; only a different node instance changes the deps record.
+  if (sameDeps && previousDeps !== undefined) return { _tag: "Success", value: previousDeps };
+
+  const deps: Record<string, object> = {};
+  for (const result of results) {
+    if (result._tag === "Success") {
+      deps[result.value[0]] = result.value[1];
+    }
+  }
+  return { _tag: "Success", value: deps };
+}
+
+function dependencyValuesExit(
+  result: DependencyValuesResult
+): Exit.Exit<Record<string, object>, DependencyFailed | DependencyFailures> {
+  return result._tag === "Success" ? Exit.succeed(result.value) : Exit.fail(result.failure);
 }
 
 function currentDependencyValue(
@@ -302,98 +330,99 @@ function currentDependencyValue(
   cell: GraphNodeCell,
   dependencyName: string,
   dependencyNodeId: NodeRead["nodeId"]
-): Effect.Effect<readonly [string, object], DependencyFailed> {
-  return Effect.gen(function* () {
-    const dependencyCell = lookupGraphNodeCell(env.state, dependencyNodeId);
+): DependencyValueResult {
+  const dependencyCell = lookupGraphNodeCell(env.state, dependencyNodeId);
 
-    if (dependencyCell._tag === "Missing") {
-      return yield* failDependency(
-        cell,
-        dependencyName,
-        dependencyNodeId,
-        new GraphInvariantViolation({
-          nodeId: dependencyNodeId,
-          tag: "unknown",
-          invariant: "dependency cell must exist before dependency value collection",
-        })
-      );
-    }
-
-    const dependencyState = yield* dependencyCell.cell.state.get;
-    const dependencyProjection = projectCellPhase(dependencyState.phase);
-
-    if (
-      dependencyProjection._tag === "Removed" ||
-      dependencyProjection.status._tag !== "Wired" ||
-      dependencyProjection.status.run._tag !== "Ready"
-    ) {
-      return yield* failDependency(
-        cell,
-        dependencyName,
-        dependencyNodeId,
-        dependencyProjection._tag === "Removed"
-          ? { _tag: "Unwired" }
-          : nodeStatusCause(dependencyProjection.status)
-      );
-    }
-
-    const dependencyReady = phaseReadyData(dependencyState.phase);
-
-    if (dependencyReady._tag === "Missing") {
-      return yield* failDependency(
-        cell,
-        dependencyName,
-        dependencyNodeId,
-        new GraphInvariantViolation({
-          nodeId: dependencyNodeId,
-          tag: "unknown",
-          invariant: "ready dependency must expose graph-owned node object",
-        })
-      );
-    }
-
-    // Guard: time-bound expiry is computed lazily, so the stored validity tag
-    // can still read Current after the clock passed expireAfter. Evaluate the
-    // effective validity here so an action/refresh never consumes
-    // clock-expired dependency data.
-    const now = yield* Clock.currentTimeMillis;
-    const dependencyValidity = effectiveResultValidity(
-      dependencyReady.ready.resultValidity,
-      dependencyReady.ready.resultValidityPolicy,
-      dependencyReady.ready.resultLoadedAt,
-      now
+  if (dependencyCell._tag === "Missing") {
+    return dependencyFailure(
+      cell,
+      dependencyName,
+      dependencyNodeId,
+      new GraphInvariantViolation({
+        nodeId: dependencyNodeId,
+        tag: "unknown",
+        invariant: "dependency cell must exist before dependency value collection",
+      })
     );
+  }
 
-    if (dependencyValidity._tag === "Expired") {
-      return yield* failDependency(
-        cell,
-        dependencyName,
-        dependencyNodeId,
-        new DependencyResultExpired({
-          nodeId: dependencyNodeId,
-          tag: dependencyCell.cell.tag,
-          resultValidity: dependencyValidity,
-        })
-      );
-    }
+  const dependencyState = dependencyCell.cell.state.getSync();
+  const dependencyProjection = projectCellPhase(dependencyState.phase);
 
-    return [dependencyName, dependencyReady.ready.node] as const;
-  });
+  if (
+    dependencyProjection._tag === "Removed" ||
+    dependencyProjection.status._tag !== "Wired" ||
+    dependencyProjection.status.run._tag !== "Ready"
+  ) {
+    return dependencyFailure(
+      cell,
+      dependencyName,
+      dependencyNodeId,
+      dependencyProjection._tag === "Removed"
+        ? { _tag: "Unwired" }
+        : nodeStatusCause(dependencyProjection.status)
+    );
+  }
+
+  const dependencyReady = phaseReadyData(dependencyState.phase);
+
+  if (dependencyReady._tag === "Missing") {
+    return dependencyFailure(
+      cell,
+      dependencyName,
+      dependencyNodeId,
+      new GraphInvariantViolation({
+        nodeId: dependencyNodeId,
+        tag: "unknown",
+        invariant: "ready dependency must expose graph-owned node object",
+      })
+    );
+  }
+
+  // Guard: time-bound expiry is computed lazily, so the stored validity tag
+  // can still read Current after the clock passed expireAfter. Evaluate the
+  // effective validity here so an action/refresh never consumes
+  // clock-expired dependency data.
+  const now = cell.syncClock.now();
+  const dependencyValidity = effectiveResultValidity(
+    dependencyReady.ready.resultValidity,
+    dependencyReady.ready.resultValidityPolicy,
+    dependencyReady.ready.resultLoadedAt,
+    now
+  );
+
+  if (dependencyValidity._tag === "Expired") {
+    return dependencyFailure(
+      cell,
+      dependencyName,
+      dependencyNodeId,
+      new DependencyResultExpired({
+        nodeId: dependencyNodeId,
+        tag: dependencyCell.cell.tag,
+        resultValidity: dependencyValidity,
+      })
+    );
+  }
+
+  return { _tag: "Success", value: [dependencyName, dependencyReady.ready.node] };
 }
 
-function failDependency(
+function dependencyFailure(
   cell: GraphNodeCell,
   dependency: string,
   dependencyNodeId: NodeRead["nodeId"],
   cause: unknown
-): DependencyFailed {
-  return new DependencyFailed({
-    nodeId: cell.nodeId,
-    tag: cell.tag,
-    dependency,
-    dependencyNodeId,
-    cause,
-  });
+): DependencyValueResult {
+  return {
+    _tag: "Failure",
+    failure: new DependencyFailed({
+      nodeId: cell.nodeId,
+      tag: cell.tag,
+      dependency,
+      dependencyNodeId,
+      cause,
+    }),
+  };
 }
 
 function dependencyFailures(

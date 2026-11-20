@@ -1,58 +1,43 @@
-import { Effect } from "effect";
 import type { Disposer } from "../../driver";
 import type { GraphNodeCell } from "../cell/cellModel";
 import { phaseArgs } from "../cell/cellPhase";
 import { appendReadyDisposersState, commitReadyOperationState } from "../cell/cellTransitions";
 import { updateReadyNodeRuntimeState } from "../planning/readyNodeRuntime";
-import { type ResultState, validityChanged } from "../resultValidity";
-import type { ResultValidity, ResultValidityChangedReason } from "../types";
+import type { ResultState } from "../resultValidity";
 
-export function commitReadyOperationResult(input: {
+interface ReadyOperationCommit {
   readonly cell: GraphNodeCell;
   readonly node: object;
   readonly deps: Record<string, object>;
   readonly resultState: ResultState;
-  readonly previousValidity: ResultValidity;
-  readonly validityReason: ResultValidityChangedReason;
   readonly operationDisposers: ReadonlyArray<Disposer>;
-}): Effect.Effect<void> {
-  return Effect.gen(function* () {
-    const latest = yield* input.cell.state.get;
-    updateReadyNodeRuntimeState({
-      node: input.node,
-      args: phaseArgs(latest.phase),
-      deps: input.deps,
-      result: input.resultState.result,
-    });
-    yield* input.cell.state.transition((latest) => [
-      undefined,
-      commitReadyOperationState({
-        latest,
-        deps: input.deps,
-        resultState: input.resultState,
-        operationDisposers: input.operationDisposers,
-      }),
-    ]);
+}
 
-    if (validityChanged(input.previousValidity, input.resultState.resultValidity)) {
-      yield* input.cell.notifyResultValidityChanged(
-        input.cell.nodeId,
-        input.previousValidity,
-        input.resultState.resultValidity,
-        input.validityReason
-      );
-    }
+export function commitReadyOperationResultSync(input: ReadyOperationCommit): void {
+  const latest = input.cell.state.getSync();
+  input.cell.state.updateSync((latest) => {
+    commitReadyOperationState({
+      latest,
+      deps: input.deps,
+      resultState: input.resultState,
+      operationDisposers: input.operationDisposers,
+    });
+  });
+  updateReadyNodeRuntimeState({
+    node: input.node,
+    args: phaseArgs(latest.phase),
+    deps: input.deps,
+    result: input.resultState.result,
+    resultPatched: input.resultState.resultPatched,
   });
 }
 
-export function appendOperationDisposers(
+export function appendOperationDisposersSync(
   cell: GraphNodeCell,
   operationDisposers: ReadonlyArray<Disposer>
-): Effect.Effect<void> {
-  return operationDisposers.length === 0
-    ? Effect.void
-    : cell.state.transition((latest) => [
-        undefined,
-        appendReadyDisposersState({ latest, operationDisposers }),
-      ]);
+): void {
+  if (operationDisposers.length === 0) return;
+  cell.state.updateSync((latest) => {
+    appendReadyDisposersState({ latest, operationDisposers });
+  });
 }

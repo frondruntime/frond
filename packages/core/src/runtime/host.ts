@@ -1,12 +1,27 @@
-import { Clock, Deferred, Effect, Match } from "effect";
-import type { NodeId } from "../graph";
+import { type Context, Effect, Exit } from "effect";
 import { withGraphSignalAccess } from "../graph/config";
+import {
+  finishObserverWork,
+  interruptObserverWork,
+  runEffectEdge,
+} from "../graph/driverExecution/effectRunner";
+import {
+  callbackEffect,
+  type GraphCancel,
+  GraphReply,
+  type GraphResume,
+  noCancel,
+} from "../graph/queue/reply";
 import { makeInMemoryGraphSystemFromConfig } from "../graph/system";
-import type { EvictSubgraphRequest } from "../graph/types/operations";
 import { canonicalArgs } from "../keys";
+import { attachRuntimeCore, type RuntimeCore } from "./core";
 import { FrondRuntimeClosed } from "./errors";
 import { makeRuntimeEventBus } from "./eventBus";
-import { type RuntimeGraphCommand, runRuntimeGraphCommand } from "./graphCommands";
+import {
+  graphCommandSpanAttributes,
+  graphCommandSpanName,
+  runRuntimeGraphCommand,
+} from "./graphCommands";
 import { runtimeCommandAttributes, runtimeCommandSpanName, withRuntimeSpan } from "./observability";
 import {
   makeRuntimeOperationStartRegistry,
@@ -16,18 +31,15 @@ import { normalizeRuntimeOptions } from "./options";
 import { makeRuntimeSignalBus } from "./signalBus";
 import type {
   RuntimeCommand,
-  RuntimeControl,
+  RuntimeError,
   RuntimeEvent,
   RuntimeHostService,
-  RuntimeInput,
   RuntimeOptions,
-  RuntimeQuery,
   RuntimeQueryResult,
-  RuntimeSnapshot,
   RuntimeStatus,
   RuntimeSubmission,
 } from "./types";
-import { makeRuntimeWorkFactory, type RuntimeWorkDefaults } from "./work";
+import { makeRuntimeWorkFactory, type RuntimeWorkContext, type RuntimeWorkDefaults } from "./work";
 
 export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<RuntimeHostService> =>
   Effect.gen(function* () {
@@ -37,104 +49,107 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
     const workFactory = makeRuntimeWorkFactory(runtimeId);
     const eventBus = makeRuntimeEventBus({
       ...config.eventBus,
+      syncClock,
       fallbackWork: () => workFactory.defaultWork,
     });
     const signalBus = makeRuntimeSignalBus({
       runtimeId,
+      syncClock,
       eventBus,
       policies: config.signalBus.policies,
       subscribers: config.signalBus.subscribers,
     });
     const operationStarts = makeRuntimeOperationStartRegistry();
-    const graphSystem = makeInMemoryGraphSystemFromConfig(
+    const { service: graphSystem, core: graphCore } = makeInMemoryGraphSystemFromConfig(
       withGraphSignalAccess(config.graphConfig, signalBus)
     );
-    const graphOperationStartSubscription = yield* graphSystem.observeOperationStarts((started) =>
-      Effect.sync(() =>
-        operationStarts.recordStarted(started, (reason) =>
-          workFactory.nextWork(
-            undefined,
-            workDefaults(
-              "node",
-              reason,
-              reason === "refresh" || reason === "live" ? "background" : "visible"
-            )
+    const graphOperationStartSubscription = yield* graphSystem.observeOperationStarts((started) => {
+      const { event, work } = operationStarts.recordStarted(started, (reason) =>
+        workFactory.nextWork(
+          undefined,
+          workDefaults(
+            "node",
+            reason,
+            reason === "refresh" || reason === "live" ? "background" : "visible"
           )
         )
-      ).pipe(Effect.flatMap(({ event, work }) => eventBus.emit(event, work)))
-    );
+      );
+      return eventBus.emit(event, work);
+    });
     const graphActionCompletionSubscription = yield* graphSystem.observeActionCompletions(
-      (completed) =>
-        Effect.sync(() =>
-          operationStarts.recordActionCompleted(completed, () =>
-            workFactory.nextWork(undefined, workDefaults("node", "action", "visible"))
-          )
-        ).pipe(Effect.flatMap(({ event, work }) => eventBus.emit(event, work)))
+      (completed) => {
+        const { event, work } = operationStarts.recordActionCompleted(completed, () =>
+          workFactory.nextWork(undefined, workDefaults("node", "action", "visible"))
+        );
+        return eventBus.emit(event, work);
+      }
     );
     const graphObserverFailureSubscription = yield* graphSystem.observeObserverFailures((failure) =>
-      Effect.gen(function* () {
-        const at = yield* Clock.currentTimeMillis;
-        yield* eventBus.emit({
-          _tag: "RuntimeObserverFailureObserved",
-          eventTag: runtimeEventTagForGraphObserverChannel(failure),
-          cause: failure.cause,
-          at,
-        });
+      eventBus.emit({
+        _tag: "RuntimeObserverFailureObserved",
+        eventTag: runtimeEventTagForGraphObserverChannel(failure),
+        cause: failure.cause,
+        at: syncClock.now(),
       })
     );
     const graphNodeChangeSubscription = yield* graphSystem.observeNodeChanges((nodeId) =>
-      Effect.gen(function* () {
-        const at = yield* Clock.currentTimeMillis;
-        yield* eventBus.emit({ _tag: "GraphNodeChanged", nodeId, at });
-      })
+      eventBus.emit({ _tag: "GraphNodeChanged", nodeId, at: syncClock.now() })
     );
     const graphResultValiditySubscription = yield* graphSystem.observeResultValidityChanges(
       (nodeId, previous, next, reason) =>
-        Effect.gen(function* () {
-          const at = yield* Clock.currentTimeMillis;
-          yield* eventBus.emit({
-            _tag: "GraphNodeResultValidityChanged",
-            nodeId,
-            previous,
-            next,
-            reason,
-            at,
-          });
+        eventBus.emit({
+          _tag: "GraphNodeResultValidityChanged",
+          nodeId,
+          previous,
+          next,
+          reason,
+          at: syncClock.now(),
         })
     );
     const graphLiveDemandSubscription = yield* graphSystem.observeLiveDemandChanges(
       (nodeId, liveDemand) =>
-        Effect.gen(function* () {
-          const at = yield* Clock.currentTimeMillis;
-          yield* eventBus.emit({ _tag: "GraphNodeLiveDemandChanged", nodeId, liveDemand, at });
+        eventBus.emit({
+          _tag: "GraphNodeLiveDemandChanged",
+          nodeId,
+          liveDemand,
+          at: syncClock.now(),
         })
     );
     const graphLiveFailureSubscription = yield* graphSystem.observeLiveFailures(
       (nodeId, failures) =>
-        Effect.gen(function* () {
-          const at = yield* Clock.currentTimeMillis;
-          yield* eventBus.emit({ _tag: "GraphNodeLiveFailed", nodeId, failures, at });
-        })
+        eventBus.emit({ _tag: "GraphNodeLiveFailed", nodeId, failures, at: syncClock.now() })
     );
     const graphReadinessFailureSubscription = yield* graphSystem.observeReadinessFailures(
       (nodeId, error) =>
-        Effect.gen(function* () {
-          const at = yield* Clock.currentTimeMillis;
-          yield* eventBus.emit({ _tag: "GraphNodeReadinessFailed", nodeId, error, at });
-        })
+        eventBus.emit({ _tag: "GraphNodeReadinessFailed", nodeId, error, at: syncClock.now() })
     );
     const graphCleanupFailureSubscription = yield* graphSystem.observeCleanupFailures(
       (nodeId, reason, failures) =>
-        Effect.gen(function* () {
-          const at = yield* Clock.currentTimeMillis;
-          yield* eventBus.emit({ _tag: "GraphNodeCleanupFailed", nodeId, reason, failures, at });
+        eventBus.emit({
+          _tag: "GraphNodeCleanupFailed",
+          nodeId,
+          reason,
+          failures,
+          at: syncClock.now(),
         })
     );
 
-    let status: RuntimeStatus = "idle";
+    const graphSubscriptions = [
+      graphOperationStartSubscription,
+      graphActionCompletionSubscription,
+      graphObserverFailureSubscription,
+      graphNodeChangeSubscription,
+      graphResultValiditySubscription,
+      graphLiveDemandSubscription,
+      graphLiveFailureSubscription,
+      graphReadinessFailureSubscription,
+      graphCleanupFailureSubscription,
+    ];
+    let lifecycle: HostLifecycle = idleLifecycle;
+    // Set once the stop sweeps observer work: a sink started after that would
+    // outlive the stop, so a late diagnostic is dropped instead.
+    let observerWorkSwept = false;
     let inputIngestionEnabled = config.inputIngestionEnabled;
-    let graphSubscriptionsClosed = false;
-    let stopDeferred: Deferred.Deferred<RuntimeSubmission> | undefined;
 
     const resolveNodeIdSync: RuntimeHostService["resolveNodeIdSync"] = (request) => {
       canonicalArgs(request.args);
@@ -142,7 +157,7 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
       return graphSystem.resolveNodeIdSync(request);
     };
 
-    const getStatusSync: RuntimeHostService["getStatusSync"] = () => status;
+    const getStatusSync: RuntimeHostService["getStatusSync"] = () => lifecycle.status;
     const syncProjectionContext = () => ({ now: syncClock.now() });
     const readNodeSnapshotSync: RuntimeHostService["readNodeSnapshotSync"] = (nodeId) =>
       graphSystem.readNodeSnapshotSync(nodeId, syncProjectionContext());
@@ -151,330 +166,353 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
     const readPendingOperationsSync: RuntimeHostService["readPendingOperationsSync"] = () =>
       graphSystem.readPendingOperationsSync();
     const readNodeSnapshot: RuntimeHostService["readNodeSnapshot"] = (nodeId) =>
-      Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis;
-        return yield* graphSystem.readNodeSnapshot(nodeId, { now });
-      });
-    // Contract: stopped runtime is terminal for work-producing commands, but
-    // read/inspection APIs remain available for final state and diagnostics.
-    const admitRuntimeOpen = (operation: string): Effect.Effect<void, FrondRuntimeClosed> =>
-      status === "stopped" ? Effect.fail(runtimeClosed(operation)) : Effect.void;
-    const admitRuntimeWork = <TValue, TError, TRequirements>(
-      operation: string,
-      run: () => Effect.Effect<TValue, TError, TRequirements>
-    ): Effect.Effect<TValue, TError | FrondRuntimeClosed, TRequirements> =>
-      admitRuntimeOpen(operation).pipe(Effect.flatMap(() => Effect.suspend(run)));
-    const admitRuntimeCommand = (
-      command: RuntimeCommand
-    ): Effect.Effect<void, FrondRuntimeClosed> =>
-      command._tag === "RuntimeStop" ? Effect.void : admitRuntimeOpen(command._tag);
-
-    const submit = (command: Parameters<RuntimeHostService["submit"]>[0]) => {
+      Effect.sync(() => readNodeSnapshotSync(nodeId));
+    const submitDirect = (
+      command: RuntimeCommand,
+      context: Context.Context<never> | undefined,
+      resume: GraphResume<RuntimeSubmission, RuntimeError>,
+      suppliedWork?: RuntimeWorkContext
+    ): GraphCancel => {
+      const work =
+        suppliedWork ?? workFactory.nextWork(command.metadata, commandWorkDefaults(command));
+      const emit = (event: RuntimeEvent) => eventBus.emit(event, work);
+      if (lifecycle.status === "stopped" && command._tag !== "RuntimeStop") {
+        resume(Exit.fail(runtimeClosed(command._tag)));
+        return noCancel;
+      }
+      switch (command._tag) {
+        case "RuntimeStart": {
+          if (lifecycle.status === "running") {
+            resume(Exit.succeed({ _tag: "RuntimeStarted" }));
+            return noCancel;
+          }
+          lifecycle = runningLifecycle;
+          const at = syncClock.now();
+          return graphCore.start(context, (exit) => {
+            if (exit._tag === "Failure") {
+              resume(Exit.failCause(exit.cause));
+              return;
+            }
+            finishObserverWork(
+              emit({ _tag: "RuntimeStarted", at }),
+              context,
+              () => {
+                finishObserverWork(
+                  emit({ _tag: "GraphSystemStarted", at }),
+                  context,
+                  () => resume(Exit.succeed({ _tag: "RuntimeStarted" })),
+                  graphCore.jobs
+                );
+              },
+              graphCore.jobs
+            );
+          });
+        }
+        case "RuntimeStop": {
+          if (lifecycle.status === "stopped") return lifecycle.stopReply.listen(resume);
+          const reply = new GraphReply<RuntimeSubmission, RuntimeError>();
+          lifecycle = { status: "stopped", stopReply: reply };
+          const at = syncClock.now();
+          graphCore.stop(context, (exit) => {
+            if (exit._tag === "Failure") {
+              reply.settle(Exit.failCause(exit.cause));
+              return;
+            }
+            const results = exit.value;
+            // Sinks still running for work the stop interrupted end before the
+            // stop's own events, which run after them. From the sweep on, every
+            // other event reaches its listeners and starts no sink.
+            observerWorkSwept = true;
+            eventBus.closeSinks();
+            interruptObserverWork(graphCore.jobs, () => {
+              for (const subscription of graphSubscriptions) subscription.unsubscribe();
+              let index = 0;
+              const emitCleanup = (): void => {
+                while (index < results.length) {
+                  const result = results[index++];
+                  if (result === undefined || result.failures.length === 0) continue;
+                  finishObserverWork(
+                    eventBus.emitClosing(
+                      {
+                        _tag: "GraphNodeCleanupFailed",
+                        nodeId: result.nodeId,
+                        reason: "runtime-stop",
+                        failures: result.failures,
+                        at,
+                      },
+                      work
+                    ),
+                    context,
+                    emitCleanup,
+                    graphCore.jobs
+                  );
+                  return;
+                }
+                finishObserverWork(
+                  eventBus.emitClosing({ _tag: "GraphSystemStopped", at }, work),
+                  context,
+                  () => {
+                    finishObserverWork(
+                      eventBus.emitClosing(
+                        { _tag: "RuntimeStopped", at, reason: command.reason },
+                        work
+                      ),
+                      context,
+                      () => reply.settle(Exit.succeed({ _tag: "RuntimeStopped" })),
+                      graphCore.jobs
+                    );
+                  },
+                  graphCore.jobs
+                );
+              };
+              emitCleanup();
+            });
+          });
+          return reply.listen(resume);
+        }
+        default:
+          return runRuntimeGraphCommand(
+            {
+              command,
+              graphSystem,
+              graphCore,
+              syncClock,
+              work,
+              emit,
+              syncProjectionContext,
+              operationStarts,
+            },
+            context,
+            resume
+          );
+      }
+    };
+    const submit: RuntimeHostService["submit"] = (command) => {
       const work = workFactory.nextWork(command.metadata, commandWorkDefaults(command));
-      const emit = (event: RuntimeEvent): Effect.Effect<void> => eventBus.emit(event, work);
-      const runGraphCommand = (graphCommand: RuntimeGraphCommand) =>
-        runRuntimeGraphCommand({
-          command: graphCommand,
-          graphSystem,
-          runtimeId,
-          work,
-          emit,
-          syncProjectionContext,
-          operationStarts,
-        });
-      const commandEffect = Effect.gen(function* () {
-        yield* admitRuntimeCommand(command);
-
-        return yield* Match.value(command).pipe(
-          Match.tag("RuntimeStart", () =>
-            Effect.gen(function* () {
-              const at = yield* Clock.currentTimeMillis;
-
-              if (status === "running") {
-                return { _tag: "RuntimeStarted" } satisfies RuntimeSubmission;
-              }
-
-              status = "running";
-              yield* graphSystem.start();
-              yield* emit({ _tag: "RuntimeStarted", at });
-              yield* emit({ _tag: "GraphSystemStarted", at });
-              return { _tag: "RuntimeStarted" } satisfies RuntimeSubmission;
-            })
-          ),
-          Match.tag("RuntimeStop", ({ reason }) => stopRuntime(reason, emit)),
-          Match.tag("GraphEnsureNode", runGraphCommand),
-          Match.tag("GraphEnsureReadyNode", runGraphCommand),
-          Match.tag("GraphEnsureReadyNodeById", runGraphCommand),
-          Match.tag("GraphRunAction", runGraphCommand),
-          Match.tag("GraphRefreshNode", runGraphCommand),
-          Match.tag("GraphUpdateNodeArgs", runGraphCommand),
-          Match.tag("GraphUnsafeUpdateNode", runGraphCommand),
-          Match.tag("GraphReleaseNode", runGraphCommand),
-          Match.tag("GraphEvictSubgraph", runGraphCommand),
-          Match.tag("GraphAcquireNodeLiveLease", runGraphCommand),
-          Match.tag("GraphReleaseNodeLiveLease", runGraphCommand),
-          Match.exhaustive
-        );
-      });
-
+      const effect = callbackEffect<RuntimeSubmission, RuntimeError>((context, resume) =>
+        submitDirect(command, context, resume, work)
+      );
+      const traced =
+        command._tag === "RuntimeStart" || command._tag === "RuntimeStop"
+          ? effect
+          : withRuntimeSpan(
+              effect,
+              graphCommandSpanName(command),
+              graphCommandSpanAttributes(runtimeId, command, work)
+            );
       return withRuntimeSpan(
-        commandEffect,
+        traced,
         runtimeCommandSpanName(command),
         runtimeCommandAttributes(runtimeId, command, work)
       );
     };
 
-    const control = (controlInput: RuntimeControl) =>
-      admitRuntimeWork(controlInput._tag, () => {
-        const work = workFactory.nextWork(controlInput.metadata, {
-          source: "manual",
-          reason: "input",
-          priority: "background",
-        });
-
-        return Match.value(controlInput).pipe(
-          Match.tag("SetInputIngestion", ({ enabled }) =>
-            Effect.gen(function* () {
-              const at = yield* Clock.currentTimeMillis;
-
-              inputIngestionEnabled = enabled;
-              yield* eventBus.emit({ _tag: "InputIngestionChanged", enabled, at }, work);
-            })
-          ),
-          Match.exhaustive
-        );
+    const jobs = graphCore.jobs;
+    const runOpen = (
+      operation: string,
+      run: () => void,
+      resume: GraphResume<void, RuntimeError>
+    ): GraphCancel => {
+      let canceled = false;
+      jobs.post({
+        run: () => {
+          if (canceled) return;
+          if (lifecycle.status === "stopped") {
+            resume(Exit.fail(runtimeClosed(operation)));
+            return;
+          }
+          try {
+            run();
+          } catch (cause) {
+            resume(Exit.die(cause));
+          }
+        },
       });
-
-    const query = (runtimeQuery: RuntimeQuery): Effect.Effect<RuntimeQueryResult> =>
-      Match.value(runtimeQuery).pipe(
-        Match.tag("RuntimeStatus", () =>
-          Effect.succeed({
-            _tag: "RuntimeStatus",
-            runtimeId,
-            status,
-            inputIngestionEnabled,
-          } satisfies RuntimeQueryResult)
-        ),
-        Match.tag("RuntimeEvents", ({ limit }) =>
-          Effect.sync(
-            () =>
-              ({
-                _tag: "RuntimeEvents",
-                runtimeId,
-                events: eventBus.events(limit),
-              }) satisfies RuntimeQueryResult
-          )
-        ),
-        Match.tag("RuntimeSinks", () =>
-          Effect.succeed({
-            _tag: "RuntimeSinks",
-            sinks: eventBus.sinks(),
-          } satisfies RuntimeQueryResult)
-        ),
-        Match.tag("RuntimeSignals", ({ channel, limit }) =>
-          Effect.gen(function* () {
-            const records = yield* signalBus.records({ channel, limit });
-
-            return {
-              _tag: "RuntimeSignals",
-              runtimeId,
-              records,
-            } satisfies RuntimeQueryResult;
-          })
-        ),
-        Match.tag("RuntimeSignalSubscribers", () =>
-          Effect.gen(function* () {
-            const subscribers = yield* signalBus.subscribers();
-
-            return {
-              _tag: "RuntimeSignalSubscribers",
-              subscribers,
-            } satisfies RuntimeQueryResult;
-          })
-        ),
-        Match.exhaustive
-      );
-
-    const ingest = (input: RuntimeInput) =>
-      admitRuntimeWork(input._tag, () => {
-        const work = workFactory.nextWork(input.metadata, {
-          source: "manual",
-          reason: "input",
-          priority: "visible",
-        });
-
-        return inputIngestionEnabled
-          ? Effect.gen(function* () {
-              const at = yield* Clock.currentTimeMillis;
-              yield* eventBus.emit({ _tag: "RuntimeInputReceived", input, at }, work);
-              yield* graphSystem.handleInput(input);
-              yield* eventBus.emit(
-                { _tag: "GraphSystemInputObserved", inputTag: input._tag, at },
+      return () => {
+        canceled = true;
+        return Effect.void;
+      };
+    };
+    const core: RuntimeCore = {
+      submit: submitDirect,
+      control: (control, context, resume) =>
+        runOpen(
+          control._tag,
+          () => {
+            const work = workFactory.nextWork(control.metadata, {
+              source: "manual",
+              reason: "input",
+              priority: "background",
+            });
+            inputIngestionEnabled = control.enabled;
+            finishObserverWork(
+              eventBus.emit(
+                { _tag: "InputIngestionChanged", enabled: control.enabled, at: syncClock.now() },
                 work
-              );
-            })
-          : Effect.void;
-      });
-
-    const publish: RuntimeHostService["publish"] = (signal, metadata) =>
-      admitRuntimeWork("RuntimeSignalPublish", () => {
+              ),
+              context,
+              () => resume(Exit.succeed(undefined)),
+              jobs
+            );
+          },
+          resume
+        ),
+      ingest: (input, context, resume) =>
+        runOpen(
+          input._tag,
+          () => {
+            const work = workFactory.nextWork(input.metadata, {
+              source: "manual",
+              reason: "input",
+              priority: "visible",
+            });
+            if (!inputIngestionEnabled) {
+              resume(Exit.succeed(undefined));
+              return;
+            }
+            const at = syncClock.now();
+            finishObserverWork(
+              eventBus.emit({ _tag: "RuntimeInputReceived", input, at }, work),
+              context,
+              () => {
+                graphCore.handleInputSync();
+                finishObserverWork(
+                  eventBus.emit(
+                    { _tag: "GraphSystemInputObserved", inputTag: input._tag, at },
+                    work
+                  ),
+                  context,
+                  () => resume(Exit.succeed(undefined)),
+                  jobs
+                );
+              },
+              jobs
+            );
+          },
+          resume
+        ),
+      publish: (signal, metadata, context, resume) => {
+        if (lifecycle.status === "stopped") {
+          resume(Exit.fail(runtimeClosed("RuntimeSignalPublish")));
+          return noCancel;
+        }
         const work = workFactory.nextWork(metadata, {
           source: "signal",
           reason: "signal",
           priority: "background",
         });
-
-        return signalBus.publish(signal, work);
-      });
-
-    const recordUnsafeScheduleFailure: RuntimeHostService["recordUnsafeScheduleFailure"] = (
-      command,
-      cause
-    ) =>
-      Effect.gen(function* () {
-        const at = yield* Clock.currentTimeMillis;
+        let cancelWork: GraphCancel = noCancel;
+        const cancelAdmission = runOpen(
+          "RuntimeSignalPublish",
+          () => {
+            cancelWork = runEffectEdge(signalBus.publish(signal, work), context, resume);
+          },
+          resume
+        );
+        return () => {
+          // Both cancels act when called; their Effects run in order.
+          const admissionCanceled = cancelAdmission();
+          return Effect.andThen(admissionCanceled, cancelWork());
+        };
+      },
+      recordUnsafeScheduleFailure: (command, cause, context, resume) => {
+        if (observerWorkSwept) {
+          resume(Exit.succeed(undefined));
+          return noCancel;
+        }
         const work = workFactory.nextWork(undefined, {
           source: "devtools",
           reason: "unsafe-update",
           priority: "background",
         });
-
-        yield* eventBus.emit(
-          {
-            _tag: "RuntimeObserverFailureObserved",
-            eventTag: command._tag,
-            cause,
-            at,
-          },
-          work
+        finishObserverWork(
+          eventBus.emit(
+            {
+              _tag: "RuntimeObserverFailureObserved",
+              eventTag: command._tag,
+              cause,
+              at: syncClock.now(),
+            },
+            work
+          ),
+          context,
+          () => resume(Exit.succeed(undefined)),
+          jobs
         );
-      });
-
-    const recordMobXProjectionFailure: RuntimeHostService["recordMobXProjectionFailure"] = (
-      nodeId,
-      cause
-    ) =>
-      Effect.gen(function* () {
-        const at = yield* Clock.currentTimeMillis;
+        return noCancel;
+      },
+      recordMobXProjectionFailure: (_nodeId, cause, context, resume) => {
+        if (observerWorkSwept) {
+          resume(Exit.succeed(undefined));
+          return noCancel;
+        }
         const work = workFactory.nextWork(undefined, {
           source: "mobx",
           reason: "input",
           priority: "visible",
         });
-
-        void nodeId;
-        yield* eventBus.emit(
-          {
-            _tag: "RuntimeObserverFailureObserved",
-            eventTag: "MobXProjectionSync",
-            cause,
-            at,
-          },
-          work
+        finishObserverWork(
+          eventBus.emit(
+            {
+              _tag: "RuntimeObserverFailureObserved",
+              eventTag: "MobXProjectionSync",
+              cause,
+              at: syncClock.now(),
+            },
+            work
+          ),
+          context,
+          () => resume(Exit.succeed(undefined)),
+          jobs
         );
-      });
-
-    const subscribeSignals: RuntimeHostService["subscribeSignals"] = (subscriber) =>
-      admitRuntimeWork("RuntimeSignalSubscribe", () => signalBus.subscribe(subscriber));
-
-    const getSnapshot = (): Effect.Effect<RuntimeSnapshot> =>
-      Effect.gen(function* () {
-        const graph = yield* graphSystem.snapshot();
-        const signals = yield* signalBus.records();
-        const signalSubscribers = yield* signalBus.subscribers();
-
-        return {
-          runtimeId,
-          status,
-          inputIngestionEnabled,
-          events: eventBus.events(),
-          sinks: eventBus.sinks(),
-          signals,
-          signalSubscribers,
-          graph,
-        };
-      });
-
-    const observe: RuntimeHostService["observe"] = (observer) => eventBus.observe(observer);
-
-    function closeGraphSubscriptions(): void {
-      if (graphSubscriptionsClosed) {
-        return;
-      }
-
-      graphSubscriptionsClosed = true;
-      graphOperationStartSubscription.unsubscribe();
-      graphActionCompletionSubscription.unsubscribe();
-      graphObserverFailureSubscription.unsubscribe();
-      graphNodeChangeSubscription.unsubscribe();
-      graphResultValiditySubscription.unsubscribe();
-      graphLiveDemandSubscription.unsubscribe();
-      graphLiveFailureSubscription.unsubscribe();
-      graphReadinessFailureSubscription.unsubscribe();
-      graphCleanupFailureSubscription.unsubscribe();
-    }
-
-    function stopRuntime(
-      reason: string | undefined,
-      emit: (event: RuntimeEvent) => Effect.Effect<void>
-    ): Effect.Effect<RuntimeSubmission> {
-      return Effect.suspend(() => {
-        // Contract: stop is idempotent and shared. The first call owns cleanup
-        // and event emission; concurrent and later callers await the same settled
-        // result instead of acknowledging success while cleanup is still running.
-        if (stopDeferred !== undefined) {
-          return Deferred.await(stopDeferred);
+        return noCancel;
+      },
+      querySync: (query): RuntimeQueryResult => {
+        switch (query._tag) {
+          case "RuntimeStatus":
+            return {
+              _tag: "RuntimeStatus",
+              runtimeId,
+              status: lifecycle.status,
+              inputIngestionEnabled,
+            };
+          case "RuntimeEvents":
+            return { _tag: "RuntimeEvents", runtimeId, events: eventBus.events(query.limit) };
+          case "RuntimeSinks":
+            return { _tag: "RuntimeSinks", sinks: eventBus.sinks() };
+          case "RuntimeSignals":
+            return {
+              _tag: "RuntimeSignals",
+              runtimeId,
+              records: signalBus.recordsSync({ channel: query.channel, limit: query.limit }),
+            };
+          case "RuntimeSignalSubscribers":
+            return { _tag: "RuntimeSignalSubscribers", subscribers: signalBus.subscribersSync() };
+          default: {
+            const exhaustive: never = query;
+            return exhaustive;
+          }
         }
-
-        const deferred = Deferred.makeUnsafe<RuntimeSubmission, never>();
-        stopDeferred = deferred;
-        const owner = runStopRuntime(reason, emit).pipe(
-          Effect.exit,
-          Effect.flatMap((exit) => Deferred.done(deferred, exit)),
-          Effect.uninterruptible
-        );
-
-        return owner.pipe(
-          Effect.forkDetach({ startImmediately: true }),
-          Effect.flatMap(() => Deferred.await(deferred))
-        );
-      });
-    }
-
-    function runStopRuntime(
-      reason: string | undefined,
-      emit: (event: RuntimeEvent) => Effect.Effect<void>
-    ): Effect.Effect<RuntimeSubmission> {
-      return Effect.gen(function* () {
-        const at = yield* Clock.currentTimeMillis;
-
-        status = "stopped";
-        const cleanupResults = yield* graphSystem.stop();
-        closeGraphSubscriptions();
-        // Contract: cleanup failures are emitted before GraphSystemStopped and
-        // RuntimeStopped so sinks can report resource failures while runtime
-        // context is still intact.
-        yield* Effect.forEach(
-          cleanupResults,
-          (result) =>
-            result.failures.length === 0
-              ? Effect.void
-              : emit({
-                  _tag: "GraphNodeCleanupFailed",
-                  nodeId: result.nodeId,
-                  reason: "runtime-stop",
-                  failures: result.failures,
-                  at,
-                }),
-          { concurrency: 1, discard: true }
-        );
-        yield* emit({ _tag: "GraphSystemStopped", at });
-        yield* emit({ _tag: "RuntimeStopped", at, reason });
-        return { _tag: "RuntimeStopped" } satisfies RuntimeSubmission;
-      });
-    }
-
-    return {
+      },
+      getSnapshotSync: () => ({
+        runtimeId,
+        status: lifecycle.status,
+        inputIngestionEnabled,
+        events: eventBus.events(),
+        sinks: eventBus.sinks(),
+        signals: signalBus.recordsSync(),
+        signalSubscribers: signalBus.subscribersSync(),
+        graph: graphCore.snapshotSync(),
+      }),
+      subscribeSignalsSync: (subscriber) => {
+        if (lifecycle.status === "stopped") throw runtimeClosed("RuntimeSignalSubscribe");
+        return signalBus.subscribeSync(subscriber);
+      },
+      observeSync: eventBus.observeSync,
+      resolveValidatedNodeIdSync: graphSystem.resolveNodeIdSync,
+      hasPendingJobsSync: graphCore.jobs.hasPendingJobs,
+    };
+    const host: RuntimeHostService = {
       resolveNodeIdSync,
       getStatusSync,
       readNodeSnapshotSync,
@@ -482,39 +520,81 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
       readPendingOperationsSync,
       readNodeSnapshot,
       submit,
-      control,
-      query,
-      ingest,
-      publish,
-      subscribeSignals,
-      recordUnsafeScheduleFailure,
-      recordMobXProjectionFailure,
-      getSnapshot,
-      observe,
+      control: (command) =>
+        callbackEffect((context, resume) => core.control(command, context, resume)),
+      query: (query) => Effect.sync(() => core.querySync(query)),
+      ingest: (input) => callbackEffect((context, resume) => core.ingest(input, context, resume)),
+      publish: (signal, metadata) =>
+        callbackEffect((context, resume) => core.publish(signal, metadata, context, resume)),
+      subscribeSignals: (subscriber) =>
+        Effect.try({
+          try: () => core.subscribeSignalsSync(subscriber),
+          catch: (cause) => cause as RuntimeError,
+        }),
+      recordUnsafeScheduleFailure: (command, cause) =>
+        callbackEffect((context, resume) =>
+          core.recordUnsafeScheduleFailure(command, cause, context, resume)
+        ),
+      recordMobXProjectionFailure: (nodeId, cause) =>
+        callbackEffect((context, resume) =>
+          core.recordMobXProjectionFailure(nodeId, cause, context, resume)
+        ),
+      getSnapshot: () => Effect.sync(core.getSnapshotSync),
+      observe: (observer, nodeId) => Effect.sync(() => core.observeSync(observer, nodeId)),
     };
+    attachRuntimeCore(host, core);
+    return host;
   });
+
+/**
+ * A host is idle until started, and stopped is terminal: it holds the first
+ * stop's reply, which every later stop caller awaits.
+ */
+type HostLifecycle =
+  | { readonly status: Exclude<RuntimeStatus, "stopped"> }
+  | {
+      readonly status: "stopped";
+      readonly stopReply: GraphReply<RuntimeSubmission, RuntimeError>;
+    };
+
+const idleLifecycle: HostLifecycle = { status: "idle" };
+const runningLifecycle: HostLifecycle = { status: "running" };
 
 function runtimeClosed(operation: string): FrondRuntimeClosed {
   return new FrondRuntimeClosed({ operation });
 }
 
 function commandWorkDefaults(command: RuntimeCommand): RuntimeWorkDefaults {
-  return Match.value(command).pipe(
-    Match.tag("RuntimeStart", () => workDefaults("runtime", "start", "background")),
-    Match.tag("RuntimeStop", () => workDefaults("runtime", "stop", "blocking")),
-    Match.tag("GraphEnsureNode", () => workDefaults("manual", "readiness", "visible")),
-    Match.tag("GraphEnsureReadyNode", () => workDefaults("manual", "readiness", "visible")),
-    Match.tag("GraphEnsureReadyNodeById", () => workDefaults("devtools", "readiness", "visible")),
-    Match.tag("GraphRunAction", () => workDefaults("manual", "action", "visible")),
-    Match.tag("GraphRefreshNode", () => workDefaults("manual", "refresh", "background")),
-    Match.tag("GraphUpdateNodeArgs", () => workDefaults("manual", "args-update", "visible")),
-    Match.tag("GraphUnsafeUpdateNode", () => workDefaults("devtools", "unsafe-update", "visible")),
-    Match.tag("GraphReleaseNode", () => workDefaults("manual", "release", "background")),
-    Match.tag("GraphEvictSubgraph", () => workDefaults("manual", "eviction", "blocking")),
-    Match.tag("GraphAcquireNodeLiveLease", () => workDefaults("manual", "live", "background")),
-    Match.tag("GraphReleaseNodeLiveLease", () => workDefaults("manual", "live", "background")),
-    Match.exhaustive
-  );
+  switch (command._tag) {
+    case "RuntimeStart":
+      return workDefaults("runtime", "start", "background");
+    case "RuntimeStop":
+      return workDefaults("runtime", "stop", "blocking");
+    case "GraphEnsureNode":
+    case "GraphEnsureReadyNode":
+      return workDefaults("manual", "readiness", "visible");
+    case "GraphEnsureReadyNodeById":
+      return workDefaults("devtools", "readiness", "visible");
+    case "GraphRunAction":
+      return workDefaults("manual", "action", "visible");
+    case "GraphRefreshNode":
+      return workDefaults("manual", "refresh", "background");
+    case "GraphUpdateNodeArgs":
+      return workDefaults("manual", "args-update", "visible");
+    case "GraphUnsafeUpdateNode":
+      return workDefaults("devtools", "unsafe-update", "visible");
+    case "GraphReleaseNode":
+      return workDefaults("manual", "release", "background");
+    case "GraphEvictSubgraph":
+      return workDefaults("manual", "eviction", "blocking");
+    case "GraphAcquireNodeLiveLease":
+    case "GraphReleaseNodeLiveLease":
+      return workDefaults("manual", "live", "background");
+    default: {
+      const unreachable: never = command;
+      return unreachable;
+    }
+  }
 }
 
 function workDefaults(
@@ -523,12 +603,4 @@ function workDefaults(
   priority: RuntimeWorkDefaults["priority"]
 ): RuntimeWorkDefaults {
   return { source, reason, priority };
-}
-
-export function evictNodeRequest(
-  nodeId: NodeId,
-  mode: EvictSubgraphRequest["mode"],
-  reason?: string | undefined
-): EvictSubgraphRequest {
-  return { rootNodeIds: [nodeId], mode, cancellation: { _tag: "Evicted", detail: reason }, reason };
 }

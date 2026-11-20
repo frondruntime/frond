@@ -16,6 +16,7 @@ import type {
   ResolvedDeps,
 } from "@frondruntime/core";
 import { projectError } from "../diagnostics";
+import { runtimeCore } from "../runtime/core";
 import { type CapturingRuntimeSink, createTestRuntime, type TestRuntimeOptions } from "./runtime";
 
 export interface FrondTestHarnessOptions extends TestRuntimeOptions {
@@ -469,8 +470,16 @@ async function waitForIdle(
   // Each poll projects a full system snapshot, so don't poll faster than a small
   // floor even when the configured event-wait interval is tighter.
   const intervalMs = Math.max(options.intervalMs, 5);
+  const core = runtimeCore(runtime);
 
   while (performance.now() - startedAt <= options.timeoutMs) {
+    // A call made without await posts a graph job that the node does not show
+    // until the job runs. The drain is a promise reaction, so one awaited
+    // reaction lets it run, with no timer for fake timers to hold.
+    if (core?.hasPendingJobsSync() === true) {
+      await Promise.resolve();
+      continue;
+    }
     const snapshot = await runtime.getSnapshot();
     const busyNode = snapshot.graph.nodes.find(
       (node) =>

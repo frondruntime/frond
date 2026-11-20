@@ -44,6 +44,16 @@ export function tag(value: string): NodeTag {
  * work, or read mutable app state here; planning may evaluate this before
  * readiness begins.
  *
+ * The resolver must be a pure function of `args`: the same args always yield
+ * the same dependency specs and args. Once a node is wired, re-planning it
+ * with the same key reuses the recorded dependencies without calling the
+ * resolver again, so a resolver that reads time, globals, or a mutable closure
+ * keeps whatever it returned first, until a later full re-plan (for example
+ * after any eviction) runs it again. Where `process.env.NODE_ENV` is not "production" at
+ * runtime, re-planning re-checks the requested node's dependencies, not its
+ * internal ones, and invalidates it on a mismatch; the check is off when
+ * `process` is absent.
+ *
  * Idempotent: an already-branded resolver — including one read back from
  * `descriptor.dependencies` — passes through unchanged.
  */

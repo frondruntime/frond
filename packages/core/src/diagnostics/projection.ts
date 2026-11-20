@@ -1,4 +1,3 @@
-import { Match } from "effect";
 import { isSourceFailure } from "../graph/readiness/sourceFailures";
 import { isKeyError } from "../keys";
 import { safeGet, safeMessage, safeString } from "./safe";
@@ -434,16 +433,29 @@ function projectionKindFrom(
 }
 
 function projectionKind(frames: ReadonlyArray<SerializedCauseFrame>): FrondErrorProjectionKind {
-  return Match.value(projectionKindSignal(frames)).pipe(
-    Match.tag("RuntimeReadWrapper", ({ kind }) => kind),
-    Match.tag("RuntimeUnavailable", () => "runtime" as const),
-    Match.tag("InvalidGraph", () => "invalid" as const),
-    Match.tag("OperationFailure", () => "operation" as const),
-    Match.tag("LiveFailure", () => "live" as const),
-    Match.tag("ReadinessFailure", () => "readiness" as const),
-    Match.tag("Unexpected", () => "unexpected" as const),
-    Match.exhaustive
-  );
+  const signal = projectionKindSignal(frames);
+  switch (signal._tag) {
+    case "RuntimeReadWrapper": {
+      const { kind } = signal;
+      return kind;
+    }
+    case "RuntimeUnavailable":
+      return "runtime";
+    case "InvalidGraph":
+      return "invalid";
+    case "OperationFailure":
+      return "operation";
+    case "LiveFailure":
+      return "live";
+    case "ReadinessFailure":
+      return "readiness";
+    case "Unexpected":
+      return "unexpected";
+    default: {
+      const unreachable: never = signal;
+      return unreachable;
+    }
+  }
 }
 
 function projectionKindSignal(frames: ReadonlyArray<SerializedCauseFrame>): ProjectionKindSignal {
@@ -488,33 +500,36 @@ function projectionHeadline(input: {
   const terminalTag = input.terminal?.frame.tag;
   const terminalIsKeyError = input.terminal !== undefined && isKeyErrorFrame(input.terminal.frame);
 
-  return Match.value({ kind: input.kind, raw: input.raw }).pipe(
-    Match.when(
-      () => terminalTag === "CycleDetected",
-      () => "Dependency cycle detected"
-    ),
-    Match.when(
-      () => terminalIsKeyError,
-      () => "Invalid node key"
-    ),
-    Match.when(
-      ({ kind }) => kind === "readiness" && terminalTag?.startsWith("Key") === true,
-      () => `Readiness failed: ${input.causeType}`
-    ),
-    Match.when({ kind: "runtime" }, () => "Runtime unavailable"),
-    Match.when({ kind: "readiness" }, () => "Readiness failed"),
-    Match.when({ kind: "operation" }, () => "Operation failed"),
-    Match.when({ kind: "live" }, () => "Live work failed"),
-    Match.when(
-      ({ raw }) => raw instanceof Error,
-      ({ raw }) => `Unexpected error: ${raw instanceof Error ? raw.name : "Error"}`
-    ),
-    Match.when(
-      ({ raw }) => typeof raw === "object" && raw !== null,
-      () => "Unexpected thrown object"
-    ),
-    Match.orElse(() => "Unexpected thrown value")
-  );
+  const { kind, raw } = input;
+
+  if (terminalTag === "CycleDetected") {
+    return "Dependency cycle detected";
+  }
+  if (terminalIsKeyError) {
+    return "Invalid node key";
+  }
+  if (kind === "readiness" && terminalTag?.startsWith("Key") === true) {
+    return `Readiness failed: ${input.causeType}`;
+  }
+  if (kind === "runtime") {
+    return "Runtime unavailable";
+  }
+  if (kind === "readiness") {
+    return "Readiness failed";
+  }
+  if (kind === "operation") {
+    return "Operation failed";
+  }
+  if (kind === "live") {
+    return "Live work failed";
+  }
+  if (raw instanceof Error) {
+    return `Unexpected error: ${raw instanceof Error ? raw.name : "Error"}`;
+  }
+  if (typeof raw === "object" && raw !== null) {
+    return "Unexpected thrown object";
+  }
+  return "Unexpected thrown value";
 }
 
 function projectionSummary(input: {

@@ -1,4 +1,3 @@
-import { Match } from "effect";
 import type { NodeId, NodeRead } from "../graph";
 import { idleOperation } from "../graph/operations/nodeOperation";
 import { FrondRuntimeUnavailable } from "./errors";
@@ -59,27 +58,30 @@ export function readRawNode<TResult, TNode extends object = object>(
 
   const nodeSnapshot = nodeSnapshotLookup.snapshot;
 
-  return Match.value(nodeSnapshot).pipe(
-    Match.tag(
-      "Unwired",
-      (snapshot) =>
-        ({ _tag: "Unwired", nodeId, tag: snapshot.tag }) satisfies RawRuntimeNodeRead<
-          TResult,
-          TNode
-        >
-    ),
-    Match.tag("Idle", (snapshot) => idleRuntimeNodeRead<TResult, TNode>(nodeId, snapshot)),
-    Match.tag("Pending", (snapshot) => pendingRuntimeNodeRead<TResult, TNode>(nodeId, snapshot)),
-    Match.tag("Ready", (snapshot) => readyRuntimeNodeRead<TResult, TNode>(nodeId, snapshot)),
-    Match.tag("ReadinessError", (snapshot) =>
-      errorRuntimeNodeRead<TResult, TNode>(nodeId, snapshot, snapshot.error)
-    ),
-    Match.tag("Releasing", (snapshot) => idleRuntimeNodeRead<TResult, TNode>(nodeId, snapshot)),
-    Match.tag("Invalid", (snapshot) =>
-      invalidRuntimeNodeRead<TResult, TNode>(nodeId, snapshot, snapshot.error)
-    ),
-    Match.exhaustive
-  );
+  switch (nodeSnapshot._tag) {
+    case "Unwired":
+      return {
+        _tag: "Unwired",
+        nodeId,
+        tag: nodeSnapshot.tag,
+      } satisfies RawRuntimeNodeRead<TResult, TNode>;
+    case "Idle":
+      return idleRuntimeNodeRead<TResult, TNode>(nodeId, nodeSnapshot);
+    case "Pending":
+      return pendingRuntimeNodeRead<TResult, TNode>(nodeId, nodeSnapshot);
+    case "Ready":
+      return readyRuntimeNodeRead<TResult, TNode>(nodeId, nodeSnapshot);
+    case "ReadinessError":
+      return errorRuntimeNodeRead<TResult, TNode>(nodeId, nodeSnapshot, nodeSnapshot.error);
+    case "Releasing":
+      return idleRuntimeNodeRead<TResult, TNode>(nodeId, nodeSnapshot);
+    case "Invalid":
+      return invalidRuntimeNodeRead<TResult, TNode>(nodeId, nodeSnapshot, nodeSnapshot.error);
+    default: {
+      const unreachable: never = nodeSnapshot;
+      return unreachable;
+    }
+  }
 }
 
 export function bootingRuntimeNodeRead<TResult, TNode extends object = object>(
@@ -93,24 +95,27 @@ export function bootingRuntimeNodeRead<TResult, TNode extends object = object>(
 function publicRuntimeNodeRead<TResult, TNode extends object>(
   read: RawRuntimeNodeRead<TResult, TNode>
 ): RuntimeNodeRead<TResult, TNode> {
-  return Match.value(read).pipe(
-    Match.tag("Unwired", (unwired) => unwired),
-    Match.tag("Idle", (idle) => idle),
-    Match.tag("Pending", (pending) => pending),
-    Match.tag(
-      "Booting",
-      ({ nodeId, tag, attempt, operation, busy, operationFailure }) =>
-        ({
-          _tag: "Pending",
-          nodeId,
-          tag,
-          attempt,
-          operation,
-          busy,
-          operationFailure,
-        }) satisfies RuntimeNodeRead<TResult, TNode>
-    ),
-    Match.tag("Ready", (ready) => {
+  switch (read._tag) {
+    case "Unwired":
+      return read;
+    case "Idle":
+      return read;
+    case "Pending":
+      return read;
+    case "Booting": {
+      const { nodeId, tag, attempt, operation, busy, operationFailure } = read;
+      return {
+        _tag: "Pending",
+        nodeId,
+        tag,
+        attempt,
+        operation,
+        busy,
+        operationFailure,
+      } satisfies RuntimeNodeRead<TResult, TNode>;
+    }
+    case "Ready": {
+      const ready = read;
       if (ready.resultValidity._tag === "Expired") {
         return {
           _tag: "Idle",
@@ -126,50 +131,53 @@ function publicRuntimeNodeRead<TResult, TNode extends object>(
         ...ready,
         resultValidity: ready.resultValidity,
       } satisfies RuntimeNodeRead<TResult, TNode>;
-    }),
-    Match.tag(
-      "Expired",
-      ({ nodeId, tag, operation, busy, operationFailure }) =>
-        ({
-          _tag: "Idle",
-          nodeId,
-          tag,
-          operation,
-          busy,
-          operationFailure,
-        }) satisfies RuntimeNodeRead<TResult, TNode>
-    ),
-    Match.tag("Error", (error) => ({ ...error, kind: "readiness" as const })),
-    Match.tag(
-      "Invalid",
-      ({ nodeId, tag, error, operation, busy, operationFailure }) =>
-        ({
-          _tag: "Error",
-          nodeId,
-          tag,
-          kind: "invalid" as const,
-          error,
-          operation,
-          busy,
-          operationFailure,
-        }) satisfies RuntimeNodeRead<TResult, TNode>
-    ),
-    Match.tag(
-      "Unavailable",
-      ({ nodeId, tag, error, operation, busy, operationFailure }) =>
-        ({
-          _tag: "Error",
-          nodeId,
-          tag,
-          kind: "runtime" as const,
-          error,
-          operation,
-          busy,
-          operationFailure,
-        }) satisfies RuntimeNodeRead<TResult, TNode>
-    ),
-    Match.exhaustive
-  );
+    }
+    case "Expired": {
+      const { nodeId, tag, operation, busy, operationFailure } = read;
+      return {
+        _tag: "Idle",
+        nodeId,
+        tag,
+        operation,
+        busy,
+        operationFailure,
+      } satisfies RuntimeNodeRead<TResult, TNode>;
+    }
+    case "Error": {
+      const error = read;
+      return { ...error, kind: "readiness" as const };
+    }
+    case "Invalid": {
+      const { nodeId, tag, error, operation, busy, operationFailure } = read;
+      return {
+        _tag: "Error",
+        nodeId,
+        tag,
+        kind: "invalid" as const,
+        error,
+        operation,
+        busy,
+        operationFailure,
+      } satisfies RuntimeNodeRead<TResult, TNode>;
+    }
+    case "Unavailable": {
+      const { nodeId, tag, error, operation, busy, operationFailure } = read;
+      return {
+        _tag: "Error",
+        nodeId,
+        tag,
+        kind: "runtime" as const,
+        error,
+        operation,
+        busy,
+        operationFailure,
+      } satisfies RuntimeNodeRead<TResult, TNode>;
+    }
+    default: {
+      const unreachable: never = read;
+      return unreachable;
+    }
+  }
 }
 
 function snapshotReadFields(snapshot: RuntimeNodeSnapshot<unknown>) {

@@ -11,7 +11,7 @@ import {
 import { makeGraphCellState } from "../cell/cellState";
 import { markInvalidState } from "../cell/cellTransitions";
 import { teardownReadyData } from "../lifecycle/cleanup";
-import { toNodeRead, unwiredNodeRead } from "../projection";
+import { projectNodeRead, unwiredNodeRead } from "../projection";
 import { normalizeResultValidityPolicy, staticResultValidityPolicy } from "../resultValidity";
 import {
   CycleDetected,
@@ -24,10 +24,12 @@ import {
 } from "../types";
 import {
   checkReplannedDependencies,
+  confirmWiredDependencies,
   planDependencyRequests,
   sameDependencyIds,
 } from "./dependencyDefinitions";
 import type { NodeDescriptor } from "./descriptor";
+import { developmentChecks } from "./developmentChecks";
 import {
   type KeyResolutionFailure,
   type ResolvedNodeIdentity,
@@ -37,10 +39,7 @@ import { type GraphOutcome, graphFailure, graphSuccess } from "./outcome";
 
 const EDGE_KEY_SEPARATOR = "\u0000";
 
-export function ensurePlannedNode(
-  state: GraphPlanState,
-  request: NodeRequest
-): Effect.Effect<NodeRead> {
+export function ensurePlannedNodeSync(state: GraphPlanState, request: NodeRequest): NodeRead {
   return planNode(state, request, []);
 }
 
@@ -94,6 +93,8 @@ function materializeCellIfFresh(
     state.specByTag.set(descriptor.tag, request.spec);
   }
   state.nodes.set(nodeId, {
+    jobs: state.jobs,
+    syncClock: state.syncClock,
     nodeId,
     tag: descriptor.tag,
     kind: descriptor.kind,
@@ -113,6 +114,7 @@ function materializeCellIfFresh(
     notifyActionCompleted: state.notifyActionCompleted,
     notifyResultValidityChanged: state.notifyResultValidityChanged,
     notifyReadinessFailed: state.notifyReadinessFailed,
+    wiredGeneration: 0,
   });
 }
 
@@ -120,69 +122,83 @@ function planNode(
   state: GraphPlanState,
   originalRequest: NodeRequest,
   visiting: ReadonlyArray<NodeId>
-): Effect.Effect<NodeRead> {
-  return Effect.gen(function* () {
-    const identity = resolveNodeIdentity(state, originalRequest);
-    const { descriptor, nodeId, keyResult, duplicateTag, request } = identity;
-    const existing = lookupGraphNodeCell(state, nodeId);
+): NodeRead {
+  const identity = resolveNodeIdentity(state, originalRequest);
+  const { descriptor, nodeId, keyResult, duplicateTag, request } = identity;
+  const existing = lookupGraphNodeCell(state, nodeId);
 
-    // Contract: re-planning a known identity with an invalid key/tag must mark
-    // the existing cell invalid and stop before dependency wiring mutates edges.
-    if (existing._tag === "Found" && (keyResult._tag === "Failure" || duplicateTag)) {
-      const failure =
-        keyResult._tag === "Failure"
-          ? keyResult.failure.failure
-          : new DuplicateNodeTag({
-              nodeId,
-              tag: descriptor.tag,
-            });
-      yield* markCellInvalid(state, existing.cell, failure);
-      return yield* toNodeRead(existing.cell);
+  // Contract: re-planning a known identity with an invalid key/tag must mark
+  // the existing cell invalid and stop before dependency wiring mutates edges.
+  if (existing._tag === "Found" && (keyResult._tag === "Failure" || duplicateTag)) {
+    const failure =
+      keyResult._tag === "Failure"
+        ? keyResult.failure.failure
+        : new DuplicateNodeTag({
+            nodeId,
+            tag: descriptor.tag,
+          });
+    markCellInvalid(state, existing.cell, failure);
+    return projectNodeRead(existing.cell, existing.cell.state.getSync());
+  }
+
+  if (existing._tag === "Missing") {
+    materializeCellIfFresh(state, identity, originalRequest);
+  }
+
+  const currentCell = lookupGraphNodeCell(state, nodeId);
+
+  if (currentCell._tag === "Missing") {
+    return unwiredNodeRead(nodeId);
+  }
+
+  const currentState = currentCell.cell.state.getSync();
+  const currentProjection = projectCellPhase(currentState.phase);
+
+  if (currentProjection._tag !== "Removed" && currentProjection.status._tag === "Invalid") {
+    return projectNodeRead(currentCell.cell, currentCell.cell.state.getSync());
+  }
+
+  if (visiting.includes(nodeId)) {
+    // Hazard: cycles are graph wiring failures, not driver failures. Mark the
+    // whole cycle invalid so no member later tries to acquire from partial deps.
+    const path = [...visiting.slice(visiting.indexOf(nodeId)), nodeId];
+    markCycleInvalid(state, path);
+    return projectNodeRead(currentCell.cell, currentCell.cell.state.getSync());
+  }
+
+  // Contract: `dependencies(args)` is a pure function of args, so a cell
+  // stamped at the current generation already holds the cell and edge of every
+  // dependency in its closure, none of them Invalid, and a same-key re-plan
+  // returns it without re-planning. Development builds still validate and
+  // confirm the requested node's own dependencies (not its internal ones); any
+  // other result takes the full re-plan below, unchanged.
+  if (
+    existing._tag === "Found" &&
+    currentProjection._tag !== "Removed" &&
+    currentCell.cell.wiredGeneration === state.wiringGeneration &&
+    (!developmentChecks.replanDependencies ||
+      confirmWiredDependencies(state, currentCell.cell, descriptor, request))
+  ) {
+    return projectNodeRead(currentCell.cell, currentState);
+  }
+
+  // Contract: an existing identity keeps its original args, so a re-plan whose
+  // request projects to the same key must also produce the same static
+  // dependency ids. Mixing old args with new edges would corrupt the cell;
+  // mirror the argsOperation same-identity invariant and invalidate instead.
+  if (existing._tag === "Found") {
+    const dependencyCheck = checkReplannedDependencies(state, currentCell.cell, request);
+
+    if (dependencyCheck._tag === "Mismatch") {
+      markCellInvalid(state, currentCell.cell, dependencyCheck.failure);
+      return projectNodeRead(currentCell.cell, currentCell.cell.state.getSync());
     }
+  }
 
-    if (existing._tag === "Missing") {
-      materializeCellIfFresh(state, identity, originalRequest);
-    }
-
-    const currentCell = lookupGraphNodeCell(state, nodeId);
-
-    if (currentCell._tag === "Missing") {
-      return unwiredNodeRead(nodeId);
-    }
-
-    const currentState = yield* currentCell.cell.state.get;
-    const currentProjection = projectCellPhase(currentState.phase);
-
-    if (currentProjection._tag !== "Removed" && currentProjection.status._tag === "Invalid") {
-      return yield* toNodeRead(currentCell.cell);
-    }
-
-    if (visiting.includes(nodeId)) {
-      // Hazard: cycles are graph wiring failures, not driver failures. Mark the
-      // whole cycle invalid so no member later tries to acquire from partial deps.
-      const path = [...visiting.slice(visiting.indexOf(nodeId)), nodeId];
-      yield* markCycleInvalid(state, path);
-      return yield* toNodeRead(currentCell.cell);
-    }
-
-    // Contract: an existing identity keeps its original args, so a re-plan whose
-    // request projects to the same key must also produce the same static
-    // dependency ids. Mixing old args with new edges would corrupt the cell;
-    // mirror the argsOperation same-identity invariant and invalidate instead.
-    if (existing._tag === "Found") {
-      const dependencyCheck = checkReplannedDependencies(state, currentCell.cell, request);
-
-      if (dependencyCheck._tag === "Mismatch") {
-        yield* markCellInvalid(state, currentCell.cell, dependencyCheck.failure);
-        return yield* toNodeRead(currentCell.cell);
-      }
-    }
-
-    return yield* wirePlannedDependencies(state, currentCell.cell, descriptor, request, nodeId, [
-      ...visiting,
-      nodeId,
-    ]);
-  });
+  return wirePlannedDependencies(state, currentCell.cell, descriptor, request, nodeId, [
+    ...visiting,
+    nodeId,
+  ]);
 }
 
 function wirePlannedDependencies(
@@ -192,29 +208,54 @@ function wirePlannedDependencies(
   request: NodeRequest,
   nodeId: NodeId,
   visiting: ReadonlyArray<NodeId>
-): Effect.Effect<NodeRead> {
-  return Effect.gen(function* () {
-    const plannedDependencies = yield* planDependencies({
-      state,
-      descriptor,
-      request,
-      nodeId,
-      visiting,
-    });
-
-    if (plannedDependencies._tag === "Failure") {
-      yield* markCellInvalid(state, currentCell, plannedDependencies.failure);
-      return yield* toNodeRead(currentCell);
-    }
-
-    recordCellDependencies(state, nodeId, plannedDependencies.value);
-
-    const plannedCell = lookupGraphNodeCell(state, nodeId);
-
-    return plannedCell._tag === "Missing"
-      ? unwiredNodeRead(nodeId)
-      : yield* toNodeRead(plannedCell.cell);
+): NodeRead {
+  const plannedDependencies = planDependencies({
+    state,
+    descriptor,
+    request,
+    nodeId,
+    visiting,
   });
+
+  if (plannedDependencies._tag === "Failure") {
+    markCellInvalid(state, currentCell, plannedDependencies.failure);
+    return projectNodeRead(currentCell, currentCell.state.getSync());
+  }
+
+  recordCellDependencies(state, nodeId, plannedDependencies.value);
+
+  const plannedCell = lookupGraphNodeCell(state, nodeId);
+
+  if (plannedCell._tag === "Missing") {
+    return unwiredNodeRead(nodeId);
+  }
+
+  if (closureIsWired(state, plannedCell.cell)) {
+    plannedCell.cell.wiredGeneration = state.wiringGeneration;
+  }
+  return projectNodeRead(plannedCell.cell, plannedCell.cell.state.getSync());
+}
+
+// Contract: a stamp vouches for the cell's whole closure, so stamp only a cell
+// that is not Invalid after wiring and whose direct dependencies all carry the
+// current stamp; each of those vouches for its own closure in turn. Entering
+// Invalid and releasing out of it both bump the generation (`markCellInvalid`,
+// `releaseCell`), so no stamp outlives a closure member's Invalid phase.
+function closureIsWired(state: GraphPlanState, cell: GraphNodeCell): boolean {
+  if (cell.state.getSync().phase._tag === "Invalid") {
+    return false;
+  }
+
+  for (const dependencyName in cell.dependencies) {
+    const dependencyId = cell.dependencies[dependencyName];
+    const dependency = dependencyId === undefined ? undefined : state.nodes.get(dependencyId);
+
+    if (dependency === undefined || dependency.wiredGeneration !== state.wiringGeneration) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function planDependencies(input: {
@@ -224,29 +265,23 @@ function planDependencies(input: {
   readonly nodeId: NodeId;
   readonly visiting: ReadonlyArray<NodeId>;
 }) {
-  return Effect.gen(function* () {
-    const dependencyRequests = planDependencyRequests(input);
+  const dependencyRequests = planDependencyRequests(input);
 
-    if (dependencyRequests._tag === "Failure") {
-      return graphFailure(dependencyRequests.failure);
-    }
+  if (dependencyRequests._tag === "Failure") {
+    return graphFailure(dependencyRequests.failure);
+  }
 
-    // Contract: sibling dependencies are all planned after shape validation so
-    // malformed dependency entries can be aggregated before parent invalidation.
-    const dependencyIds: Record<string, NodeId> = {};
+  // Contract: sibling dependencies are all planned after shape validation so
+  // malformed dependency entries can be aggregated before parent invalidation.
+  const dependencyIds: Record<string, NodeId> = {};
 
-    for (const dependencyRequest of dependencyRequests.value) {
-      const dependencyHandle = yield* planNode(
-        input.state,
-        dependencyRequest.request,
-        input.visiting
-      );
-      dependencyIds[dependencyRequest.name] = dependencyHandle.nodeId;
-      recordDependencyEdge(input.state, input.nodeId, dependencyRequest.name, dependencyHandle);
-    }
+  for (const dependencyRequest of dependencyRequests.value) {
+    const dependencyHandle = planNode(input.state, dependencyRequest.request, input.visiting);
+    dependencyIds[dependencyRequest.name] = dependencyHandle.nodeId;
+    recordDependencyEdge(input.state, input.nodeId, dependencyRequest.name, dependencyHandle);
+  }
 
-    return graphSuccess(dependencyIds);
-  });
+  return graphSuccess(dependencyIds);
 }
 
 function recordDependencyEdge(
@@ -351,72 +386,47 @@ function makeEdgeKey(from: NodeId, dependency: string): string {
   return [from, dependency].join(EDGE_KEY_SEPARATOR);
 }
 
-function markCycleInvalid(state: GraphPlanState, path: ReadonlyArray<NodeId>): Effect.Effect<void> {
-  return Effect.forEach(
-    [...new Set(path)],
-    (cycleNodeId) =>
-      Effect.gen(function* () {
-        const cell = lookupGraphNodeCell(state, cycleNodeId);
-
-        if (cell._tag === "Missing") {
-          return;
-        }
-
-        const failure = new CycleDetected({
-          nodeId: cell.cell.nodeId,
-          tag: cell.cell.tag,
-          path,
-        });
-
-        yield* markCellInvalid(state, cell.cell, failure);
-      }),
-    { concurrency: 1, discard: true }
-  );
+function markCycleInvalid(state: GraphPlanState, path: ReadonlyArray<NodeId>): void {
+  for (const nodeId of new Set(path)) {
+    const cell = state.nodes.get(nodeId);
+    if (cell !== undefined)
+      markCellInvalid(state, cell, new CycleDetected({ nodeId, tag: cell.tag, path }));
+  }
 }
 
-function markCellInvalid(
-  state: GraphPlanState,
-  cell: GraphNodeCell,
-  failure: unknown
-): Effect.Effect<void> {
-  return Effect.gen(function* () {
-    const actor =
-      state.cellActors === undefined
-        ? undefined
-        : yield* state.cellActors.getExistingActor(cell.nodeId);
-
-    if (actor !== undefined) {
-      yield* actor.close({
-        _tag: "Released",
-        detail: "graph cell invalidated",
+function markCellInvalid(state: GraphPlanState, cell: GraphNodeCell, failure: unknown): void {
+  const phase = cell.state.getSync().phase;
+  const ready = phaseReadyData(phase);
+  cell.state.updateSync((latest) => {
+    markInvalidState({ latest, failure });
+  });
+  // Entering Invalid makes every stamp whose closure holds this cell stale; see
+  // `closureIsWired`. A cell already Invalid is in no stamped closure, and
+  // re-planning one (a key that keeps failing) must not cost the whole graph
+  // its fast path.
+  if (phase._tag !== "Invalid") {
+    state.wiringGeneration += 1;
+  }
+  if (phase._tag === "Acquiring")
+    phase.attempt.resolve(projectNodeRead(cell, cell.state.getSync()));
+  // Invalid is visible immediately. Cancellation and release stay queued and
+  // retain ownership of the captured ready generation until teardown finishes.
+  if (ready._tag === "Missing" && phase._tag !== "Acquiring") return;
+  state.enqueue(
+    Effect.gen(function* () {
+      const queue = state.cellQueues.getExistingQueue(cell.nodeId);
+      const cleanup = teardownInvalidatedReadyData(state, cell, ready);
+      if (queue === undefined) {
+        yield* cleanup;
+        return;
+      }
+      yield* queue.shutdown({
+        reason: { _tag: "Released", detail: "graph cell invalidated" },
+        cleanup,
       });
-      const deleteActor = state.cellActors?.deleteActor(cell.nodeId, actor) ?? Effect.void;
-      const ready = yield* actor.runExclusive(markInvalidCellState(cell, failure));
-      yield* actor
-        .runExclusiveFork(
-          teardownInvalidatedReadyData(state, cell, ready).pipe(Effect.ensuring(deleteActor))
-        )
-        .pipe(Effect.asVoid);
-      return;
-    }
-
-    const ready = yield* markInvalidCellState(cell, failure);
-    yield* teardownInvalidatedReadyData(state, cell, ready);
-  });
-}
-
-function markInvalidCellState(
-  cell: GraphNodeCell,
-  failure: unknown
-): Effect.Effect<ReturnType<typeof phaseReadyData>> {
-  return Effect.gen(function* () {
-    let ready = phaseReadyData((yield* cell.state.get).phase);
-    yield* cell.state.transition((latest) => {
-      ready = phaseReadyData(latest.phase);
-      return [undefined, markInvalidState({ latest, failure })];
-    });
-    return ready;
-  });
+      state.cellQueues.deleteQueue(cell.nodeId, queue);
+    })
+  );
 }
 
 function teardownInvalidatedReadyData(

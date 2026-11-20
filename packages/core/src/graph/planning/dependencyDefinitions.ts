@@ -70,6 +70,75 @@ export function checkReplannedDependencies(
   };
 }
 
+/**
+ * Development check for the same-key re-plan fast path: validates the request's
+ * dependency record as `planDependencyRequests` does (record shape, entries,
+ * specs, canonical args) and confirms it resolves to exactly the dependency
+ * ids the cell recorded. Any failure sends the caller to the full re-plan,
+ * which reports it. One pass with no intermediate arrays: it runs on every
+ * development re-plan.
+ */
+export function confirmWiredDependencies(
+  state: GraphPlanState,
+  cell: GraphNodeCell,
+  descriptor: NodeDescriptor,
+  request: NodeRequest
+): boolean {
+  try {
+    const dependencies = descriptor.dependencies(request.args);
+
+    if (!isDependencyRecord(dependencies)) {
+      return false;
+    }
+
+    let dependencyCount = 0;
+
+    for (const dependencyName in dependencies) {
+      // Own keys only, as `Object.entries` in `dependencyRequestsFor` reads them.
+      if (!Object.prototype.hasOwnProperty.call(dependencies, dependencyName)) {
+        continue;
+      }
+
+      const dependency = dependencies[dependencyName];
+
+      if (
+        dependency === undefined ||
+        dependency.type !== "dependency" ||
+        !isFrondNodeSpec(dependency.spec)
+      ) {
+        return false;
+      }
+
+      canonicalArgs(dependency.args);
+
+      if (
+        cell.dependencies[dependencyName] !==
+        resolveEffectiveNodeId(state, { spec: dependency.spec, args: dependency.args })
+      ) {
+        return false;
+      }
+
+      dependencyCount += 1;
+    }
+
+    return dependencyCount === ownKeyCount(cell.dependencies);
+  } catch {
+    return false;
+  }
+}
+
+function ownKeyCount(record: Readonly<Record<string, NodeId>>): number {
+  let count = 0;
+
+  for (const key in record) {
+    if (Object.prototype.hasOwnProperty.call(record, key)) {
+      count += 1;
+    }
+  }
+
+  return count;
+}
+
 export function resolveStaticDependencyIds(
   state: GraphPlanState,
   cell: GraphNodeCell,

@@ -1,8 +1,4 @@
-// Do NOT `import "./setup"` here: bun evaluates a shared module once and scopes
-// its top-level `afterEach(cleanup)` to the first test file that loads it. This
-// file sorts before react-dom.test.tsx, so importing ./setup would steal the
-// cleanup hook from that suite and leak DOM between its tests. The equivalent
-// registration is inlined below instead.
+// Each test file registers its own cleanup; see setup.ts.
 import { afterEach, describe, expect, test } from "bun:test";
 import "global-jsdom/register";
 import {

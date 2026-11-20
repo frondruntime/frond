@@ -1,4 +1,4 @@
-import { Effect, Match } from "effect";
+import { Effect } from "effect";
 import {
   makeObservable,
   observable,
@@ -58,6 +58,11 @@ export class NodeBase<
 
   private _resultObservationReported = false;
 
+  // Runtime-owned: counts committed patchResult writes. A shared patch keeps
+  // the result reference, so the React adapter compares this count as well.
+  // Plain field, not observable: MobX observers see the result reference only.
+  _resultPatchCount = 0;
+
   private _closed = false;
 
   // Internal action facade in the spec shape's declared mode. Effect nodes
@@ -90,8 +95,8 @@ export class NodeBase<
     this._reportResultObserved = construction.reportResultObserved;
     this._addDisposer = construction.addDisposer;
     // One facade per node, in the driver's authored representation: effect nodes
-    // hand back Effects, async nodes hand back Promises. The runtime executes
-    // every action as an Effect internally either way. Runtime construction
+    // hand back Effects, async nodes hand back Promises. Both submit directly
+    // to the same queue-backed core. Runtime construction
     // always goes through a validated node spec class, so the shared mode
     // recovery finds the authored mode; exotic subclassing degrades to "async"
     // rather than throwing during construction.
@@ -147,15 +152,7 @@ export class NodeBase<
       return Promise.reject(new FrondNodeClosed(`action:${name}`));
     }
 
-    return this._action(name, input).then((result) =>
-      Match.value(result).pipe(
-        Match.tag("Success", ({ value }) => value),
-        Match.tag("Failure", ({ error }) => {
-          throw error;
-        }),
-        Match.exhaustive
-      )
-    );
+    return this._action(name, input);
   }
 
   private _runActionEffect(name: string, input?: unknown): Effect.Effect<unknown, unknown> {
@@ -169,13 +166,22 @@ export class NodeBase<
       }
 
       return this._actionEffect(name, input).pipe(
-        Effect.flatMap((result) =>
-          Match.value(result).pipe(
-            Match.tag("Success", ({ value }) => Effect.succeed(value)),
-            Match.tag("Failure", ({ error }) => Effect.fail(error)),
-            Match.exhaustive
-          )
-        )
+        Effect.flatMap((result) => {
+          switch (result._tag) {
+            case "Success": {
+              const { value } = result;
+              return Effect.succeed(value);
+            }
+            case "Failure": {
+              const { error } = result;
+              return Effect.fail(error);
+            }
+            default: {
+              const unreachable: never = result;
+              return unreachable;
+            }
+          }
+        })
       );
     });
   }
@@ -233,6 +239,7 @@ export class NodeBase<
       }
       this._reportObservedResultIfReady();
     });
+    if (update.resultPatched === true) this._resultPatchCount += 1;
   }
 
   _closeRuntimeNode(): void {
@@ -295,7 +302,7 @@ export type FrondNode<
       >
     : never;
 
-export type RuntimeActionExecutor = (name: string, input?: unknown) => Promise<ActionResult>;
+export type RuntimeActionExecutor = (name: string, input?: unknown) => Promise<unknown>;
 
 export type RuntimeActionEffectExecutor = (
   name: string,
@@ -326,6 +333,8 @@ export type RuntimeReadyNodeUpdate<TArgs, TDeps extends object, TResult> = {
   readonly args?: TArgs | undefined;
   readonly deps?: TDeps | undefined;
   readonly result?: TResult | undefined;
+  // A patchResult commit; it may keep the result reference.
+  readonly resultPatched?: true | undefined;
 };
 
 export type RuntimeReadyNodeControl<TArgs, TDeps extends object, TResult> = {

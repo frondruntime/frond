@@ -1,6 +1,5 @@
 import type { FrondNode, ResolvedDeps } from "@frondruntime/core";
 import * as Frond from "@frondruntime/core";
-import { Match } from "effect";
 import { attachErrorRecovery, type FrondReactErrorRecovery } from "./errorRecovery";
 import type { ReactNodeState } from "./types";
 
@@ -24,16 +23,20 @@ export function projectReactNodeRead<
   readonly currentReadinessPromise: () => Promise<void> | undefined;
   readonly markReadinessPresentedByPendingRead: () => void;
 }): ReactNodeState<TArgs, TDeps, TResult, TNode> {
-  return Match.value(input.handleRead).pipe(
-    Match.tag("Ready", (ready) =>
-      readyReactNodeState<TArgs, TDeps, TResult, TNode>(input.handle, ready)
-    ),
-    Match.tag("Pending", (pending) => {
+  const read = input.handleRead;
+  switch (read._tag) {
+    case "Ready": {
+      const ready = read;
+      return readyReactNodeState<TArgs, TDeps, TResult, TNode>(input.handle, ready);
+    }
+    case "Pending": {
+      const pending = read;
       input.scheduleReadinessAttempt(pending.attempt);
       input.markReadinessPresentedByPendingRead();
       throw input.currentReadinessPromise() ?? pending.attempt;
-    }),
-    Match.tag("Error", (errorRead) => {
+    }
+    case "Error": {
+      const errorRead = read;
       const retryable = errorRead.kind === "readiness";
       // React receives the runtime read wrapper for control flow: it carries
       // retry metadata and preserves the full Frond cause chain. Reporting
@@ -55,24 +58,30 @@ export function projectReactNodeRead<
             }
           : undefined,
       });
-    }),
-    Match.tag("Unwired", () => {
+    }
+    case "Unwired":
+    case "Idle":
       throw readinessPromise(input);
-    }),
-    Match.tag("Idle", () => {
-      throw readinessPromise(input);
-    }),
-    Match.exhaustive
-  );
+    default: {
+      const unreachable: never = read;
+      return unreachable;
+    }
+  }
 }
 
 function runtimeReadErrorMessage(kind: Frond.Runtime.RuntimeReadFailureKind): string {
-  return Match.value(kind).pipe(
-    Match.when("readiness", () => "Frond node readiness failed."),
-    Match.when("invalid", () => "Frond node wiring is invalid."),
-    Match.when("runtime", () => "Frond runtime is unavailable."),
-    Match.exhaustive
-  );
+  switch (kind) {
+    case "readiness":
+      return "Frond node readiness failed.";
+    case "invalid":
+      return "Frond node wiring is invalid.";
+    case "runtime":
+      return "Frond runtime is unavailable.";
+    default: {
+      const unreachable: never = kind;
+      return unreachable;
+    }
+  }
 }
 
 function readyReactNodeState<TArgs, TDeps extends object, TResult, TNode extends object>(

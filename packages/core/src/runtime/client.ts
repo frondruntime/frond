@@ -14,11 +14,8 @@ import type {
   NodeSpecMode,
   NodeSpecResult,
 } from "../node/types";
-import {
-  FrondNodeNotReady,
-  type FrondNodeReadiness,
-  FrondRuntimeInvariantViolation,
-} from "./errors";
+import { coreOf, expectSubmission, interruptOnSignal, type RuntimeClientCore } from "./clientCore";
+import { FrondNodeNotReady, type FrondNodeReadiness } from "./errors";
 import { bootingRuntimeNodeRead, readNode, readNodeRevision } from "./nodeRead";
 import type {
   HandleActions,
@@ -38,27 +35,13 @@ import type {
 import { createUnsafeRuntimeClient } from "./unsafeClient";
 import { validateRuntimeWorkMetadata } from "./work";
 
-/**
- * Bridges Effect-native host work to Promise/sync callers.
- *
- * The client is Effect-native at its core: every handle operation is an Effect
- * over the runtime host. The runner is how the client derives its Promise
- * surface — the `.async` action channel and the Promise-returning handle
- * methods — so Effect is the primitive and Promise is the projection, never the
- * other way around.
- */
+/** Fallback runner for externally supplied Effect hosts and test doubles. */
 export interface RuntimeEffectBridgeRunner {
   readonly run: <A>(effect: Effect.Effect<A, unknown>) => Promise<A>;
   readonly runSync: <A>(effect: Effect.Effect<A, unknown>) => A;
 }
 
-/**
- * Effect-native host surface the client is built over.
- *
- * Intentionally the host service, not the Promise `Runtime` facade: node handles
- * own their own Effect→Promise bridging, so the effect action channel reaches
- * the same submit the async channel does.
- */
+/** Public Effect surface; a host from `makeRuntimeHost` also carries its callback core. */
 export type RuntimeClientHost = Pick<
   RuntimeHostService,
   | "resolveNodeIdSync"
@@ -74,11 +57,12 @@ export function createRuntimeClient(
   host: RuntimeClientHost,
   runner: RuntimeEffectBridgeRunner
 ): RuntimeClient {
+  const core = coreOf(host, runner);
   return {
     node: <TSpec extends NodeSpecLike>(spec: TSpec, args: NodeSpecArgs<TSpec>) =>
       createRuntimeNodeHandle<NodeSpecArgs<TSpec>, NodeSpecResult<TSpec>, RuntimeHandleNode<TSpec>>(
         host,
-        runner,
+        core,
         spec,
         args
       ) as RuntimeNodeHandle<
@@ -88,48 +72,48 @@ export function createRuntimeClient(
         NodeSpecMode<TSpec>,
         RuntimeHandleNode<TSpec>
       >,
-    __unsafe: createUnsafeRuntimeClient(host, runner),
+    __unsafe: createUnsafeRuntimeClient(host, core),
   };
 }
 
 function createRuntimeNodeHandle<TArgs, TResult, TNode extends object = object>(
   host: RuntimeClientHost,
-  runner: RuntimeEffectBridgeRunner,
+  core: RuntimeClientCore,
   spec: unknown,
   args: TArgs
 ): RuntimeNodeHandle<TArgs, TResult, Record<string, never>, "async", TNode> {
   let currentArgs = args;
+  // Args updates through this handle commit in call order (one plan queue,
+  // then per-cell FIFO), but their replies wait on event sinks and can arrive
+  // out of that order. A reply applies only when it is newer than the last
+  // applied one, so the handle never moves back to an older commit.
+  let argsUpdatesIssued = 0;
+  let argsUpdateApplied = 0;
+  const applyArgsUpdate = (sequence: number, nextArgs: TArgs): void => {
+    if (sequence < argsUpdateApplied) return;
+    argsUpdateApplied = sequence;
+    currentArgs = nextArgs;
+  };
   const request = () => ({ spec, args: currentArgs });
   const nodeId = host.resolveNodeIdSync(request());
 
-  // Every Promise-returning handle method is the one Effect submit run through
-  // the bridge. There is a single submit path; the Promise surface is its
-  // projection.
+  // Both facades submit to the same queue-backed core.
   const submit = <TTag extends RuntimeSubmission["_tag"], TValue>(
     command: RuntimeCommand,
     expected: TTag,
     extract: (submission: Extract<RuntimeSubmission, { readonly _tag: TTag }>) => TValue
-  ): Promise<TValue> => runner.run(submitEffect(host, command, expected, extract));
+  ): Promise<TValue> => submitPromise(core, command, expected, extract);
 
   const ensureReady = (
-    metadata: RuntimeWorkMetadata | undefined = {
-      source: "manual",
-      reason: "readiness",
-      priority: "visible",
-    }
+    metadata: RuntimeWorkMetadata | undefined = readinessMetadata
   ): Promise<NodeRead> => {
-    const effect = submitEffect(
-      host,
+    validateRuntimeWorkMetadata(metadata);
+    return submitPromise(
+      core,
       { _tag: "GraphEnsureReadyNode", request: request(), metadata },
       "GraphNodeReadyEnsured",
       ({ read }) => read
     );
-
-    const signal = metadata?.signal;
-
-    // A non-AbortSignal `signal` is left for the host's metadata validation to
-    // reject, as before.
-    return runner.run(signal instanceof AbortSignal ? interruptOnSignal(effect, signal) : effect);
   };
 
   // Ready-or-throw projection of the same sync read `read()` performs: Ready
@@ -175,23 +159,25 @@ function createRuntimeNodeHandle<TArgs, TResult, TNode extends object = object>(
       // Contract: boot may trigger only the first passive readiness attempt.
       // Existing pending/ready/error state is projected as-is for consumers.
       if (read._tag === "Unwired" || read._tag === "Idle") {
-        return bootingRuntimeNodeRead<TResult, TNode>(
-          nodeId,
-          settleBootAttempt(nodeId, ensureReady(metadata)),
-          read.tag
+        const attempt = core.submitPromise(
+          {
+            _tag: "GraphEnsureReadyNode",
+            request: request(),
+            metadata: metadata ?? readinessMetadata,
+          },
+          readySubmission,
+          (cause) => failedBootRead(nodeId, cause)
         );
+        return bootingRuntimeNodeRead<TResult, TNode>(nodeId, attempt, read.tag);
       }
 
       return read;
     },
     subscribe: (listener) => {
-      const subscription = runner.runSync(
-        host.observe((record) => {
-          if (record.nodeIds.includes(nodeId)) {
-            listener();
-          }
-        })
-      );
+      const onRecord: Parameters<RuntimeHostService["observe"]>[0] = (record) => {
+        if (record.nodeIds.includes(nodeId)) listener();
+      };
+      const subscription = core.observeSync(onRecord, nodeId);
 
       return () => {
         subscription.unsubscribe();
@@ -205,16 +191,21 @@ function createRuntimeNodeHandle<TArgs, TResult, TNode extends object = object>(
       ),
     ensureReady,
     readReady,
-    ensureReadyNode: async (metadata) => {
-      // One awaited readiness attempt, then the same sync projection readReady
-      // performs — so both surfaces throw identically for error/not-ready.
-      await ensureReady(metadata);
-      return readReady();
-    },
+    ensureReadyNode: (metadata) =>
+      submitPromise(
+        core,
+        {
+          _tag: "GraphEnsureReadyNode",
+          request: request(),
+          metadata: metadata ?? readinessMetadata,
+        },
+        "GraphNodeReadyEnsured",
+        readReady
+      ),
     // Mirror the type-level `NodeSpecMode` via the shared mode recovery, so a
     // bare effect-mode descriptor dispatches Effect-native actions instead of
     // silently degrading to the Promise projection.
-    actions: makeHandleActions(host, runner, request, recoverDriverMode(spec)),
+    actions: makeHandleActions(host, core, request, recoverDriverMode(spec)),
     action: (action, input, metadata) => {
       // Same synchronous fail-fast as `boot`: invalid metadata (including a
       // non-AbortSignal `signal`) throws before any Effect is constructed.
@@ -239,30 +230,30 @@ function createRuntimeNodeHandle<TArgs, TResult, TNode extends object = object>(
         "GraphRefreshCompleted",
         ({ result }) => result
       ),
-    updateArgs: async (nextArgs, metadata) => {
+    updateArgs: (nextArgs, metadata) => {
       let nextNodeId: NodeId;
 
       try {
         nextNodeId = host.resolveNodeIdSync({ spec, args: nextArgs });
       } catch (cause) {
         if (!isKeyError(cause)) {
-          throw cause;
+          return Promise.reject(cause);
         }
 
-        return {
-          _tag: "Failure",
+        return Promise.resolve({
+          _tag: "Failure" as const,
           nodeId,
           error: new UpdateNodeArgsFailed({
             nodeId,
             tag: "unknown",
             cause,
           }),
-        };
+        });
       }
 
       if (nextNodeId !== nodeId) {
-        return {
-          _tag: "Failure",
+        return Promise.resolve({
+          _tag: "Failure" as const,
           nodeId,
           error: new UpdateNodeArgsFailed({
             nodeId,
@@ -274,24 +265,26 @@ function createRuntimeNodeHandle<TArgs, TResult, TNode extends object = object>(
               cause: { currentNodeId: nodeId, nextNodeId },
             }),
           }),
-        };
+        });
       }
 
-      const result = await submit(
-        {
-          _tag: "GraphUpdateNodeArgs",
-          request: { nodeId, spec, args: nextArgs },
-          metadata,
-        },
-        "GraphNodeArgsUpdateCompleted",
-        ({ result }) => result
-      );
-
-      if (result._tag === "Success") {
-        currentArgs = nextArgs;
-      }
-
-      return result;
+      const command: RuntimeCommand = {
+        _tag: "GraphUpdateNodeArgs",
+        request: { nodeId, spec, args: nextArgs },
+        metadata,
+      };
+      argsUpdatesIssued += 1;
+      const sequence = argsUpdatesIssued;
+      validateRuntimeWorkMetadata(metadata);
+      // The handle follows the commit: on a host with a core, an aborted caller
+      // still sees the args it submitted once the update commits.
+      return core.submitPromise(command, argsUpdateResult, undefined, (submission) => {
+        if (
+          submission._tag === "GraphNodeArgsUpdateCompleted" &&
+          submission.result._tag === "Success"
+        )
+          applyArgsUpdate(sequence, nextArgs);
+      });
     },
     releaseResources: (reason, metadata) =>
       submit(
@@ -323,14 +316,7 @@ function createRuntimeNodeHandle<TArgs, TResult, TNode extends object = object>(
               return {
                 _tag: "Held",
                 nodeId: result.nodeId,
-                lease: makeRuntimeNodeLiveLease(
-                  host,
-                  runner,
-                  result.nodeId,
-                  result.leaseId,
-                  source,
-                  scope
-                ),
+                lease: makeRuntimeNodeLiveLease(core, result.nodeId, result.leaseId, source, scope),
                 liveDemand: result.liveDemand,
               } satisfies RuntimeNodeLiveLeaseResult;
             case "Failed":
@@ -353,17 +339,13 @@ function createRuntimeNodeHandle<TArgs, TResult, TNode extends object = object>(
           }
         }
       ),
-    snapshot: async () =>
-      (await runner.run(host.readNodeSnapshot(nodeId))) as RuntimeNodeSnapshotLookup<
-        TResult,
-        TNode
-      >,
+    snapshot: () =>
+      core.readNodeSnapshot(nodeId) as Promise<RuntimeNodeSnapshotLookup<TResult, TNode>>,
   };
 }
 
 function makeRuntimeNodeLiveLease(
-  host: RuntimeClientHost,
-  runner: RuntimeEffectBridgeRunner,
+  core: RuntimeClientCore,
   nodeId: NodeId,
   leaseId: RuntimeNodeLiveLease["leaseId"],
   source: NodeLiveSource,
@@ -386,27 +368,20 @@ function makeRuntimeNodeLiveLease(
         return release;
       }
 
-      release = runner
-        .run(
-          submitEffect(
-            host,
-            {
-              _tag: "GraphReleaseNodeLiveLease",
-              request: { nodeId, leaseId },
-            },
-            "GraphNodeLiveLeaseReleased",
-            () => undefined
-          )
-        )
-        .then(
-          () => {
-            disposed = true;
-          },
-          (cause) => {
-            release = undefined;
-            throw cause;
-          }
-        );
+      release = submitPromise(
+        core,
+        { _tag: "GraphReleaseNodeLiveLease", request: { nodeId, leaseId } },
+        "GraphNodeLiveLeaseReleased",
+        voidResult
+      ).then(
+        () => {
+          disposed = true;
+        },
+        (cause) => {
+          release = undefined;
+          throw cause;
+        }
+      );
 
       return release;
     },
@@ -428,21 +403,22 @@ function notReadyReadiness(tag: "Unwired" | "Idle" | "Pending"): FrondNodeReadin
   }
 }
 
-function settleBootAttempt(nodeId: NodeId, attempt: Promise<NodeRead>): Promise<NodeRead> {
-  return attempt.catch(
-    (cause) =>
-      ({
-        _tag: "Error",
-        nodeId,
-        status: { _tag: "Wired", run: { _tag: "Error", error: cause } },
-        error: cause,
-      }) satisfies NodeRead
-  );
+function failedBootRead(nodeId: NodeId, cause: unknown): NodeRead {
+  return {
+    _tag: "Error",
+    nodeId,
+    status: { _tag: "Wired", run: { _tag: "Error", error: cause } },
+    error: cause,
+  };
+}
+
+function readySubmission(submission: RuntimeSubmission): NodeRead {
+  return expectSubmission(submission, "GraphNodeReadyEnsured").read;
 }
 
 function makeHandleActions(
   host: RuntimeClientHost,
-  runner: RuntimeEffectBridgeRunner,
+  core: RuntimeClientCore,
   request: () => { readonly spec: unknown; readonly args: unknown },
   mode: DriverMode
 ): HandleActions<ActionContracts, DriverMode> {
@@ -460,14 +436,10 @@ function makeHandleActions(
       }
 
       return (...input: ReadonlyArray<unknown>) => {
-        const effect = submitEffect(
-          host,
-          runActionCommand(request(), property, input[0], undefined),
-          "GraphActionCompleted",
-          ({ result }) => result
-        );
-
-        return mode === "effect" ? effect : runner.run(effect);
+        const command = runActionCommand(request(), property, input[0], undefined);
+        return mode === "effect"
+          ? submitEffect(host, command, "GraphActionCompleted", actionResult)
+          : submitPromise(core, command, "GraphActionCompleted", actionResult);
       };
     },
   }) as HandleActions<ActionContracts, DriverMode>;
@@ -493,49 +465,6 @@ function runActionCommand(
   };
 }
 
-const signalAborted = Symbol("frond.runtime/action-signal-aborted");
-
-/**
- * Ties `metadata.signal` to Effect interruption for a caller-cancellable action
- * submission.
- *
- * An already-aborted signal settles as interruption without submitting at all.
- * Otherwise the submission races an abort waiter: when the signal fires,
- * `raceFirst` interrupts the losing submission fiber and awaits that
- * interruption before resuming, so the abort takes exactly the
- * caller-fiber-interruption path the graph already pins — the cell actor claims
- * the reply and interrupts the worker (`cellActor.ts` awaiter propagation), a
- * queued worker never invokes the driver, an active single-owner operation
- * aborts its `ctx.signal` (`driverOperationRunner.ts` onInterrupt), and a joined
- * operation keeps running for its other awaiters. The overall effect then
- * settles as interruption, which `unwrapEffect` rejects with the interrupted
- * `Cause`.
- */
-function interruptOnSignal<A, E>(
-  effect: Effect.Effect<A, E>,
-  signal: AbortSignal
-): Effect.Effect<A, E> {
-  return Effect.suspend(() => {
-    if (signal.aborted) {
-      return Effect.interrupt;
-    }
-
-    return Effect.raceFirst(effect, awaitAbort(signal)).pipe(
-      Effect.flatMap((value) =>
-        value === signalAborted ? Effect.interrupt : Effect.succeed(value as A)
-      )
-    );
-  });
-}
-
-function awaitAbort(signal: AbortSignal): Effect.Effect<typeof signalAborted> {
-  return Effect.callback<typeof signalAborted>((resume) => {
-    const onAbort = () => resume(Effect.succeed(signalAborted));
-    signal.addEventListener("abort", onAbort, { once: true });
-    return Effect.sync(() => signal.removeEventListener("abort", onAbort));
-  });
-}
-
 /**
  * The client's single submit path: submit the command Effect-natively and assert
  * the returned submission matches the command protocol.
@@ -550,33 +479,32 @@ function submitEffect<TTag extends RuntimeSubmission["_tag"], TResult>(
   expected: TTag,
   extract: (submission: Extract<RuntimeSubmission, { readonly _tag: TTag }>) => TResult
 ): Effect.Effect<TResult, RuntimeError> {
-  return host.submit(command).pipe(
-    Effect.map((submission) => {
-      if (submission._tag !== expected) {
-        return unexpectedSubmission(expected, submission);
-      }
-
-      return extract(submission as Extract<RuntimeSubmission, { readonly _tag: TTag }>);
-    })
-  );
-}
-
-function unexpectedSubmission(expected: string, actual: unknown): never {
-  throw new FrondRuntimeInvariantViolation({
-    message: `Expected runtime submission ${expected}, received ${submissionTag(actual)}.`,
-    cause: actual,
-  });
-}
-
-function submissionTag(value: unknown): string {
-  if (typeof value === "object" && value !== null && "_tag" in value) {
-    return String(value._tag);
-  }
-
-  return "unknown";
+  return host
+    .submit(command)
+    .pipe(Effect.map((submission) => extract(expectSubmission(submission, expected))));
 }
 
 export type RuntimeHandleResult<THandle> =
   THandle extends RuntimeNodeHandle<infer _TArgs, infer TResult> ? TResult : never;
 
 export type { ActionResult, EvictResult, NodeRead, RefreshResult };
+
+function submitPromise<TTag extends RuntimeSubmission["_tag"], TResult>(
+  core: RuntimeClientCore,
+  command: RuntimeCommand,
+  expected: TTag,
+  extract: (submission: Extract<RuntimeSubmission, { readonly _tag: TTag }>) => TResult
+): Promise<TResult> {
+  validateRuntimeWorkMetadata(command.metadata);
+  return core.submitPromise(command, (submission) =>
+    extract(expectSubmission(submission, expected))
+  );
+}
+const argsUpdateResult = (submission: RuntimeSubmission) =>
+  expectSubmission(submission, "GraphNodeArgsUpdateCompleted").result;
+const actionResult = (
+  submission: Extract<RuntimeSubmission, { readonly _tag: "GraphActionCompleted" }>
+) => submission.result;
+const voidResult = () => undefined;
+
+const readinessMetadata = { source: "manual", reason: "readiness", priority: "visible" } as const;

@@ -89,6 +89,20 @@ All three produce entries for `specOverrides`. Overrides replace the *direct
 external dependency* of the node under test; downstream nodes always go
 through overrides, never through module mocks.
 
+An overridden node still boots through the graph queue, which drains in a
+microtask. `readySpec` knows its result, but the node is not Ready until that
+drain: its first React read suspends. Mount, and call actions, inside an
+async `act`; a synchronous `act` commits only the Suspense fallback.
+
+```tsx
+await act(async () => {
+  render(<TestFrondProvider harness={harness}><Screen /></TestFrondProvider>);
+});
+```
+
+To assert the loading state, override with `mockSpec` and a driver held by
+`createDeferred`, then resolve it inside a later `act`.
+
 ## Vocabulary
 
 - **fixture** — deterministic data (`createOrdersFixture()`), a plain function.

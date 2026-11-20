@@ -1,4 +1,3 @@
-import { Match } from "effect";
 import type { NodeId, NodeStatus } from "../graph";
 import { isSourceFailure, wrapsReportedDependency } from "../graph/readiness/sourceFailures";
 import type { RuntimeEvent } from "../runtime/types";
@@ -248,24 +247,41 @@ function diagnostic(
 }
 
 function nodeStatusFailure(status: NodeStatus): unknown | undefined {
-  return Match.value(status).pipe(
-    Match.tag("Unwired", () => undefined),
-    Match.tag("Invalid", ({ error }) => error),
-    Match.tag("Wired", ({ run }) => nodeRunFailure(run)),
-    Match.exhaustive
-  );
+  switch (status._tag) {
+    case "Unwired":
+      return undefined;
+    case "Invalid": {
+      const { error } = status;
+      return error;
+    }
+    case "Wired": {
+      const { run } = status;
+      return nodeRunFailure(run);
+    }
+    default: {
+      const unreachable: never = status;
+      return unreachable;
+    }
+  }
 }
 
 function nodeRunFailure(
   status: Extract<NodeStatus, { readonly _tag: "Wired" }>["run"]
 ): unknown | undefined {
-  return Match.value(status).pipe(
-    Match.tag("Idle", () => undefined),
-    Match.tag("Pending", () => undefined),
-    Match.tag("Ready", () => undefined),
-    Match.tag("Error", ({ error }) => error),
-    Match.exhaustive
-  );
+  switch (status._tag) {
+    case "Idle":
+    case "Pending":
+    case "Ready":
+      return undefined;
+    case "Error": {
+      const { error } = status;
+      return error;
+    }
+    default: {
+      const unreachable: never = status;
+      return unreachable;
+    }
+  }
 }
 
 function ensuredClassification(status: NodeStatus): RuntimeEventClassification {
