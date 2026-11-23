@@ -8,12 +8,7 @@ import {
   type RuntimeObserver,
   type RuntimeSubmission,
 } from "../src/runtime";
-import {
-  ActionProfileNode,
-  createRuntimeClient,
-  type MutableProfile,
-  unwrapEffect,
-} from "./graphTestFixtures";
+import { ActionProfileNode, createRuntimeClient, unwrapEffect } from "./graphTestFixtures";
 
 // A host built outside `createRuntime` has no queue-backed core: the client
 // reaches it only through its Effect methods and the caller's runner.
@@ -83,10 +78,7 @@ function corelessHost(
       return Effect.runSync(effect);
     },
   };
-  const handle = createRuntimeClient(host as never, runner).node<
-    Record<string, never>,
-    MutableProfile
-  >(ActionProfileNode, {});
+  const handle = createRuntimeClient(host, runner).node(ActionProfileNode, {});
   return { probe, handle };
 }
 

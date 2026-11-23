@@ -61,6 +61,7 @@ export function makeInMemoryGraphSystemFromConfig(
   let commands: GraphSystemCommands;
 
   const state: GraphPlanState = {
+    development: config.development,
     jobs,
     syncClock: config.syncClock,
     enqueue: (effect) =>
@@ -71,7 +72,7 @@ export function makeInMemoryGraphSystemFromConfig(
       }),
     nodes: new Map(),
     edges: new Map(),
-    evictedRevisionByNodeId: new Map(),
+    evictedRevisionFloor: -1,
     wiringGeneration: 1,
     specByTag: new Map(),
     specOverrides: config.specOverrides,
@@ -85,6 +86,7 @@ export function makeInMemoryGraphSystemFromConfig(
     notifyActionCompleted: observers.notifyActionCompleted,
     notifyResultValidityChanged: observers.notifyResultValidityChanged,
     notifyReadinessFailed: observers.notifyReadinessFailed,
+    reportObserverFailure: observers.reportObserverFailure,
     notifyLiveDemandChanged: observers.notifyLiveDemandChanged,
     notifyLiveFailures: observers.notifyLiveFailures,
     notifyCleanupFailures: observers.notifyCleanupFailures,

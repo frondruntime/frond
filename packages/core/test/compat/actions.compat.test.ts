@@ -67,21 +67,20 @@ class LedgerNode extends Frond.NodeBase<LedgerSpec> {
 }
 
 describe("0.5 action compatibility", () => {
-  test("authored actions return receipts while MobX and client actions return success outcomes", async () => {
+  test("authored actions return receipts while dynamic and typed handle actions return success outcomes", async () => {
     const harness = createHarness();
     const handle = harness.node(LedgerNode, { account: "checking" });
-    const projection = Frond.MobX.createNode(harness.runtime, LedgerNode, handle.args);
-    disposers.push(() => projection.dispose());
-    await projection.ensureReady();
 
-    expect(await projection.node.actions.replace(10)).toBe("receipt:10");
-    expect(projection.node.result).toEqual({ balance: 10, entries: ["replaced"] });
-    expect(await projection.runAction("append", "mobx")).toEqual({
+    const node = await handle.ensureReadyNode();
+
+    expect(await node.actions.replace(10)).toBe("receipt:10");
+    expect(node.result).toEqual({ balance: 10, entries: ["replaced"] });
+    expect(await Frond.unwrapEffect(handle.action("append", "dynamic"))).toEqual({
       _tag: "Success",
       nodeId: handle.nodeId,
-      value: "accepted:mobx",
+      value: "accepted:dynamic",
     });
-    expect(projection.result).toEqual({ balance: 11, entries: ["replaced", "mobx"] });
+    expect(node.result).toEqual({ balance: 11, entries: ["replaced", "dynamic"] });
     expect(await handle.actions.append("client")).toEqual({
       _tag: "Success",
       nodeId: handle.nodeId,
@@ -89,7 +88,7 @@ describe("0.5 action compatibility", () => {
     });
     expect(handle.readReady().result).toEqual({
       balance: 12,
-      entries: ["replaced", "mobx", "client"],
+      entries: ["replaced", "dynamic", "client"],
     });
     expect(await Frond.unwrapEffect(handle.action("replace", 20))).toEqual({
       _tag: "Success",
@@ -100,13 +99,12 @@ describe("0.5 action compatibility", () => {
   });
 
   for (const mode of ["throw", "reject"] as const) {
-    test(`${mode} failures reject authored actions and return failures through MobX and client actions without committing patches`, async () => {
+    test(`${mode} failures reject authored actions and return failures through dynamic and typed handle actions without committing patches`, async () => {
       const harness = createHarness();
       const handle = harness.node(LedgerNode, { account: "checking" });
-      const projection = Frond.MobX.createNode(harness.runtime, LedgerNode, handle.args);
-      disposers.push(() => projection.dispose());
-      await projection.ensureReady();
-      await projection.node.actions.replace(7);
+
+      const node = await handle.ensureReadyNode();
+      await node.actions.replace(7);
       const expectedError = {
         _tag: "ActionFailed",
         nodeId: handle.nodeId,
@@ -115,25 +113,25 @@ describe("0.5 action compatibility", () => {
         input: mode,
         cause: { _tag: "DriverPromiseFailed", operation: "action:fail", cause: rejectedTransfer },
       };
-      const observed = [JSON.stringify(projection.node.result)];
+      const observed = [JSON.stringify(node.result)];
       disposers.push(
         reaction(
-          () => JSON.stringify(projection.node.result),
+          () => JSON.stringify(node.result),
           (state) => observed.push(state)
         )
       );
 
-      const rejection: unknown = await projection.node.actions
-        .fail(mode)
-        .catch((error: unknown) => error);
+      const rejection: unknown = await node.actions.fail(mode).catch((error: unknown) => error);
       expect(rejection).toMatchObject(expectedError);
-      expect(await projection.runAction("fail", mode)).toMatchObject({
+      expect(await Frond.unwrapEffect(handle.action("fail", mode))).toMatchObject({
         _tag: "Failure",
         error: expectedError,
       });
-      expect(projection.operationFailure).toMatchObject({ kind: "action", error: expectedError });
-      expect(projection.failure).toBeUndefined();
-      expect(projection.busy).toBe(false);
+      expect(handle.read()).toMatchObject({
+        _tag: "Ready",
+        operationFailure: { kind: "action", error: expectedError },
+        busy: false,
+      });
       expect(await handle.actions.fail(mode)).toMatchObject({
         _tag: "Failure",
         error: expectedError,
@@ -143,18 +141,21 @@ describe("0.5 action compatibility", () => {
         error: expectedError,
       });
       expect(handle.readReady().result).toEqual({ balance: 7, entries: ["replaced"] });
-      expect(projection.result).toEqual({ balance: 7, entries: ["replaced"] });
+      expect(node.result).toEqual({ balance: 7, entries: ["replaced"] });
       expect(
         observed.filter((state, index) => index === 0 || state !== observed[index - 1])
       ).toEqual([JSON.stringify({ balance: 7, entries: ["replaced"] })]);
-      await projection.runAction("append", "recovered");
-      expect(projection.operationFailure).toBeUndefined();
-      expect(projection.result).toEqual({ balance: 8, entries: ["replaced", "recovered"] });
+      await Frond.unwrapEffect(handle.action("append", "recovered"));
+      const recovered = handle.read();
+      expect(recovered._tag).toBe("Ready");
+      if (recovered._tag !== "Ready") throw new Error("Expected a ready node");
+      expect(recovered.operationFailure).toBeUndefined();
+      expect(node.result).toEqual({ balance: 8, entries: ["replaced", "recovered"] });
     });
   }
 
   for (const mode of ["failure", "defect"] as const) {
-    test(`Effect ${mode} fails authored actions and returns a structured client and MobX failure with patch rollback`, async () => {
+    test(`Effect ${mode} fails authored actions and returns a structured handle failure with patch rollback`, async () => {
       type EffectLedgerSpec = Frond.NodeSpec<{
         readonly mode: "effect";
         readonly args: Frond.Args.None;
@@ -196,11 +197,10 @@ describe("0.5 action compatibility", () => {
       }
       const harness = createHarness();
       const handle = harness.node(EffectLedgerNode, Frond.Args.none);
-      const projection = Frond.MobX.createNode(harness.runtime, EffectLedgerNode, Frond.Args.none);
-      disposers.push(() => projection.dispose());
-      await projection.ensureReady();
-      expect(await Frond.unwrapEffect(projection.node.actions.replace(4))).toBe("receipt:4");
-      expect(projection.node.result).toEqual({ balance: 5 });
+
+      const node = await handle.ensureReadyNode();
+      expect(await Frond.unwrapEffect(node.actions.replace(4))).toBe("receipt:4");
+      expect(node.result).toEqual({ balance: 5 });
       expect(await Frond.unwrapEffect(handle.actions.replace(6))).toMatchObject({
         _tag: "Success",
         value: "receipt:6",
@@ -221,18 +221,21 @@ describe("0.5 action compatibility", () => {
                 cause: rejectedTransfer,
               },
       };
-      const failure = await Effect.runPromise(Effect.flip(projection.node.actions.fail()));
+      const failure = await Effect.runPromise(Effect.flip(node.actions.fail()));
       expect(failure).toMatchObject(expectedError);
       expect(await Frond.unwrapEffect(handle.actions.fail())).toMatchObject({
         _tag: "Failure",
         error: expectedError,
       });
-      expect(await projection.runAction("fail")).toMatchObject({
+      expect(await Frond.unwrapEffect(handle.action("fail"))).toMatchObject({
         _tag: "Failure",
         error: expectedError,
       });
-      expect(projection.result).toEqual({ balance: 7 });
-      expect(projection.operationFailure).toMatchObject({ kind: "action", error: expectedError });
+      expect(node.result).toEqual({ balance: 7 });
+      expect(handle.read()).toMatchObject({
+        _tag: "Ready",
+        operationFailure: { kind: "action", error: expectedError },
+      });
       expect(handle.readReady().result).toEqual({ balance: 7 });
     });
   }

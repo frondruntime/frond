@@ -11,11 +11,6 @@ export const ReactRuntimeMetadata = {
     reason: "retry",
     priority: "visible",
   }),
-  action: (): Frond.Runtime.RuntimeWorkMetadata => ({
-    source: "react",
-    reason: "action",
-    priority: "visible",
-  }),
   refresh: (): Frond.Runtime.RuntimeWorkMetadata => ({
     source: "react",
     reason: "refresh",

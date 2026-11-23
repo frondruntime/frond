@@ -79,7 +79,7 @@ for (const [operation, event] of [
         );
       },
     };
-    const runtime = createRuntime({ sinks: [sink] });
+    const runtime = createRuntime({ development: true, eventBufferSize: 512, sinks: [sink] });
     try {
       const handle = runtime.client.node(Resource, {});
       await handle.ensureReadyNode();

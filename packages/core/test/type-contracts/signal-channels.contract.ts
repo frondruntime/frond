@@ -24,13 +24,21 @@ const Checkout = Frond.Signals.defineChannel<CheckoutEvents>({
 // Registration is what a boot-time channel list needs, and it is what keeps a
 // heterogeneously typed set of channels installable in one array.
 Checkout satisfies Frond.Signals.RuntimeSignalChannelRegistration;
-({ channels: [Checkout] }) satisfies Frond.Runtime.RuntimeOptions;
+({
+  development: true,
+  eventBufferSize: 0,
+  channels: [Checkout],
+}) satisfies Frond.Runtime.RuntimeOptions;
 
 const untyped = Frond.Signals.defineChannel({
   name: "types/untyped",
   policy: { retention: "none" },
 });
-({ channels: [Checkout, untyped] }) satisfies Frond.Runtime.RuntimeOptions;
+({
+  development: true,
+  eventBufferSize: 0,
+  channels: [Checkout, untyped],
+}) satisfies Frond.Runtime.RuntimeOptions;
 
 // The test surfaces take the same list, so a test declares a channel the way
 // production does instead of restating its policy as a raw `signalPolicies` entry.

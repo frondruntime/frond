@@ -5,13 +5,12 @@ import {
   Driver,
   dependencies,
   Key,
-  MobX,
   NodeBase,
   type NodeSpec,
   serviceSpec,
 } from "../src";
 
-test("MobX result mirrors a committed change from positive to negative zero", async () => {
+test("the class node preserves a committed change from positive to negative zero", async () => {
   type Spec = NodeSpec<{
     readonly mode: "async";
     readonly args: Record<string, never>;
@@ -29,16 +28,15 @@ test("MobX result mirrors a committed change from positive to negative zero", as
       actions: { negate: Driver.Action((ctx) => ctx.setResult(-0)) },
     });
   }
-  const runtime = createRuntime();
-  const projection = MobX.createNode(runtime, Resource, {});
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
+  const handle = runtime.client.node(Resource, {});
   try {
-    await projection.ensureReady();
-    expect(Object.is(projection.result, 0)).toBe(true);
-    await projection.runAction("negate");
-    expect(Object.is(projection.node.result, -0)).toBe(true);
-    expect(Object.is(projection.result, -0)).toBe(true);
+    const node = await handle.ensureReadyNode();
+    expect(Object.is(handle.readReady().result, 0)).toBe(true);
+    expect((await handle.actions.negate())._tag).toBe("Success");
+    expect(Object.is(node.result, -0)).toBe(true);
+    expect(Object.is(handle.readReady().result, -0)).toBe(true);
   } finally {
-    projection.dispose();
     await runtime.submit({ _tag: "RuntimeStop" });
   }
 });

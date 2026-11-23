@@ -37,7 +37,7 @@ import {
 describe("runtime events", () => {
   test("runtime exposes a stable runtime id in metadata queries and snapshots", async () => {
     const runtimeId = "test-runtime" as RuntimeId;
-    const runtime = createRuntime({ runtimeId });
+    const runtime = createRuntime({ development: true, eventBufferSize: 512, runtimeId });
 
     const status = await runtime.query({ _tag: "RuntimeStatus" });
     const events = await runtime.query({ _tag: "RuntimeEvents" });
@@ -49,8 +49,8 @@ describe("runtime events", () => {
   });
 
   test("separate runtimes receive separate generated ids and preserve ids after stop", async () => {
-    const first = createRuntime();
-    const second = createRuntime();
+    const first = createRuntime({ development: true, eventBufferSize: 512 });
+    const second = createRuntime({ development: true, eventBufferSize: 512 });
 
     const firstInitial = await first.query({ _tag: "RuntimeStatus" });
     const secondInitial = await second.query({ _tag: "RuntimeStatus" });
@@ -73,7 +73,7 @@ describe("runtime events", () => {
 
   test("runtime event records carry runtime id, monotonic sequence, classification, and failures", async () => {
     const runtimeId = "record-runtime" as RuntimeId;
-    const runtime = createRuntime({ runtimeId });
+    const runtime = createRuntime({ development: true, eventBufferSize: 512, runtimeId });
 
     await runtime.submit({ _tag: "RuntimeStart" });
 
@@ -104,7 +104,7 @@ describe("runtime events", () => {
   });
 
   test("runtime command metadata is normalized once into event records", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
 
     await runtime.submit({
       _tag: "RuntimeStart",
@@ -127,6 +127,8 @@ describe("runtime events", () => {
     const sinkGate = await Effect.runPromise(Deferred.make<void>());
     let sinkCompleted = false;
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       sinks: [
         {
           name: "slow",
@@ -163,7 +165,7 @@ describe("runtime events", () => {
   });
 
   test("second RuntimeStart is idempotent and emits no duplicate lifecycle events", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
 
     await runtime.submit({ _tag: "RuntimeStart" });
     await runtime.submit({ _tag: "RuntimeStart" });
@@ -193,7 +195,7 @@ describe("runtime events", () => {
         acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node<Record<string, never>, { value: string }>(UnsafeNode, {});
 
     await handle.ensureReady();
@@ -242,7 +244,7 @@ describe("runtime events", () => {
   });
 
   test("runtime command metadata fails loudly when malformed", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
 
     expect(() =>
       runtime.submit({
@@ -253,7 +255,7 @@ describe("runtime events", () => {
   });
 
   test("runtime event retention and query limits apply explicit valid limits", async () => {
-    const runtime = createRuntime({ eventBufferSize: 1 });
+    const runtime = createRuntime({ development: true, eventBufferSize: 1 });
 
     await runtime.submit({ _tag: "RuntimeStart" });
 
@@ -271,9 +273,11 @@ describe("runtime events", () => {
   });
 
   test("runtime event limits fail loudly when malformed", async () => {
-    expect(() => createRuntime({ eventBufferSize: 1.8 })).toThrow(FrondRuntimeInvariantViolation);
+    expect(() => createRuntime({ development: true, eventBufferSize: 1.8 })).toThrow(
+      FrondRuntimeInvariantViolation
+    );
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
 
     await expect(runtime.query({ _tag: "RuntimeEvents", limit: -1 })).rejects.toThrow(
@@ -303,7 +307,9 @@ describe("runtime events", () => {
         acquire: Driver.Acquire(() => Effect.succeed("ready")),
       });
     }
-    const host = await Effect.runPromise(makeRuntimeHost({ runtimeId }));
+    const host = await Effect.runPromise(
+      makeRuntimeHost({ development: true, eventBufferSize: 512, runtimeId })
+    );
     const tracer = makeTestTracer(spans);
 
     await Effect.runPromise(
@@ -338,7 +344,11 @@ describe("runtime events", () => {
   test("runtime bridge bypasses the Effect runner for registered core methods", async () => {
     const calls: Array<"run" | "runSync"> = [];
     const host = await Effect.runPromise(
-      makeRuntimeHost({ runtimeId: "bridge-runtime" as RuntimeId })
+      makeRuntimeHost({
+        development: true,
+        eventBufferSize: 512,
+        runtimeId: "bridge-runtime" as RuntimeId,
+      })
     );
     const runtime = bridgeRuntimeHost(host, {
       run: (effect) => {
@@ -402,6 +412,8 @@ describe("runtime events", () => {
       }).pipe(
         Effect.provide(
           FrondRuntimeLive({
+            development: true,
+            eventBufferSize: 512,
             runtimeId: "scoped-finalizer-runtime" as RuntimeId,
             sinks: [
               {
@@ -459,6 +471,8 @@ describe("runtime events", () => {
       }).pipe(
         Effect.provide(
           FrondRuntimeLive({
+            development: true,
+            eventBufferSize: 512,
             runtimeId: "scoped-idempotent-runtime" as RuntimeId,
             sinks: [
               {
@@ -485,7 +499,7 @@ describe("runtime events", () => {
   });
 
   test("runtime observers do not receive duplicate lifecycle events after stop", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const tags: Array<string> = [];
 
     runtime.observe((record) => {
@@ -528,7 +542,7 @@ describe("runtime events", () => {
       });
     }
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
 
     await runtime.submit({ _tag: "RuntimeStart" });
     await runtime.client.node<Record<string, never>, string>(SlowReleaseNode, {}).ensureReady();
@@ -585,7 +599,11 @@ describe("runtime events", () => {
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const host = yield* makeRuntimeHost({ driverTimeouts: { release: 5_000 } });
+        const host = yield* makeRuntimeHost({
+          development: true,
+          eventBufferSize: 512,
+          driverTimeouts: { release: 5_000 },
+        });
 
         yield* host.submit({ _tag: "RuntimeStart" });
         yield* host.submit({
@@ -658,7 +676,7 @@ describe("runtime events", () => {
         ),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const node = runtime.client.node<Record<string, never>, string>(RetryNode, {});
 
     await node.ensureReady();
@@ -701,6 +719,8 @@ describe("runtime events", () => {
       });
     }
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       sinks: [
         {
           name: "test-sink",
@@ -747,7 +767,7 @@ describe("runtime events", () => {
         release: Driver.Release(() => Effect.die(cause)),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const node = runtime.client.node<Record<string, never>, string>(ReleaseDefectNode, {});
 
     await node.ensureReady();
@@ -785,7 +805,7 @@ describe("runtime events", () => {
         }),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const node = runtime.client.node<Record<string, never>, string>(LiveStopFailureNode, {});
 
     await node.ensureReady();
@@ -803,6 +823,8 @@ describe("runtime events", () => {
   test("runtime emits action lifecycle events and sinks observe failures", async () => {
     const sinkEvents: Array<string> = [];
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       sinks: [
         {
           name: "test-sink",
@@ -876,7 +898,7 @@ describe("runtime events", () => {
         },
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const node = runtime.client.node<Record<string, never>, string>(QueuedActionNode, {});
 
     await node.ensureReady();
@@ -951,7 +973,7 @@ describe("runtime events", () => {
         },
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node<Record<string, never>, string>(QueuedDomainActionNode, {});
 
     await handle.ensureReady();
@@ -1019,7 +1041,7 @@ describe("runtime events", () => {
         },
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const node = runtime.client.node(QueuedMaintenanceNode, { filter: "all" });
 
     await node.ensureReady();
@@ -1066,6 +1088,8 @@ describe("runtime events", () => {
       });
     }
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       sinks: [
         {
           name: "test-sink",
@@ -1183,6 +1207,8 @@ describe("runtime events", () => {
       });
     }
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       sinks: [
         {
           name: "diagnostics-sink",
@@ -1240,7 +1266,7 @@ describe("runtime events", () => {
         ),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const request = {
       target: {
         _tag: "NodeRequest" as const,
@@ -1294,6 +1320,8 @@ describe("runtime events", () => {
       });
     }
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       sinks: [
         {
           name: "test-sink",
@@ -1343,6 +1371,8 @@ describe("runtime events", () => {
       });
     }
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       sinks: [
         {
           name: "test-sink",
@@ -1398,6 +1428,8 @@ describe("runtime events", () => {
       });
     }
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       sinks: [
         {
           name: "test-sink",
@@ -1451,6 +1483,8 @@ describe("runtime events", () => {
       });
     }
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       sinks: [
         {
           name: "test-sink",
@@ -1481,6 +1515,8 @@ describe("runtime events", () => {
 
   test("runtime sink failure is observed but does not fail commands", async () => {
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       sinks: [
         {
           name: "failing-sink",
@@ -1543,6 +1579,8 @@ describe("runtime events", () => {
       });
     }
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       sinks: [
         createRuntimeReportSink({
           name: "throwing-report-sink",
@@ -1576,6 +1614,8 @@ describe("runtime events", () => {
 
   test("runtime sink defects are observed but do not fail commands", async () => {
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       sinks: [
         {
           name: "throwing-sink",
@@ -1617,7 +1657,7 @@ describe("runtime events", () => {
   });
 
   test("runtime observer failure is recorded but does not fail commands", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
 
     runtime.observe(() => {
       throw new Error("observer rejected");
@@ -1640,6 +1680,8 @@ describe("runtime events", () => {
   test("runtime observer failures are delivered to sinks without recursion on sink failure", async () => {
     const sinkEvents: Array<string> = [];
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       sinks: [
         {
           name: "observer-failure-sink",
@@ -1687,6 +1729,8 @@ describe("runtime events", () => {
     const releaseSink = await Effect.runPromise(Deferred.make<void>());
     const sinkEvents: Array<string> = [];
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       sinks: [
         {
           name: "slow-observer-failure-sink",

@@ -2,7 +2,7 @@ import { createRuntime, FrondRuntimeClosed } from "../../src/runtime";
 import { Signals } from "../../src/signals";
 
 export async function runtimeLifecycleTypeSmoke(): Promise<void> {
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
 
   await runtime.submit({ _tag: "RuntimeStart" });
   await runtime.submit({ _tag: "RuntimeStop", reason: "type smoke" });

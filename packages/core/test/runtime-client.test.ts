@@ -53,7 +53,7 @@ describe("runtime client", () => {
         acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.args.filter)),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const node = runtime.client.node<Args, string>(ArgsNode, { filter: "all" });
 
     const result = await node.updateArgs({ filter: Number.NaN as unknown as string });
@@ -106,7 +106,7 @@ describe("runtime client", () => {
   });
 
   test("runtime client node handle ensures readiness and reads snapshots", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const profile = runtime.client.node<Record<string, never>, MutableProfile>(
       ActionProfileNode,
       {}
@@ -127,7 +127,7 @@ describe("runtime client", () => {
   });
 
   test("runtime client node handle exposes a monotonic read version", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const profile = runtime.client.node<Record<string, never>, MutableProfile>(
       ActionProfileNode,
       {}
@@ -151,7 +151,7 @@ describe("runtime client", () => {
   });
 
   test("runtime client boot preserves supplied work metadata", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const profile = runtime.client.node<Record<string, never>, MutableProfile>(
       ActionProfileNode,
       {}
@@ -216,7 +216,7 @@ describe("runtime client", () => {
   });
 
   test("runtime client boot validates metadata synchronously", () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const profile = runtime.client.node<Record<string, never>, MutableProfile>(
       ActionProfileNode,
       {}
@@ -228,7 +228,7 @@ describe("runtime client", () => {
   });
 
   test("runtime client node handle runs action and refresh through runtime events", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const profile = runtime.client.node<Record<string, never>, MutableProfile>(
       ActionProfileNode,
       {}
@@ -253,7 +253,7 @@ describe("runtime client", () => {
   });
 
   test("runtime client node handle releases through runtime host", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const profile = runtime.client.node<Record<string, never>, MutableProfile>(
       ActionProfileNode,
       {}
@@ -303,7 +303,7 @@ describe("runtime client", () => {
         constructed += 1;
       }
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node<Record<string, never>, string>(RewiredNode, {});
     let changes = 0;
     const unsubscribe = handle.subscribe(() => {
@@ -340,7 +340,7 @@ describe("runtime client", () => {
   });
 
   test("runtime client live leases compose demand and emit change events", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const profile = runtime.client.node<Record<string, never>, string>(ProfileNode, {});
 
     await profile.ensure();
@@ -415,7 +415,7 @@ describe("runtime client", () => {
   });
 
   test("runtime client live lease acquisition reports missing nodes explicitly", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const profile = runtime.client.node<Record<string, never>, string>(ProfileNode, {});
 
     const result = await profile.acquireLiveLease("manual", { pair: "BTC/USD" });
@@ -427,7 +427,7 @@ describe("runtime client", () => {
   });
 
   test("runtime client live lease acquisition reports unsupported scopes as failures", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const profile = runtime.client.node<Record<string, never>, string>(ProfileNode, {});
 
     await profile.ensure();
@@ -537,7 +537,7 @@ describe("runtime client", () => {
   });
 
   test("runtime client read is sync and non-throwing across idle pending and ready", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const profile = runtime.client.node<Record<string, never>, MutableProfile>(
       ActionProfileNode,
       {}
@@ -608,7 +608,7 @@ describe("runtime client", () => {
         ),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const slow = runtime.client.node<Record<string, never>, string>(SlowNode, {});
 
     const booted = slow.boot();
@@ -631,7 +631,7 @@ describe("runtime client", () => {
   });
 
   test("runtime client stopped runtime read is unavailable and boot does not synthesize pending", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const profile = runtime.client.node<Record<string, never>, MutableProfile>(
       ActionProfileNode,
       {}
@@ -658,7 +658,7 @@ describe("runtime client", () => {
   });
 
   test("stopped runtime rejects execution commands before graph work is admitted", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const profile = runtime.client.node<Record<string, never>, MutableProfile>(
       ActionProfileNode,
       {}
@@ -727,7 +727,7 @@ describe("runtime client", () => {
         ),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const owner = runtime.client.node<Record<string, never>, string>(SlowNode, {});
     const observer = runtime.client.node<Record<string, never>, string>(SlowNode, {});
     const secondClient = createRuntimeClient(effectHostFromRuntime(runtime), bridgeRunner);
@@ -782,7 +782,7 @@ describe("runtime client", () => {
         ),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const owner = runtime.client.node<Record<string, never>, string>(FailingNode, {});
     const observer = runtime.client.node<Record<string, never>, string>(FailingNode, {});
     const ready = owner.ensureReady();
@@ -802,7 +802,7 @@ describe("runtime client", () => {
   });
 
   test("runtime client subscribe only emits for matching node", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const profile = runtime.client.node<Record<string, never>, string>(ProfileNode, {});
     const actionProfile = runtime.client.node<Record<string, never>, MutableProfile>(
       ActionProfileNode,
@@ -852,7 +852,7 @@ describe("runtime client", () => {
         ),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const failing = runtime.client.node<Record<string, never>, string>(FailingOnceNode, {});
 
     await failing.ensureReady();
@@ -891,7 +891,7 @@ describe("runtime client", () => {
         acquire: Driver.Acquire(() => Effect.die(cause)),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const defect = runtime.client.node<Record<string, never>, string>(DefectNode, {});
     const pending = defect.boot();
 
@@ -948,7 +948,7 @@ describe("runtime client", () => {
         ),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const list = runtime.client.node<ListArgs, ListResult>(ListNode, { filter: "all" });
 
     await list.ensureReady();
@@ -1027,7 +1027,7 @@ describe("runtime client", () => {
         ),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const list = runtime.client.node<ListArgs, ListResult>(SlowListNode, { filter: "all" });
 
     await list.ensureReady();
@@ -1082,7 +1082,7 @@ describe("runtime client", () => {
         },
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const node = runtime.client.node<Record<string, never>, { value: string }>(BusyActionNode, {});
     const reads: Array<ReturnType<typeof node.read>> = [];
     const unsubscribe = node.subscribe(() => {
@@ -1126,7 +1126,7 @@ describe("runtime client", () => {
         refresh: Driver.Refresh(() => Effect.fail({ _tag: "RefreshRejected" })),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const list = runtime.client.node<ListArgs, ListResult>(RollbackListNode, { filter: "all" });
 
     await list.ensureReady();
@@ -1177,7 +1177,7 @@ describe("runtime client", () => {
         ),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const list = runtime.client.node<ListArgs, ListResult>(RollbackPatchListNode, {
       filter: "all",
     });
@@ -1213,7 +1213,7 @@ describe("runtime client", () => {
         acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.args.filter)),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const list = runtime.client.node<ListArgs, string>(KeyedListNode, {
       id: "one",
       filter: "all",
@@ -1250,7 +1250,7 @@ describe("runtime client", () => {
         acquire: Driver.Acquire(() => Effect.succeed({ value: "ready" })),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node<Record<string, never>, { value: string }>(UnsafeNode, {});
 
     await handle.ensureReady();
@@ -1299,7 +1299,7 @@ describe("runtime client", () => {
       });
     }
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node<Record<string, never>, string>(IdleUnsafeNode, {});
 
     await handle.ensure();
@@ -1340,7 +1340,7 @@ describe("runtime client", () => {
       });
     }
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     // The args are canonical, but the key builder returns NaN, so the node lands in Invalid status.
     const handle = runtime.client.node<Record<string, never>, string>(InvalidUnsafeNode, {});
 
@@ -1442,7 +1442,7 @@ describe("runtime client", () => {
   });
 
   test("__unsafe on a real runtime records a rejected submission as a runtime event", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
     const handle = runtime.client.node(ProfileNode, {});
     await handle.ensureReady();
@@ -1467,6 +1467,8 @@ describe("runtime client", () => {
     const sink = { started: 0, finalized: 0 };
     const events: Array<string> = [];
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       sinks: [
         {
           name: "blocking-diagnostics",
@@ -1510,6 +1512,8 @@ describe("runtime client", () => {
   test("a failure recorded after the stop swept observer work starts no sink", async () => {
     let started = 0;
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       sinks: [
         {
           name: "blocking-diagnostics",
@@ -1595,7 +1599,7 @@ describe("runtime client", () => {
   });
 
   test("readVersion stays monotonic across evict and recreate for the same node id", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const profile = runtime.client.node<Record<string, never>, MutableProfile>(
       ActionProfileNode,
       {}

@@ -1,5 +1,5 @@
 import type * as Frond from "@frondruntime/core";
-import { getReactArgsFingerprint, validatedNodeIdResolver } from "./argsFingerprint";
+import { resolveReactNodeIdentity, validatedNodeIdResolver } from "./argsFingerprint";
 import { FrondReactUsageError } from "./errors";
 import type { ReactNodeInputMap, ReactNodeRuntime } from "./types";
 
@@ -44,15 +44,11 @@ export function prepareReactNodeMap(input: {
     }
 
     const [spec, args] = entry;
-    // One canonicalization per entry on a runtime from `createRuntime`: the
-    // fingerprint validates args, then resolution skips its own pass.
-    const validatedFingerprint =
-      resolveValidated === undefined ? undefined : getReactArgsFingerprint(args);
-    const nodeId =
-      resolveValidated === undefined
-        ? input.runtime.resolveNodeIdSync({ spec, args })
-        : resolveValidated({ spec, args });
-    const argsFingerprint = validatedFingerprint ?? getReactArgsFingerprint(args);
+    const { nodeId, argsFingerprint } = resolveReactNodeIdentity(
+      input.runtime,
+      { spec, args },
+      resolveValidated
+    );
     const preparedEntry = {
       key,
       spec,

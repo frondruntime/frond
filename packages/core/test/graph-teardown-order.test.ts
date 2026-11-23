@@ -23,9 +23,10 @@ import {
 type Timing = "instant" | "microtask";
 
 /** A resource a node owns; its dependents use it until their cleanup ends. */
-interface Resource {
-  readonly name: string;
-  open: boolean;
+class Resource {
+  open = true;
+
+  constructor(readonly name: string) {}
 }
 
 type ResourceSpec<TDeps> = NodeSpec<{
@@ -48,7 +49,8 @@ function openResource(
   trace: Array<string>,
   timing: Timing
 ): Resource {
-  const resource: Resource = { name, open: true };
+  // An imperative capability stays shared; committed plain data is read-only.
+  const resource = new Resource(name);
   const finish = (): void => {
     let closed = "";
     for (const dependency of used) {
@@ -158,7 +160,7 @@ describe.each(["instant", "microtask"] as const)("teardown order, %s disposers",
   test("eviction cleans up a dependent before its dependency", async () => {
     const trace: Array<string> = [];
     const { Venue, Quotes } = makeChain(trace, timing);
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.client.node(Quotes, {}).ensureReady();
 
     const result = await runtime.client.node(Venue, {}).evict("selfAndDependents", "teardown");
@@ -171,7 +173,7 @@ describe.each(["instant", "microtask"] as const)("teardown order, %s disposers",
   test("runtime stop cleans up a dependent before its dependency", async () => {
     const trace: Array<string> = [];
     const { Quotes } = makeChain(trace, timing);
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.client.node(Quotes, {}).ensureReady();
 
     await runtime.submit({ _tag: "RuntimeStop" });
@@ -182,7 +184,7 @@ describe.each(["instant", "microtask"] as const)("teardown order, %s disposers",
   test("eviction follows edge precedence, not dependency depth", async () => {
     const trace: Array<string> = [];
     const { Venue, Screen } = makeDiamond(trace, timing);
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.client.node(Screen, {}).ensureReady();
 
     const result = await runtime.client.node(Venue, {}).evict("selfAndDependents", "teardown");
@@ -195,7 +197,7 @@ describe.each(["instant", "microtask"] as const)("teardown order, %s disposers",
   test("runtime stop follows edge precedence, not dependency depth", async () => {
     const trace: Array<string> = [];
     const { Screen } = makeDiamond(trace, timing);
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.client.node(Screen, {}).ensureReady();
 
     await runtime.submit({ _tag: "RuntimeStop" });
@@ -289,7 +291,11 @@ async function stopWhileCanceledWorkDrains(placement: "alone" | "with a dependen
     });
   }
 
-  const runtime = createRuntime({ driverTimeouts: { release: 20, live: 20 } });
+  const runtime = createRuntime({
+    development: true,
+    eventBufferSize: 512,
+    driverTimeouts: { release: 20, live: 20 },
+  });
   await runtime.client.node(Worker, {}).ensureReady();
   if (placement === "alone") await runtime.client.node(Gate, {}).ensureReady();
   else await runtime.client.node(Holder, {}).ensureReady();
@@ -362,7 +368,7 @@ test("runtime stop starts a dependency's cleanup only after both of its dependen
     });
   }
 
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   await runtime.client.node(Feed, { name: "Slow", delay: 30 }).ensureReady();
   await runtime.client.node(Feed, { name: "Fast", delay: 5 }).ensureReady();
 
@@ -460,7 +466,11 @@ async function teardownWhileDependentDrains(
   }
 
   const release = finalizer === "finishes in time" ? 200 : 20;
-  const runtime = createRuntime({ driverTimeouts: { release, live: 20 } });
+  const runtime = createRuntime({
+    development: true,
+    eventBufferSize: 512,
+    driverTimeouts: { release, live: 20 },
+  });
   await runtime.client.node(Worker, {}).ensureReady();
   const hanging = Effect.runPromiseExit(runtime.client.node(Worker, {}).action("hang"));
   await started;

@@ -43,7 +43,7 @@ const checkoutChannel = Signals.defineChannel<CheckoutEvents>({
 describe("runtime signals", () => {
   test("publish records runtime id, sequence, channel, name, and supports channel queries", async () => {
     const runtimeId = "signal-runtime" as RuntimeId;
-    const runtime = createRuntime({ runtimeId });
+    const runtime = createRuntime({ development: true, eventBufferSize: 512, runtimeId });
 
     await runtime.publish(
       Signals.signal({ channel: analyticsChannel, name: "button_clicked", payload: { id: 1 } })
@@ -77,6 +77,8 @@ describe("runtime signals", () => {
 
   test("bounded retention drops oldest records and none retention stores no retained records", async () => {
     const bounded = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       signalPolicies: {
         [analyticsChannel]: { retention: "bounded", bufferSize: 1 },
         [diagnosticsChannel]: { retention: "none" },
@@ -96,6 +98,8 @@ describe("runtime signals", () => {
 
   test("bounded retention preserves global insertion order across interleaved channels", async () => {
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       signalPolicies: {
         [analyticsChannel]: { retention: "bounded", bufferSize: 2 },
         [diagnosticsChannel]: { retention: "bounded", bufferSize: 2 },
@@ -127,6 +131,8 @@ describe("runtime signals", () => {
 
   test("channel definitions install signal retention policy and create channel-scoped signals", async () => {
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       channels: [domainEventsChannel, ephemeralChannel],
     });
 
@@ -174,6 +180,8 @@ describe("runtime signals", () => {
         }),
     });
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       channels: [checkoutChannel],
       signalSubscribers: [subscriber],
     });
@@ -208,6 +216,8 @@ describe("runtime signals", () => {
   test("none retention redacts signal payloads from runtime events and sink delivery", async () => {
     const sinkSignals: Array<RuntimeSignalRecord> = [];
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       channels: [ephemeralChannel],
       sinks: [
         {
@@ -251,6 +261,8 @@ describe("runtime signals", () => {
   test("duplicate channel definitions fail loudly", () => {
     expect(() =>
       createRuntime({
+        development: true,
+        eventBufferSize: 512,
         channels: [domainEventsChannel, domainEventsChannel],
       })
     ).toThrow(FrondRuntimeInvariantViolation);
@@ -259,6 +271,8 @@ describe("runtime signals", () => {
   test("channel definitions cannot be redefined through raw signal policies", () => {
     expect(() =>
       createRuntime({
+        development: true,
+        eventBufferSize: 512,
         channels: [domainEventsChannel],
         signalPolicies: {
           [domainEventsChannel.channel]: { retention: "none" },
@@ -269,6 +283,8 @@ describe("runtime signals", () => {
 
   test("zero-sized bounded retention stores no records", async () => {
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       signalPolicies: {
         [analyticsChannel]: { retention: "bounded", bufferSize: 0 },
       },
@@ -289,7 +305,7 @@ describe("runtime signals", () => {
     // `> 0`, so the buffer grows forever. Names like `constructor` are not
     // hypothetical for a domain event bus, and `channels` is a public
     // registration surface now.
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const inherited = Signals.channel("toString");
 
     for (let index = 0; index < 200; index += 1) {
@@ -310,12 +326,16 @@ describe("runtime signals", () => {
     });
 
     // Registering one must not read as a duplicate of the inherited member.
-    expect(() => createRuntime({ channels: [constructorChannel] })).not.toThrow();
+    expect(() =>
+      createRuntime({ development: true, eventBufferSize: 512, channels: [constructorChannel] })
+    ).not.toThrow();
 
     // And a raw policy for a name nothing registered must not read as a
     // collision with `Object.prototype.valueOf`.
     expect(() =>
       createRuntime({
+        development: true,
+        eventBufferSize: 512,
         signalPolicies: { [Signals.channel("valueOf")]: { retention: "none" } },
       })
     ).not.toThrow();
@@ -323,6 +343,8 @@ describe("runtime signals", () => {
     // The real collision still throws.
     expect(() =>
       createRuntime({
+        development: true,
+        eventBufferSize: 512,
         channels: [constructorChannel],
         signalPolicies: { [constructorChannel.channel]: { retention: "none" } },
       })
@@ -332,13 +354,15 @@ describe("runtime signals", () => {
   test("signal retention and query limits fail loudly when malformed", async () => {
     expect(() =>
       createRuntime({
+        development: true,
+        eventBufferSize: 512,
         signalPolicies: {
           [analyticsChannel]: { retention: "bounded", bufferSize: 1.8 },
         },
       })
     ).toThrow(FrondRuntimeInvariantViolation);
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
 
     await runtime.publish(Signals.signal({ channel: analyticsChannel, name: "recorded" }));
     await expect(
@@ -351,7 +375,7 @@ describe("runtime signals", () => {
 
   test("subscriber receives only later publishes and retained records are explicit", async () => {
     const delivered: Array<string> = [];
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
 
     await runtime.publish(Signals.signal({ channel: analyticsChannel, name: "before" }));
     const retained = await runtime.query({ _tag: "RuntimeSignals", channel: analyticsChannel });
@@ -397,7 +421,7 @@ describe("runtime signals", () => {
         ),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const node = runtime.client.node<Record<string, never>, string>(SignalNode, {});
 
     await runtime.publish(Signals.signal({ channel: analyticsChannel, name: "before" }));
@@ -430,7 +454,9 @@ describe("runtime signals", () => {
         ),
       });
     }
-    const runtime = await Effect.runPromise(FrondRuntimeEffect());
+    const runtime = await Effect.runPromise(
+      FrondRuntimeEffect({ development: true, eventBufferSize: 512 })
+    );
 
     await Effect.runPromise(
       runtime.publish(Signals.signal({ channel: analyticsChannel, name: "before" }))
@@ -446,7 +472,9 @@ describe("runtime signals", () => {
   });
 
   test("subscribe is future-only and does not run retained handlers on attach", async () => {
-    const host = await Effect.runPromise(makeRuntimeHost());
+    const host = await Effect.runPromise(
+      makeRuntimeHost({ development: true, eventBufferSize: 512 })
+    );
     const delivered: Array<string> = [];
 
     await Effect.runPromise(
@@ -472,6 +500,8 @@ describe("runtime signals", () => {
 
   test("subscriber failures are typed diagnostics and do not fail publish", async () => {
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       signalSubscribers: [
         {
           name: "failing-subscriber",
@@ -535,7 +565,7 @@ describe("runtime signals", () => {
         ),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const node = runtime.client.node<Record<string, never>, string>(SignalNode, {});
 
     await node.ensureReady();
@@ -574,7 +604,7 @@ describe("runtime signals", () => {
         }),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const node = runtime.client.node<Record<string, never>, string>(SignalNode, {});
 
     await node.ensureReady();
@@ -590,6 +620,8 @@ describe("runtime signals", () => {
     const runtimeId = "signal-trace-runtime" as RuntimeId;
     const host = await Effect.runPromise(
       makeRuntimeHost({
+        development: true,
+        eventBufferSize: 512,
         runtimeId,
         signalSubscribers: [
           {

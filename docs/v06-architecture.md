@@ -11,8 +11,8 @@ source-compatible and its behavior is what the tests pin.
 
 ## Fixed
 
-- The public 0.5 API stays source-compatible: `createRuntime`, `MobX` nodes,
-  the `MobXNode` interface, the react package, `Driver.*`, the Effect client.
+- The public 0.5 API stays source-compatible: `createRuntime`, the class node,
+  the react package, `Driver.*`, the Effect client.
 - 0.5 semantics (demand, lifecycle, validity, admission) are what the tests
   pin. The 1.0 kernel is **not** copied in; there is no pure
   `step(cell, intent)` kernel. 0.6 de-Effects 0.5's own graph.
@@ -26,7 +26,10 @@ source-compatible and its behavior is what the tests pin.
    driver returned, not a deep observable copy, and it is read-only: changing
    it in place notifies nothing. A new result comes from a commit (a
    `patchResult` action, a refresh, an acquire). There is no development-mode
-   freeze and no projected copy (2026-11-19).
+   freeze and no projected copy (2026-11-19). Superseded in 0.7: committed
+   results are frozen and `node.result` is the committed snapshot behind
+   one observable reference, shared between commits
+   (packages/core/MIGRATION-0.7.md).
 2. **Spans.** Spans exist only on the Effect facade and on driver edges. The
    Promise facade (`createRuntime`, `node.runAction()`) opens no command spans.
    `packages/core/test/runtime-events.test.ts` (tracer supplied with

@@ -47,7 +47,7 @@ async function startHub(port: number): Promise<{
   readonly retained: (attachmentId: string) => EventRing | undefined;
   readonly queries: () => QueryBroker;
 }> {
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   await runtime.submit({ _tag: "RuntimeStart" });
 
   const handle = runtime.client.node(HubServerNode, {
@@ -270,7 +270,11 @@ describe("hub attachment", () => {
   test("a signal's channel and name survive the wire and drive the hub's filters", async () => {
     const hub = await startHub(takePort());
 
-    const app = createRuntime({ channels: [checkoutChannel, syncChannel] });
+    const app = createRuntime({
+      development: true,
+      eventBufferSize: 512,
+      channels: [checkoutChannel, syncChannel],
+    });
     await app.submit({ _tag: "RuntimeStart" });
 
     teardown.push(async () => {

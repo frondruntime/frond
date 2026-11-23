@@ -3,7 +3,6 @@ import { Effect } from "effect";
 import { autorun, observable, onBecomeObserved, onBecomeUnobserved, runInAction } from "mobx";
 import { Args, Driver, Key, NodeBase, type NodeSpec, resourceSpec, tag } from "../../src";
 import type { NodeLiveDemandSnapshot } from "../../src/graph";
-import { createNode, type MobXNode } from "../../src/mobx";
 import type { RuntimeEventRecord } from "../../src/runtime";
 import { createFrondTestHarness, type FrondTestHarness } from "../../src/testing";
 
@@ -91,36 +90,44 @@ describe("e2e fine-grained liveness composition", () => {
     fineLiveUpdates.length = 0;
     fineLiveStops.length = 0;
     const harness = createFrondTestHarness();
-    const projection = createNode(harness.runtime, FineRatesNode, Args.none);
+    const handle = harness.node(FineRatesNode, Args.none);
 
     await harness.start();
-    await projection.ensureReady();
-    await projection.sync();
+    const node = await handle.ensureReadyNode();
 
-    expect(projection.snapshot?.liveDemand).toEqual({
-      isLive: false,
-      sources: [],
-      scopes: [],
+    expect(await handle.snapshot()).toMatchObject({
+      _tag: "Found",
+      snapshot: {
+        liveDemand: {
+          isLive: false,
+          sources: [],
+          scopes: [],
+        },
+      },
     });
 
     await harness.runtime.getSnapshot();
     await harness.runtime.query({ _tag: "RuntimeEvents" });
-    await projection.sync();
 
-    expect(projection.snapshot?.liveDemand).toEqual({
-      isLive: false,
-      sources: [],
-      scopes: [],
+    expect(await handle.snapshot()).toMatchObject({
+      _tag: "Found",
+      snapshot: {
+        liveDemand: {
+          isLive: false,
+          sources: [],
+          scopes: [],
+        },
+      },
     });
 
     const selectedPair = observable.box<Pair>("BTC/USD");
     const stop = autorun(() => {
-      void projection.node.getRate(selectedPair.get());
+      void node.getRate(selectedPair.get());
     });
 
     await waitForLiveDemand(
       harness,
-      projection,
+      node,
       {
         isLive: true,
         sources: ["mobx"],
@@ -144,7 +151,7 @@ describe("e2e fine-grained liveness composition", () => {
 
     await waitForLiveDemand(
       harness,
-      projection,
+      node,
       {
         isLive: true,
         sources: ["mobx"],
@@ -180,7 +187,7 @@ describe("e2e fine-grained liveness composition", () => {
 
     await waitForLiveDemand(
       harness,
-      projection,
+      node,
       {
         isLive: false,
         sources: [],
@@ -196,22 +203,23 @@ describe("e2e fine-grained liveness composition", () => {
       },
     ]);
 
-    projection.dispose();
+    await harness.teardown();
   });
 });
 
 async function waitForLiveDemand(
   harness: FrondTestHarness,
-  projection: MobXNode<Record<string, never>, object, RatesResult, FineRatesNode>,
+  node: FineRatesNode,
   expected: NodeLiveDemandSnapshot,
   changedEventIndex: number
 ): Promise<void> {
-  await harness.waitForEvent(
-    (record) => isMatchingLiveDemandEvent(record, projection.node.nodeId, expected),
-    { description: `live demand ${changedEventIndex}` }
-  );
-  await projection.sync();
-  expect(projection.snapshot?.liveDemand).toEqual(expected);
+  await harness.waitForEvent((record) => isMatchingLiveDemandEvent(record, node.nodeId, expected), {
+    description: `live demand ${changedEventIndex}`,
+  });
+  expect(await harness.node(FineRatesNode, Args.none).snapshot()).toMatchObject({
+    _tag: "Found",
+    snapshot: { liveDemand: expected },
+  });
 }
 
 function isMatchingLiveDemandEvent(

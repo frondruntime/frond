@@ -17,8 +17,8 @@ import {
 import type { ActionContract } from "../src/node";
 import { createFrondTestHarness } from "../src/testing";
 
-// `patchResult` staging clones the current result before running the recipe so
-// failed operations roll back. The clone must copy EVERY own property —
+// `patchResult` stages copy-on-write drafts so failed operations roll back.
+// Copied containers must preserve EVERY own property —
 // including non-enumerable symbol-keyed slots such as the result envelope's
 // internal — or a successful patch silently strips hidden state from the
 // committed result and a rollback comparison sees a mutilated object.
@@ -163,7 +163,7 @@ describe("patchResult clone fidelity", () => {
     expect(after).not.toBe(before);
     expect(after.count).toBe(1);
     expect(before.count).toBe(0);
-    expect(after.meta).not.toBe(before.meta);
+    expect(after.meta).toBe(before.meta);
     expect(after.meta).toEqual({ flavor: "plain" });
 
     // ...and it carries the envelope slot with its descriptor intact: present,

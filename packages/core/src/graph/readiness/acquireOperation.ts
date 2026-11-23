@@ -261,13 +261,18 @@ export function startAcquire(
       }
       let committed: ResultState;
       try {
-        committed = commitDriverOperationResult(cell.resultValidityPolicy, now(), {
-          context: cell,
-          returned: exit.value,
-          staged: resultState,
-          defaultLoadedAt: now(),
-          retainEqual: base.base.previousResult,
-        });
+        committed = commitDriverOperationResult(
+          cell.resultValidityPolicy,
+          now(),
+          {
+            context: cell,
+            returned: exit.value,
+            staged: resultState,
+            defaultLoadedAt: now(),
+            retainEqual: base.base.previousResult,
+          },
+          cell.development
+        );
       } catch (cause) {
         fail(resultValidityInvariantFailure(cell, "driver result commit failed", cause));
         return;

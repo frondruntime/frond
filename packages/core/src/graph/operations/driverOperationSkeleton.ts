@@ -8,6 +8,7 @@ import { makeDriverContext } from "../driverExecution/driverContext";
 import { startEdge } from "../driverExecution/driverOperationRunner";
 import { cancelDriverOperation, notifyValidityThen } from "../driverExecution/driverOperationSteps";
 import type { EffectBoundary } from "../driverExecution/effectBoundary";
+import { finishObserverWork } from "../driverExecution/effectRunner";
 import {
   makeOperationDisposers,
   type OperationDisposerSettleReason,
@@ -138,22 +139,29 @@ export function startReadyDriverOperation<TValue, TResult extends BackgroundOper
         resume(Exit.succeed(input.makeFailure(singleFailure(exit.cause))));
         return;
       }
+      // Taken once: a commit that throws after the take still owns this batch.
+      const operationDisposers = disposers.take(input.disposerReason);
       let committed: ResultState;
+      let observerFailure: ReturnType<typeof commitReadyOperationResultSync>;
       try {
         committed = commitDriverOperationResult(
           input.cell.resultValidityPolicy,
           now(),
-          input.commitInput({ value: exit.value, currentResultState, now })
+          {
+            ...input.commitInput({ value: exit.value, currentResultState, now }),
+            previous: input.readyData,
+          },
+          input.cell.development
         );
-        commitReadyOperationResultSync({
+        observerFailure = commitReadyOperationResultSync({
           cell: input.cell,
           node: input.readyData.node,
           deps: deps.value,
           resultState: committed,
-          operationDisposers: disposers.take(input.disposerReason),
+          operationDisposers,
         });
       } catch (cause) {
-        appendOperationDisposersSync(input.cell, disposers.take(input.disposerReason));
+        appendOperationDisposersSync(input.cell, operationDisposers);
         resume(
           Exit.succeed(
             input.makeFailure(
@@ -164,6 +172,32 @@ export function startReadyDriverOperation<TValue, TResult extends BackgroundOper
         return;
       }
       const result = input.makeSuccess({ value: exit.value, committedResultState: committed });
+      if (observerFailure !== undefined) {
+        const pending = finishObserverWork(
+          input.cell.reportObserverFailure({
+            channel: "node-change",
+            value: [input.cell.nodeId],
+            cause: observerFailure.cause,
+          }),
+          context,
+          () => {
+            cancel =
+              notifyValidityThen(
+                input.cell,
+                input.previousValidity,
+                committed.resultValidity,
+                input.validityReason,
+                context,
+                resume,
+                Exit.succeed(result)
+              ) ?? noCancel;
+          },
+          input.cell.jobs
+        );
+        // An inline observer may already have installed the validity work's cancel.
+        if (pending !== undefined) cancel = pending;
+        return;
+      }
       cancel =
         notifyValidityThen(
           input.cell,

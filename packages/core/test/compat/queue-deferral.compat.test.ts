@@ -11,10 +11,8 @@ import { Cause } from "effect";
 // in the caller's synchronous frame.
 
 const harnesses: FrondTestHarness[] = [];
-const disposers: Array<() => void> = [];
 
 afterEach(async () => {
-  for (const dispose of disposers.splice(0)) dispose();
   for (const harness of harnesses.splice(0)) await harness.teardown();
 });
 
@@ -67,16 +65,14 @@ function draftNode(name: string) {
 test("a call returns before its driver runs, so a read in the same frame sees the old result", async () => {
   const { DraftNode } = draftNode("same-frame-read");
   const harness = createHarness();
-  const projection = Frond.MobX.createNode(harness.runtime, DraftNode, {});
-  disposers.push(() => projection.dispose());
-  await projection.ensureReady();
+  const node = await harness.startNode(DraftNode, {});
 
-  const saving = projection.node.actions.save("unsaved");
+  const saving = node.actions.save("unsaved");
   // 0.6 intended change: 0.5 ran a synchronous driver in the caller's frame and
   // read "unsaved" here. 0.6 posts the call to the graph queue.
-  expect(projection.node.result.draft).toBe("");
+  expect(node.result.draft).toBe("");
   expect(await saving).toBe("unsaved");
-  expect(projection.node.result.draft).toBe("unsaved");
+  expect(node.result.draft).toBe("unsaved");
 });
 
 test("an abort in the same tick as the call cancels it before its driver runs", async () => {

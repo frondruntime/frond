@@ -18,7 +18,7 @@ const configSignalChannel = Signals.channel("runtime.config");
 
 describe("runtime config normalization", () => {
   test("omitted runtime options normalize to generated id, enabled input, and retained signals", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
 
     await runtime.submit({ _tag: "RuntimeStart" });
     await runtime.publish(Signals.signal({ channel: configSignalChannel, name: "default" }));
@@ -40,6 +40,7 @@ describe("runtime config normalization", () => {
     const runtime = createRuntime({
       runtimeId,
       inputIngestionEnabled: false,
+      development: true,
       eventBufferSize: 1,
       signalPolicies: {
         [configSignalChannel]: { retention: "bounded", bufferSize: 1 },
@@ -104,12 +105,18 @@ describe("runtime config normalization", () => {
   test("malformed config still fails loudly at construction", () => {
     expect(() =>
       createRuntime({
+        development: true,
+        eventBufferSize: 512,
         syncClock: { now: undefined as never },
       })
     ).toThrow(FrondRuntimeInvariantViolation);
-    expect(() => createRuntime({ eventBufferSize: -1 })).toThrow(FrondRuntimeInvariantViolation);
+    expect(() => createRuntime({ development: true, eventBufferSize: -1 })).toThrow(
+      FrondRuntimeInvariantViolation
+    );
     expect(() =>
       createRuntime({
+        development: true,
+        eventBufferSize: 512,
         signalPolicies: {
           [configSignalChannel]: { retention: "bounded", bufferSize: Number.NaN },
         },

@@ -37,7 +37,7 @@ test("patchResult preserves an own __proto__ data property from JSON", async () 
       },
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   try {
     const node = await runtime.client.node(Resource, {}).ensureReadyNode();
     await node.actions.increment();

@@ -11,6 +11,7 @@ import {
   resourceSpec,
   tag,
 } from "../src/index";
+import { createDeferred } from "../src/testing";
 
 // Public-entry contract for the Promise facade: an aborted or interrupted
 // Promise caller rejects with its interruption `Cause`, the same rejection an
@@ -18,14 +19,6 @@ import {
 // "All fibers interrupted without error" Error never escapes a Promise method.
 
 const rawInterruptionMessage = "All fibers interrupted without error";
-
-function deferred() {
-  let resolve: () => void = () => undefined;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 async function rejection(promise: Promise<unknown>): Promise<unknown> {
   try {
@@ -52,8 +45,8 @@ type GatedSpec = NodeSpec<{
 }>;
 
 function gatedNode(name: string, options: { readonly gateAcquire: boolean }) {
-  const entered = deferred();
-  const gate = deferred();
+  const entered = createDeferred<void>();
+  const gate = createDeferred<void>();
   let refreshes = 0;
   class GatedNode extends NodeBase<GatedSpec> {
     static readonly spec = resourceSpec.async<GatedSpec>({
@@ -92,7 +85,7 @@ describe("Promise facade interruption", () => {
     const { GatedNode, entered, gate } = gatedNode("facade-interruption/refresh", {
       gateAcquire: false,
     });
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(GatedNode, Args.none);
     await handle.ensureReady();
     const controller = new AbortController();
@@ -100,7 +93,7 @@ describe("Promise facade interruption", () => {
     await entered.promise;
     controller.abort();
     expectInterruptedCause(await first);
-    const committed = deferred();
+    const committed = createDeferred<void>();
     const unsubscribe = handle.subscribe(() => {
       const read = handle.read();
       if (read._tag === "Ready" && !read.busy && read.result.value === "refresh:1")
@@ -120,7 +113,7 @@ describe("Promise facade interruption", () => {
     const { GatedNode } = gatedNode("facade-interruption/refresh-pre-aborted", {
       gateAcquire: false,
     });
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(GatedNode, Args.none);
     await handle.ensureReady();
     const controller = new AbortController();
@@ -133,7 +126,7 @@ describe("Promise facade interruption", () => {
     const { GatedNode, entered, gate } = gatedNode("facade-interruption/ready", {
       gateAcquire: true,
     });
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(GatedNode, Args.none);
     const readyController = new AbortController();
     const nodeController = new AbortController();
@@ -153,7 +146,7 @@ describe("Promise facade interruption", () => {
     const { GatedNode, entered, gate } = gatedNode("facade-interruption/boot", {
       gateAcquire: true,
     });
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(GatedNode, Args.none);
     const controller = new AbortController();
     const read = handle.boot({ signal: controller.signal });
@@ -173,7 +166,7 @@ describe("Promise facade interruption", () => {
     const { GatedNode, entered } = gatedNode("facade-interruption/action-stop", {
       gateAcquire: false,
     });
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(GatedNode, Args.none);
     await handle.ensureReady();
     const pending = handle.actions.write("late");

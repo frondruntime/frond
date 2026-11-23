@@ -64,7 +64,7 @@ type AdmissionSpec = import("../src").NodeSpec<{
 
 describe("static-spec authoring", () => {
   test("graph planning accepts node specs and instantiates the exported class", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const ready = await runtime.client.node(StaticCounterNode, Args.none).ensureReady();
     const node = ready.node;
 
@@ -77,14 +77,14 @@ describe("static-spec authoring", () => {
   test("graph planning rejects NodeBase subclasses that are not node specs", async () => {
     class MissingSpecNode extends NodeBase<StaticCounterSpec> {}
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     expect(() =>
       runtime.client.node(MissingSpecNode as typeof StaticCounterNode, Args.none)
     ).toThrow("static spec");
   });
 
   test("graph planning rejects direct descriptor objects", () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const descriptor = (StaticCounterNode.spec as unknown as { readonly spec: unknown }).spec;
 
     expect(() =>
@@ -117,7 +117,7 @@ describe("static-spec authoring", () => {
       });
     }
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const ready = await runtime.client.node(AdmissionNode, Args.none).ensureReady();
     const node = ready.node;
     const first = node.actions.rejectSlow({ id: "a" });
@@ -156,7 +156,7 @@ describe("static-spec authoring", () => {
       });
     }
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const ready = await runtime.client.node(AdmissionNode, Args.none).ensureReady();
     const node = ready.node;
     const first = node.actions.joinSlow({ id: "joined" });

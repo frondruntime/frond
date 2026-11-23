@@ -37,6 +37,8 @@ check, a cited skill rule), not with intent.
 - A non-`observer` component reading observable getters.
 - Result committed from an action return value instead of `ctx.setResult` /
   `ctx.patchResult`; class result patched without `resultPatch.nonPlainClone`.
+- A direct write to `node.result`: it changes only the live tree, and an
+  equal refresh keeps the drift.
 - Live work whose `stop` does not dispose what `start` returned; liveness
   inferred from component presence.
 - A stateful capability result mutating itself without `ctx.setResult` on

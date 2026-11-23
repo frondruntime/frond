@@ -9,8 +9,8 @@ afterEach(async () => {
     await runtime.submit({ _tag: "RuntimeStop", reason: "compatibility teardown" });
   }
 });
-function createRuntime(options: Frond.Runtime.RuntimeOptions = {}) {
-  const runtime = Frond.createRuntime(options);
+function createRuntime(options: Partial<Frond.Runtime.RuntimeOptions> = {}) {
+  const runtime = Frond.createRuntime({ development: true, eventBufferSize: 512, ...options });
   runtimes.push(runtime);
   return runtime;
 }
@@ -44,7 +44,7 @@ for (const failureMode of ["synchronous throw", "promise rejection"] as const) {
         }),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(FailingNode, Frond.Args.none);
     // 0.5 behavior: readiness failures resolve as graph state; only ready-node reads reject.
     const outcome = await handle.ensureReady();
@@ -79,7 +79,7 @@ for (const failureMode of ["typed failure", "defect"] as const) {
         ),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(FailingNode, Frond.Args.none);
     const semanticEvents: string[] = [];
     runtime.observe((record) => {
@@ -131,7 +131,7 @@ test("ensureReady retries an acquire failure while boot retains the failed attem
       }),
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const handle = runtime.client.node(RecoveringNode, Frond.Args.none);
   await handle.ensureReady();
   expect(handle.boot()._tag).toBe("Error");
@@ -170,7 +170,7 @@ test("a failing child surfaces its dependency name and original acquire cause at
       }),
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const parent = runtime.client.node(ParentNode, Frond.Args.none);
   const child = runtime.client.node(ChildNode, Frond.Args.none);
   await parent.ensureReady();
@@ -210,7 +210,11 @@ test("acquire timeout aborts the driver exposes deadline fields and discards lat
       }),
     });
   }
-  const runtime = createRuntime({ driverTimeouts: { acquire: 15 } });
+  const runtime = createRuntime({
+    development: true,
+    eventBufferSize: 512,
+    driverTimeouts: { acquire: 15 },
+  });
   const handle = runtime.client.node(SlowNode, Frond.Args.none);
   const readiness = handle.ensureReady();
   const signal = await entered.promise;
@@ -264,7 +268,7 @@ test("release failure resolves cleanup reports the original cause and leaves the
       }),
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const handle = runtime.client.node(ResourceNode, Frond.Args.none);
   await handle.ensureReady();
   // 0.5 behavior: release failure is diagnostic; releaseResources still resolves and clears readiness.

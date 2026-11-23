@@ -178,6 +178,7 @@ export const makeRuntimeEventBus = (config: RuntimeEventBusConfig): RuntimeEvent
     removeEntry(entry);
   };
   const events: Array<RuntimeEventRecord> = [];
+  let eventHead = 0;
   let sequence = 0;
 
   const remember = (
@@ -198,13 +199,13 @@ export const makeRuntimeEventBus = (config: RuntimeEventBusConfig): RuntimeEvent
     };
 
     // Zero-retention contract: with eventBufferSize 0 a record must never
-    // enter the retained array, not even transiently between a push and a
-    // trim. Observers and sinks still receive every record.
+    // enter the retained array. Observers and sinks still receive every record.
     if (config.eventBufferSize > 0) {
-      events.push(record);
-
-      if (events.length > config.eventBufferSize) {
-        events.splice(0, events.length - config.eventBufferSize);
+      if (events.length < config.eventBufferSize) {
+        events.push(record);
+      } else {
+        events[eventHead] = record;
+        eventHead = (eventHead + 1) % config.eventBufferSize;
       }
     }
 
@@ -390,12 +391,17 @@ export const makeRuntimeEventBus = (config: RuntimeEventBusConfig): RuntimeEvent
     observe: (observer, nodeId) => Effect.sync(() => observeSync(observer, nodeId)),
     events: (limit) => {
       const normalizedLimit = eventQueryLimit(limit);
+      const count =
+        normalizedLimit === undefined ? events.length : Math.min(normalizedLimit, events.length);
+      if (count === 0) return [];
 
-      if (normalizedLimit === undefined) {
-        return [...events];
+      const firstIndex = (eventHead + events.length - count) % events.length;
+      const endIndex = firstIndex + count;
+      if (endIndex <= events.length) {
+        return events.slice(firstIndex, endIndex);
       }
 
-      return normalizedLimit === 0 ? [] : events.slice(-normalizedLimit);
+      return events.slice(firstIndex).concat(events.slice(0, endIndex - events.length));
     },
     sinks: () => sinks.map((sink) => sink.name),
   };

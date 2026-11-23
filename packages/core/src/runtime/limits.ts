@@ -11,7 +11,7 @@ export function optionalNonNegativeInteger(input: {
     return undefined;
   }
 
-  return providedNonNegativeInteger({ value, label: input.label, cause: input.cause });
+  return nonNegativeInteger({ value, label: input.label, cause: input.cause });
 }
 
 export function nonNegativeIntegerWithDefault(input: {
@@ -26,10 +26,10 @@ export function nonNegativeIntegerWithDefault(input: {
     return input.defaultValue;
   }
 
-  return providedNonNegativeInteger({ value, label: input.label, cause: input.cause });
+  return nonNegativeInteger({ value, label: input.label, cause: input.cause });
 }
 
-function providedNonNegativeInteger(input: {
+export function nonNegativeInteger(input: {
   readonly value: number;
   readonly label: string;
   readonly cause: unknown;
@@ -39,7 +39,7 @@ function providedNonNegativeInteger(input: {
   }
 
   throw new FrondRuntimeInvariantViolation({
-    message: `${input.label} must be a non-negative finite integer; received ${String(input.value)}.`,
+    message: `${input.label} must be a non-negative finite integer; received ${typeof input.value === "string" ? JSON.stringify(input.value) : String(input.value)}.`,
     cause: input.cause,
   });
 }

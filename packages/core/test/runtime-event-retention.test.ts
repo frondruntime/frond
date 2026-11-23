@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { RuntimeEventRecord } from "../src/runtime";
-import { createRuntime } from "../src/runtime";
+import { createRuntime, FrondRuntimeInvariantViolation } from "../src/runtime";
 
 describe("runtime event retention", () => {
   test("eventBufferSize 0 never retains a record, even transiently, while observers see every record", async () => {
-    const runtime = createRuntime({ eventBufferSize: 0 });
+    const runtime = createRuntime({ development: true, eventBufferSize: 0 });
     const observed: Array<RuntimeEventRecord> = [];
     const subscription = runtime.observe((record) => {
       observed.push(record);
@@ -34,7 +34,7 @@ describe("runtime event retention", () => {
   });
 
   test("eventBufferSize 1 still trims to the newest record", async () => {
-    const runtime = createRuntime({ eventBufferSize: 1 });
+    const runtime = createRuntime({ development: true, eventBufferSize: 1 });
 
     await runtime.submit({ _tag: "RuntimeStart" });
 
@@ -42,5 +42,15 @@ describe("runtime event retention", () => {
     expect(retained._tag === "RuntimeEvents" ? retained.events.length : 0).toBe(1);
 
     await runtime.submit({ _tag: "RuntimeStop", reason: "bounded retention test" });
+  });
+});
+
+describe("runtime event buffer size is required", () => {
+  test("a runtime created without eventBufferSize fails instead of picking a size", () => {
+    const untyped = createRuntime as (options?: object) => unknown;
+
+    expect(() => untyped()).toThrow(FrondRuntimeInvariantViolation);
+    expect(() => untyped({})).toThrow(FrondRuntimeInvariantViolation);
+    expect(() => untyped({ development: true })).toThrow(FrondRuntimeInvariantViolation);
   });
 });

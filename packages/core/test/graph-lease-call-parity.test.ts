@@ -132,7 +132,7 @@ describe("lease call parity", () => {
             )
           : Effect.void,
     };
-    const runtime = createRuntime({ sinks: [sink] });
+    const runtime = createRuntime({ development: true, eventBufferSize: 512, sinks: [sink] });
     const handle = runtime.client.node(Resource, {});
     await handle.ensureReadyNode();
     const lease = handle.acquireLiveLease("manual", { pair: "A" }).then((result) => {

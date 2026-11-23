@@ -24,11 +24,13 @@ describe("React args fingerprint", () => {
 
 describe("validatedNodeIdResolver", () => {
   test("a runtime from createRuntime exposes its validated resolver", () => {
-    expect(validatedNodeIdResolver(createRuntime())).toBeFunction();
+    expect(
+      validatedNodeIdResolver(createRuntime({ development: true, eventBufferSize: 512 }))
+    ).toBeFunction();
   });
 
   test("a Proxy over a runtime falls back to its public resolver", () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
 
     expect(validatedNodeIdResolver(new Proxy(runtime, {}))).toBeUndefined();
   });

@@ -118,10 +118,12 @@ function encodeArray(value: ReadonlyArray<unknown>, path: string): string {
 }
 
 function encodeObject(value: { readonly [key: string]: unknown }, path: string): string {
-  const body = Object.keys(value)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${encodeKeyValue(value[key], `${path}.${key}`)}`)
-    .join(",");
+  const keys = Object.keys(value).sort();
+  let body = "";
+  for (const key of keys) {
+    if (body.length > 0) body += ",";
+    body += `${JSON.stringify(key)}:${encodeKeyValue(value[key], `${path}.${key}`)}`;
+  }
 
   return `{${body}}`;
 }

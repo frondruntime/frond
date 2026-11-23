@@ -6,6 +6,7 @@ import { phaseReadyData, projectCellPhase } from "../cell/cellPhase";
 import type { GraphCellTask } from "../cell/cellQueue";
 import type { GraphRuntimeSpanAttributes } from "../config";
 import { singleFailure } from "../driverExecution/causePolicy";
+import type { GraphOutcome } from "../planning/outcome";
 import { type GraphCancel, type GraphResume, noCancel } from "../queue/reply";
 import { effectiveResultValidity } from "../resultValidity";
 import type { CoreRefreshSubmission } from "../system/refreshAdmission";
@@ -65,15 +66,10 @@ type DependencyValueResult =
  * A dependent's collected dependency values. The sync path reads it directly;
  * only the async readiness path turns it into an Exit, at its resume edge.
  */
-type DependencyValuesResult =
-  | {
-      readonly _tag: "Success";
-      readonly value: Record<string, object>;
-    }
-  | {
-      readonly _tag: "Failure";
-      readonly failure: DependencyFailed | DependencyFailures;
-    };
+type DependencyValuesResult = GraphOutcome<
+  Record<string, object>,
+  DependencyFailed | DependencyFailures
+>;
 
 export function startDependencyNodes(
   env: GraphOperationEnvironment,

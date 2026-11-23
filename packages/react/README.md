@@ -16,7 +16,10 @@ bun add @frondruntime/core @frondruntime/react effect mobx mobx-react-lite
 import * as Frond from "@frondruntime/core";
 import * as FrondReact from "@frondruntime/react";
 
-const runtime = Frond.createRuntime();
+const runtime = Frond.createRuntime({
+  eventBufferSize: import.meta.env.DEV ? 512 : 0,
+  development: import.meta.env.DEV,
+});
 
 export function App() {
   return (
@@ -40,7 +43,17 @@ const ProfilePanel = observer(({ userId }: { userId: string }) => {
 });
 ```
 
-`useNode` suspends while readiness is pending and throws readiness failures to the nearest error boundary. The render path only receives a ready authored node instance.
+Requires React 19 or later. `useNode`, `useNodeState`, and `useNodes` suspend through React's `use(promise)` with cached readiness promises and throw readiness failures to the nearest error boundary. The render path only receives a ready authored node instance.
+
+Change a reader's args inside `startTransition` to keep the previous content on screen while the new keyed node becomes ready, instead of showing the Suspense fallback. Keep the existing Suspense boundary mounted. For example, update the `userId` passed to `ProfilePanel` above:
+
+```tsx
+import { startTransition } from "react";
+
+function selectProfile(userId: string) {
+  startTransition(() => setUserId(userId));
+}
+```
 
 ## Read Without Suspense
 
@@ -61,7 +74,7 @@ const ProfileBadge = observer(({ userId }: { userId: string }) => {
 });
 ```
 
-`useNodeRead` never throws to Suspense or an error boundary. It returns the runtime read as a tagged union - `Unwired | Idle | Pending | Ready | Error` - for components that must render every state inline instead of delegating to a boundary. On `Ready`, `read.result` is exactly the declared result type and `read.node` is the authored class instance. It still drives the same cold-start readiness boot and subscribes to changes, so the node makes progress exactly as it would under `useNode`/`useNodeState`.
+`useNodeRead` never suspends or throws readiness failures to an error boundary. It returns the runtime read as a tagged union - `Unwired | Idle | Pending | Ready | Error` - for components that must render every state inline instead of delegating to a boundary. On `Ready`, `read.result` is exactly the declared result type and `read.node` is the authored class instance. It still drives the same cold-start readiness boot and subscribes to changes, so the node makes progress exactly as it would under `useNode`/`useNodeState`.
 
 ## Publish A Signal
 
@@ -101,6 +114,8 @@ import * as FrondReactTest from "@frondruntime/react/testing";
 The testing subpath exports `TestFrondProvider` for React tests that need an isolated runtime.
 
 ## Migrating
+
+Upgrading from 0.6? Result writes rerender only `observer` readers; see the core package's [MIGRATION-0.7.md](../core/MIGRATION-0.7.md).
 
 Upgrading from 0.4.0? See the core package's [MIGRATION-0.5.md](../core/MIGRATION-0.5.md) for the error-report changes, including the deprecated projection fields.
 

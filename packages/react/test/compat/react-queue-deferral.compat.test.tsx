@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import "global-jsdom/register";
+import "../setup";
 import {
   type ActionContract,
   Driver,
@@ -13,14 +13,11 @@ import { createFrondTestHarness, readySpec } from "@frondruntime/core/testing";
 import { useNode, useNodes } from "@frondruntime/react";
 import { TestFrondProvider } from "@frondruntime/react/testing";
 import { act, cleanup, render } from "@testing-library/react";
+import { observer } from "mobx-react-lite";
 import { Suspense } from "react";
 
-// MIGRATION-0.6.md, section 10: graph work runs in one microtask drain, so a
-// synchronous act() commits no graph work.
-
-(
-  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
-).IS_REACT_ACT_ENVIRONMENT = true;
+// MIGRATION-0.6.md, section 10: graph work runs in one microtask drain, so
+// the initial render commits no graph work before that drain.
 
 const harnesses: Array<ReturnType<typeof createFrondTestHarness>> = [];
 
@@ -44,10 +41,10 @@ test("a readySpec node suspends on its first read and is ready after an async ac
       acquire: Driver.Acquire(async () => 0),
     });
   }
-  function Reader() {
+  const Reader = observer(function Reader() {
     const { count } = useNodes({ count: [CountNode, {}] });
     return <output>{`count:${count.result}`}</output>;
-  }
+  });
   const harness = createFrondTestHarness({
     specOverrides: [{ from: CountNode, to: readySpec(CountNode, 1) }],
   });
@@ -61,14 +58,15 @@ test("a readySpec node suspends on its first read and is ready after an async ac
   );
 
   let view: ReturnType<typeof render> | undefined;
-  act(() => {
+  const mounting = act(() => {
     view = render(tree);
   });
   // 0.6 intended change: 0.5 acquired the override in the caller's frame and
   // rendered "count:1" after a synchronous act.
   expect(view?.container.textContent).toBe("loading");
-
-  await act(async () => {});
+  // Await the same scope after checking the caller's frame. React.use leaves
+  // work in this act queue that a separate empty act cannot finish.
+  await mounting;
   expect(view?.container.textContent).toBe("count:1");
 });
 
@@ -95,19 +93,21 @@ test("an action's result write lands after a synchronous act, inside an async ac
     });
   }
   let save: ((draft: string) => Promise<string>) | undefined;
-  function Editor() {
+  const Editor = observer(function Editor() {
     const node = useNode(DraftNode, {});
     save = node.actions.save;
     return <output>{node.result}</output>;
-  }
+  });
   const harness = createFrondTestHarness();
   harnesses.push(harness);
-  const view = render(
-    <TestFrondProvider harness={harness}>
-      <Suspense fallback={<output>loading</output>}>
-        <Editor />
-      </Suspense>
-    </TestFrondProvider>
+  const view = await act(async () =>
+    render(
+      <TestFrondProvider harness={harness}>
+        <Suspense fallback={<output>loading</output>}>
+          <Editor />
+        </Suspense>
+      </TestFrondProvider>
+    )
   );
   expect(await view.findByText("empty")).toBeTruthy();
 

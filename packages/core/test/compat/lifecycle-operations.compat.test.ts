@@ -10,7 +10,7 @@ afterEach(async () => {
   }
 });
 function createRuntime() {
-  const runtime = Frond.createRuntime();
+  const runtime = Frond.createRuntime({ development: true, eventBufferSize: 512 });
   runtimes.push(runtime);
   return runtime;
 }
@@ -45,7 +45,7 @@ test("concurrent refresh callers join one result while the previous result remai
       }),
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const handle = runtime.client.node(ProfileNode, Frond.Args.none);
   await handle.ensureReady();
   const states: string[] = [];
@@ -88,7 +88,7 @@ test("refresh submitted during acquisition waits for readiness before refreshing
       }),
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const handle = runtime.client.node(ProfileNode, Frond.Args.none);
   const readiness = handle.ensureReady();
   await acquireStarted.promise;
@@ -113,7 +113,7 @@ test("refresh failure rolls back staged data preserves the old result and emits 
       }),
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const handle = runtime.client.node(ProfileNode, Frond.Args.none);
   await handle.ensureReady();
   const result = await handle.refresh();
@@ -165,7 +165,7 @@ test("manual demand starts live resources and only the final lease disposal stop
       }),
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const handle = runtime.client.node(SubscriptionNode, Frond.Args.none);
   expect(await handle.acquireLiveLease("manual", { topic: "prices" })).toMatchObject({
     _tag: "NodeMissing",
@@ -218,7 +218,7 @@ for (const termination of ["evict", "stop"] as const) {
         }),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(PendingNode, Frond.Args.none);
     const boot = handle.boot();
     if (boot._tag !== "Pending") throw new Error("Expected pending acquisition.");
@@ -301,7 +301,7 @@ for (const termination of ["evict", "stop"] as const) {
         },
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(ActionNode, Frond.Args.none);
     await handle.ensureReady();
     const action = handle.actions.save();
@@ -357,7 +357,7 @@ test("releaseResources clears readiness releases live resources and runs dispose
       }),
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const handle = runtime.client.node(ResourceNode, Frond.Args.none);
   await handle.ensureReady();
   const lease = await handle.acquireLiveLease("manual", {});
@@ -396,7 +396,7 @@ test("releaseResources waits for pending acquire before releasing the acquired r
       }),
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const handle = runtime.client.node(PendingNode, Frond.Args.none);
   const readiness = handle.ensureReady();
   const signal = await started.promise;
@@ -439,7 +439,7 @@ test("releaseResources waits for a pending action and releases its committed res
       },
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const handle = runtime.client.node(SaveNode, Frond.Args.none);
   await handle.ensureReady();
   const action = handle.actions.save();
@@ -471,7 +471,7 @@ test("runtime stop settles joined pending refresh callers and discards late refr
       }),
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const handle = runtime.client.node(RefreshNode, Frond.Args.none);
   await handle.ensureReady();
   const first = handle.refresh();

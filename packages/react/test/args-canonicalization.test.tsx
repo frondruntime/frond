@@ -11,6 +11,7 @@ import {
 } from "@frondruntime/core";
 import { act, cleanup, render } from "@testing-library/react";
 import { Effect } from "effect";
+import { observer } from "mobx-react-lite";
 import { createElement, Suspense } from "react";
 import { FrondProvider, useNodeControls, useNodeRead, useNodes } from "../src";
 import { getReactArgsFingerprint } from "../src/argsFingerprint";
@@ -120,9 +121,11 @@ describe("React args canonicalization", () => {
       const read = useNodeRead(SingletonPageNode, countingArgs({ page: 1, query: "a" }, counter));
       return createElement("output", undefined, read._tag);
     };
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
-    const view = render(createElement(FrondProvider, { runtime }, createElement(View)));
+    const view = await act(async () =>
+      render(createElement(FrondProvider, { runtime }, createElement(View)))
+    );
     await act(async () => {
       await Promise.resolve();
     });
@@ -143,9 +146,11 @@ describe("React args canonicalization", () => {
       useNodeControls(SingletonPageNode, countingArgs({ page: 1, query: "a" }, counter));
       return createElement("output", undefined, "controls");
     };
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
-    const view = render(createElement(FrondProvider, { runtime }, createElement(View)));
+    const view = await act(async () =>
+      render(createElement(FrondProvider, { runtime }, createElement(View)))
+    );
     await act(async () => {
       await Promise.resolve();
     });
@@ -161,27 +166,27 @@ describe("React args canonicalization", () => {
   test("useNodes canonicalizes each entry's args once per render", async () => {
     const counter = { passes: 0 };
     let renders = 0;
-    const View = () => {
+    const View = observer(({ revision }: { readonly revision: number }) => {
       renders += 1;
       useNodes({
         page: [SingletonPageNode, countingArgs({ page: 1, query: "a" }, counter)],
       });
-      return createElement("output", undefined, "ready");
-    };
-    const tree = () =>
+      return createElement("output", { "data-revision": revision }, "ready");
+    });
+    const tree = (revision: number) =>
       createElement(
         Suspense,
         { fallback: createElement("span", undefined, "loading") },
-        createElement(View)
+        createElement(View, { revision })
       );
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
-    const view = render(createElement(FrondProvider, { runtime }, tree()));
+    const view = await act(async () => render(createElement(FrondProvider, { runtime }, tree(0))));
     expect(await view.findByText("ready")).toBeTruthy();
 
     counter.passes = 0;
     renders = 0;
-    view.rerender(createElement(FrondProvider, { runtime }, tree()));
+    view.rerender(createElement(FrondProvider, { runtime }, tree(1)));
 
     expect(renders).toBeGreaterThan(0);
     expect(counter.passes).toBe(renders);
@@ -190,7 +195,7 @@ describe("React args canonicalization", () => {
   test("a store given the render's fingerprint does not canonicalize args for it again", async () => {
     // A fresh runtime each, so both stores pay the same for their `client.node` call.
     const storePasses = async (argsFingerprint: string | undefined) => {
-      const runtime = createRuntime();
+      const runtime = createRuntime({ development: true, eventBufferSize: 512 });
       await runtime.submit({ _tag: "RuntimeStart" });
       const counter = { passes: 0 };
       const args = countingArgs({ page: 1, query: "a" }, counter);
@@ -221,33 +226,33 @@ describe("React args canonicalization", () => {
     const counter = { passes: 0 };
     const args = countingArgs({ page: 1, query: "a" }, counter);
     let renders = 0;
-    const View = () => {
+    const View = observer(({ revision }: { readonly revision: number }) => {
       renders += 1;
       useNodes({ page: [SingletonPageNode, args] });
-      return createElement("output", undefined, "stable args ready");
-    };
-    const tree = () =>
+      return createElement("output", { "data-revision": revision }, "stable args ready");
+    });
+    const tree = (revision: number) =>
       createElement(
         Suspense,
         { fallback: createElement("span", undefined, "loading") },
-        createElement(View)
+        createElement(View, { revision })
       );
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
-    const view = render(createElement(FrondProvider, { runtime }, tree()));
+    const view = await act(async () => render(createElement(FrondProvider, { runtime }, tree(0))));
     // A text no other test renders: `findByText` searches the whole document.
     expect(await view.findByText("stable args ready")).toBeTruthy();
 
     counter.passes = 0;
     renders = 0;
-    view.rerender(createElement(FrondProvider, { runtime }, tree()));
+    view.rerender(createElement(FrondProvider, { runtime }, tree(1)));
 
     expect(renders).toBeGreaterThan(0);
     expect(counter.passes).toBe(renders);
   });
 
   test("args mutated in place are fingerprinted again on the next prepare", () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const args = { page: 1, query: "a" };
     const map = { page: [WholeArgsPageNode, args] } as never;
     const first = prepareReactNodeMap({ hook: "useNodes", runtime, map });
@@ -267,9 +272,11 @@ describe("React args canonicalization", () => {
   test("resolves the same node id and fingerprint as the public path", () => {
     const longQuery = "x".repeat(3_000);
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       specOverrides: [{ from: SingletonPageNode, to: OverridePageNode }],
     });
-    const plain = createRuntime();
+    const plain = createRuntime({ development: true, eventBufferSize: 512 });
     const cases: ReadonlyArray<readonly [ReactNodeRuntime, unknown, PageArgs]> = [
       [plain, SingletonPageNode, { page: 1, query: "a" }],
       [plain, WholeArgsPageNode, { query: "a", page: 1 }],
@@ -293,7 +300,7 @@ describe("React args canonicalization", () => {
   });
 
   test("invalid args throw the same error as the public path, before the spec is checked", () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const cases: ReadonlyArray<readonly [unknown, unknown]> = [
       [SingletonPageNode, { page: 1, query: "a", onSelect: () => "ready" }],
       [SingletonPageNode, { page: Number.NaN, query: "a" }],
@@ -312,7 +319,7 @@ describe("React args canonicalization", () => {
   });
 
   test("a wrapper runtime's own resolveNodeIdSync is honored", () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const args = { page: 1, query: "a" };
     const resolveNodeIdSync = () => "wrapped:node" as never;
     const spreadWrapper: ReactNodeRuntime = { ...runtime, resolveNodeIdSync };
@@ -342,8 +349,10 @@ describe("React args canonicalization", () => {
       });
     }
 
-    const target = createRuntime();
+    const target = createRuntime({ development: true, eventBufferSize: 512 });
     const delegated = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       specOverrides: [{ from: SingletonPageNode, to: KeyedPageNode }],
     });
     // The public resolver and client share the delegated graph; the hidden
@@ -373,7 +382,7 @@ describe("React args canonicalization", () => {
         wrapper.resolveNodeIdSync({ spec: SingletonPageNode, args: { page: 2, query: "a" } })
       );
 
-      const view = render(tree(1));
+      const view = await act(async () => render(tree(1)));
       expect(view.getByRole("status").textContent).toBe("1");
       await act(async () => {
         view.rerender(tree(2));

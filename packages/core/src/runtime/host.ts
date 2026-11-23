@@ -41,7 +41,7 @@ import type {
 } from "./types";
 import { makeRuntimeWorkFactory, type RuntimeWorkContext, type RuntimeWorkDefaults } from "./work";
 
-export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<RuntimeHostService> =>
+export const makeRuntimeHost = (options: RuntimeOptions): Effect.Effect<RuntimeHostService> =>
   Effect.gen(function* () {
     const config = normalizeRuntimeOptions(options);
     const runtimeId = config.runtimeId;
@@ -441,32 +441,6 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
         );
         return noCancel;
       },
-      recordMobXProjectionFailure: (_nodeId, cause, context, resume) => {
-        if (observerWorkSwept) {
-          resume(Exit.succeed(undefined));
-          return noCancel;
-        }
-        const work = workFactory.nextWork(undefined, {
-          source: "mobx",
-          reason: "input",
-          priority: "visible",
-        });
-        finishObserverWork(
-          eventBus.emit(
-            {
-              _tag: "RuntimeObserverFailureObserved",
-              eventTag: "MobXProjectionSync",
-              cause,
-              at: syncClock.now(),
-            },
-            work
-          ),
-          context,
-          () => resume(Exit.succeed(undefined)),
-          jobs
-        );
-        return noCancel;
-      },
       querySync: (query): RuntimeQueryResult => {
         switch (query._tag) {
           case "RuntimeStatus":
@@ -513,6 +487,7 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
       hasPendingJobsSync: graphCore.jobs.hasPendingJobs,
     };
     const host: RuntimeHostService = {
+      development: config.development,
       resolveNodeIdSync,
       getStatusSync,
       readNodeSnapshotSync,
@@ -534,10 +509,6 @@ export const makeRuntimeHost = (options: RuntimeOptions = {}): Effect.Effect<Run
       recordUnsafeScheduleFailure: (command, cause) =>
         callbackEffect((context, resume) =>
           core.recordUnsafeScheduleFailure(command, cause, context, resume)
-        ),
-      recordMobXProjectionFailure: (nodeId, cause) =>
-        callbackEffect((context, resume) =>
-          core.recordMobXProjectionFailure(nodeId, cause, context, resume)
         ),
       getSnapshot: () => Effect.sync(core.getSnapshotSync),
       observe: (observer, nodeId) => Effect.sync(() => core.observeSync(observer, nodeId)),

@@ -21,7 +21,7 @@ import {
 
 describe("result validity", () => {
   test("default acquire commits a current result", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(DefaultValidityNode, {});
 
     await handle.ensureReady();
@@ -40,7 +40,7 @@ describe("result validity", () => {
   });
 
   test("manual stale result stays ready and displayable", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(ManualStaleNode, {});
 
     await handle.ensureReady();
@@ -54,7 +54,7 @@ describe("result validity", () => {
   });
 
   test("domain result objects with result keys commit as ordinary results", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(BareCommitNode, {});
 
     await handle.ensureReady();
@@ -67,7 +67,7 @@ describe("result validity", () => {
   });
 
   test("explicit result commit wrapper applies validity metadata", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(ManualStaleNode, {});
 
     await handle.ensureReady();
@@ -80,7 +80,7 @@ describe("result validity", () => {
   });
 
   test("action setResult preserves current validity unless driver changes it explicitly", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(ActionPreservesValidityNode, {});
 
     await handle.ensureReady();
@@ -94,7 +94,7 @@ describe("result validity", () => {
   });
 
   test("time-bound policy projects stale validity and rejects expired acquire commits", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const stale = runtime.client.node(TimeBoundStaleNode, {});
     const expired = runtime.client.node(TimeBoundExpiredNode, {});
 
@@ -113,7 +113,7 @@ describe("result validity", () => {
   });
 
   test("manual expired result is retained diagnostically and hidden from ordinary ready reads", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(ActionExpiresNode, {});
 
     await handle.ensureReady();
@@ -137,7 +137,7 @@ describe("result validity", () => {
   });
 
   test("stale refresh failure keeps stale ready result", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(StaleRefreshFailureNode, {});
 
     await handle.ensureReady();
@@ -153,7 +153,7 @@ describe("result validity", () => {
 
   test("expired invalidation reacquires through normal readiness", async () => {
     acquireAfterExpirationCount = 0;
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(ActionExpiresNode, {});
 
     await handle.ensureReady();
@@ -186,7 +186,7 @@ describe("result validity", () => {
     acquireAfterExpirationCount = 0;
     actionExpiresLiveStarts.length = 0;
     actionExpiresLiveStops.length = 0;
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(ActionExpiresNode, {});
 
     await handle.ensureReady();
@@ -212,7 +212,7 @@ describe("result validity", () => {
   });
 
   test("time-bound expiration emits a validity transition when invalidation starts", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(SoonExpiringInvalidationNode, {});
 
     await handle.ensureReady();
@@ -252,7 +252,7 @@ describe("result validity", () => {
     expiryTeardownReleaseRuns = 0;
     expiryTeardownDisposerRuns = 0;
     expiryTeardownAcquireRuns = 0;
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(ExpiryTeardownNode, {});
 
     await handle.ensureReady();
@@ -272,7 +272,7 @@ describe("result validity", () => {
 
   test("refresh on an expired result fails without running the refresh driver", async () => {
     expiredRefreshCalls = 0;
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(RefreshRejectedWhenExpiredNode, {});
 
     await handle.ensureReady();
@@ -287,7 +287,7 @@ describe("result validity", () => {
   });
 
   test("dependency staleness does not cascade to dependent validity", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(DependentOnStaleDependencyNode, {});
 
     await handle.ensureReady();
@@ -306,7 +306,7 @@ describe("result validity", () => {
   });
 
   test("dependency expiration blocks ordinary dependency result access", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(DependentOnExpiredDependencyNode, {});
 
     await handle.ensureReady();
@@ -326,7 +326,7 @@ describe("result validity", () => {
 
   test("failed expired invalidation lands in readiness error and does not auto-retry", async () => {
     failingInvalidationAcquireCount = 0;
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(FailingExpiredInvalidationNode, {});
 
     await handle.ensureReady();
@@ -367,7 +367,7 @@ describe("result validity", () => {
 
   test("acquire slower than expireAfter stamps validity at commit time and does not churn", async () => {
     slowTimeBoundAcquireRuns = 0;
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(SlowTimeBoundAcquireNode, {});
 
     await handle.ensureReady();
@@ -411,7 +411,7 @@ describe("result validity", () => {
 
   test("refresh fails typed when a time-bound dependency is clock-expired", async () => {
     clockExpiredDependencyRefreshRuns = 0;
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(DependentOnClockExpiredDependencyNode, {});
 
     await handle.ensureReady();
@@ -438,7 +438,7 @@ describe("result validity", () => {
 
   test("action fails typed when a time-bound dependency is clock-expired", async () => {
     clockExpiredDependencyActionRuns = 0;
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(DependentOnClockExpiredDependencyNode, {});
 
     await handle.ensureReady();
@@ -469,7 +469,7 @@ describe("result validity", () => {
   });
 
   test("invalid result commit metadata fails loudly with typed diagnostics", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(InvalidCommitNode, {});
 
     await handle.ensureReady();

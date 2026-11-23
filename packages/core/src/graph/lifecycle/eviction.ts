@@ -113,9 +113,13 @@ function evictNode(
 
     env.queues.delete(nodeId);
     yield* env.clearRefreshAdmission(nodeId);
-    // Remember the evicted cell's revision so a recreated cell for the same node
-    // id seeds past it, keeping `readVersion` monotonic across incarnations.
-    env.state.evictedRevisionByNodeId.set(nodeId, cell.state.getRevisionSync());
+    // Raise the floor past the evicted cell's revision so a recreated cell for
+    // the same node id seeds past it, keeping `readVersion` monotonic across
+    // incarnations.
+    env.state.evictedRevisionFloor = Math.max(
+      env.state.evictedRevisionFloor,
+      cell.state.getRevisionSync()
+    );
     env.state.nodes.delete(nodeId);
     removePlannedEdges(env.state.edges, plan, index);
     // A node can stay Found while its neighbor is gone: a "dependents"

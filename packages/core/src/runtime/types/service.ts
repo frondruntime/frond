@@ -21,6 +21,7 @@ export interface RuntimeSubscription {
 }
 
 export interface RuntimeHostService {
+  readonly development: boolean;
   readonly resolveNodeIdSync: (request: NodeRequest) => NodeRead["nodeId"];
   readonly getStatusSync: () => RuntimeStatus;
   readonly readNodeSnapshotSync: (nodeId: NodeRead["nodeId"]) => RuntimeNodeSnapshotLookup<unknown>;
@@ -49,10 +50,6 @@ export interface RuntimeHostService {
   ) => Effect.Effect<void, RuntimeError>;
   readonly recordUnsafeScheduleFailure: (
     command: RuntimeCommand,
-    cause: unknown
-  ) => Effect.Effect<void>;
-  readonly recordMobXProjectionFailure: (
-    nodeId: NodeRead["nodeId"],
     cause: unknown
   ) => Effect.Effect<void>;
   readonly subscribeSignals: (

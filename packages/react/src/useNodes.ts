@@ -1,6 +1,7 @@
 import type * as Frond from "@frondruntime/core";
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useRuntime } from "./context";
+import { assertInsideObserver } from "./developmentChecks";
 import {
   assertStableKeySet as assertStableNodeKeySet,
   type PreparedReactNodeMapEntry,
@@ -9,6 +10,7 @@ import {
 } from "./nodeInputMap";
 import { makeReactNodeStore } from "./nodeStore";
 import { makeRevivableStoreSubscriptions } from "./storeSubscriptions";
+import { compositeSuspendPromise, type SuspendPromise, type SuspenseRead } from "./suspendPromise";
 import type {
   CheckedReactNodeInputMap,
   ReactNodeInputMap,
@@ -16,19 +18,45 @@ import type {
   ReactNodeSpec,
   UseNodesResult,
 } from "./types";
+import { useReadyRead } from "./useReadyRead";
 
 /**
  * Reads several ready Frond nodes as one Suspense unit.
  *
  * The map key set must stay stable. Individual args may update when they keep
  * the same Frond node identity.
+ *
+ * Call it inside a MobX `observer` component. A plain-data write rerenders the
+ * observers that read that node's `result`. A share patch on MobX-observable
+ * models notifies only readers of the changed observable fields. Non-observable
+ * non-plain values (plain classes, Map, Set, Date) outside observable boundaries
+ * still make a share patch notify every `node.result` reader.
+ * Runtimes created with `development: true` throw
+ * `FrondReactUsageError` on every call outside an observer.
  */
 export function useNodes<const TMap extends ReactNodeInputMap>(
   map: TMap & CheckedReactNodeInputMap<TMap>
 ): UseNodesResult<TMap> {
+  return useNodeMap(map, true);
+}
+
+/**
+ * `useNodes` without the observer check, for a caller that reads no result,
+ * such as `Preload`.
+ */
+export function useNodeMap<const TMap extends ReactNodeInputMap>(
+  map: TMap & CheckedReactNodeInputMap<TMap>,
+  readsResult: boolean
+): UseNodesResult<TMap> {
   const runtime = useRuntime();
   const initialKeys = useRef<ReadonlyArray<string> | undefined>(undefined);
   const prepared = prepareReactNodeMap({ hook: "useNodes", runtime, map });
+  if (readsResult && runtime.development) {
+    assertInsideObserver(
+      "useNodes",
+      prepared.entries.map((entry) => entry.spec)
+    );
+  }
 
   assertStableNodeKeySet({
     hook: "useNodes",
@@ -67,7 +95,7 @@ export function useNodes<const TMap extends ReactNodeInputMap>(
     void store.updateArgs(entriesRef.current, committed).catch(() => undefined);
   }, [prepared.argsIdentity, runtime, store]);
 
-  return store.read() as UseNodesResult<TMap>;
+  return useReadyRead(store.read) as UseNodesResult<TMap>;
 }
 
 export type ReactNodeStoreEntry = ReactNodeMapEntry &
@@ -76,7 +104,7 @@ export type ReactNodeStoreEntry = ReactNodeMapEntry &
 export interface ReactNodesStore {
   readonly subscribe: (listener: () => void) => () => void;
   readonly getVersion: () => number;
-  readonly read: () => Record<string, object>;
+  readonly read: () => SuspenseRead<Record<string, object>>;
   /**
    * Forwards every entry to its child store, which submits the entry's args
    * when they differ from the last args it submitted. Only an entry that is
@@ -110,7 +138,6 @@ export function makeReactNodesStore(
   }));
   const storeByKey = new Map(stores.map((entry) => [entry.key, entry.store]));
   let childUnsubscribers: ReadonlyArray<() => void> = [];
-  let pending: PendingCompositeAttempt | undefined;
   let cachedReadyVersion = -1;
   let cachedReadyNodes: Record<string, object> | undefined;
   let updateBuffer: Array<Promise<void>> | undefined = [];
@@ -129,23 +156,31 @@ export function makeReactNodesStore(
     },
   });
 
-  const read = (): Record<string, object> => {
-    if (cachedReadyNodes !== undefined && cachedReadyVersion === subscriptions.getVersion()) {
-      return cachedReadyNodes;
+  const read = (): SuspenseRead<Record<string, object>> => {
+    if (
+      childUnsubscribers.length > 0 &&
+      cachedReadyNodes !== undefined &&
+      cachedReadyVersion === subscriptions.getVersion()
+    ) {
+      return { _tag: "Ready", value: cachedReadyNodes };
     }
 
     const nodes: Record<string, object> = {};
-    let pendingAttempts: Array<Promise<unknown>> | undefined;
+    let pendingAttempts: Array<SuspendPromise> | undefined;
 
     for (const { key, store } of stores) {
-      try {
-        nodes[key] = store.read().node;
-      } catch (thrown) {
-        if (thrown instanceof Promise) {
+      const child = store.read();
+      switch (child._tag) {
+        case "Ready":
+          nodes[key] = child.value.node;
+          break;
+        case "Pending":
           pendingAttempts ??= [];
-          pendingAttempts.push(thrown);
-        } else {
-          throw thrown;
+          pendingAttempts.push(child.promise);
+          break;
+        default: {
+          const unreachable: never = child;
+          throw unreachable;
         }
       }
     }
@@ -153,15 +188,19 @@ export function makeReactNodesStore(
     if (pendingAttempts !== undefined) {
       cachedReadyNodes = undefined;
       cachedReadyVersion = -1;
-      throw stableCompositeAttempt(pending, pendingAttempts, (next) => {
-        pending = next;
-      });
+      return { _tag: "Pending", promise: compositeSuspendPromise(pendingAttempts) };
     }
 
-    pending = undefined;
-    cachedReadyNodes = nodes;
+    // Detached reads must validate every child, but unchanged children can
+    // still share the previous map identity.
+    if (
+      cachedReadyNodes === undefined ||
+      stores.some(({ key }) => cachedReadyNodes?.[key] !== nodes[key])
+    ) {
+      cachedReadyNodes = nodes;
+    }
     cachedReadyVersion = subscriptions.getVersion();
-    return nodes;
+    return { _tag: "Ready", value: cachedReadyNodes };
   };
 
   return {
@@ -212,45 +251,6 @@ export function makeReactNodesStore(
       cachedReadyVersion = -1;
     },
   };
-}
-
-interface PendingCompositeAttempt {
-  readonly attempts: ReadonlyArray<Promise<unknown>>;
-  readonly promise: Promise<unknown>;
-}
-
-function stableCompositeAttempt(
-  current: PendingCompositeAttempt | undefined,
-  attempts: ReadonlyArray<Promise<unknown>>,
-  setCurrent: (attempt: PendingCompositeAttempt) => void
-): Promise<unknown> {
-  if (current !== undefined && sameAttempts(current.attempts, attempts)) {
-    return current.promise;
-  }
-
-  const next = {
-    attempts,
-    promise: Promise.all(attempts),
-  };
-  setCurrent(next);
-  return next.promise;
-}
-
-function sameAttempts(
-  left: ReadonlyArray<Promise<unknown>>,
-  right: ReadonlyArray<Promise<unknown>>
-): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  for (let index = 0; index < left.length; index += 1) {
-    if (left[index] !== right[index]) {
-      return false;
-    }
-  }
-
-  return true;
 }
 
 // An entry without a fingerprint never counts as the same: its child store

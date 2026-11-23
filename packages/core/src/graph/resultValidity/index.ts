@@ -1,4 +1,5 @@
 import { Duration } from "effect";
+import { prepareCommittedResult } from "../../node/committedResult";
 import {
   GraphInvariantViolation,
   type NodeId,
@@ -8,13 +9,14 @@ import {
   type ResultValidity,
   type ResultValidityPolicy,
 } from "../types";
-import { plainDataEqual } from "./plainDataEqual";
 
 export interface ResultState {
   readonly result: unknown;
   readonly resultValidity: ResultValidity;
   readonly resultLoadedAt?: number | undefined;
   readonly resultValidityCommit: "default" | "explicit";
+  // Operation-local staging: validity alone does not write the result.
+  readonly resultWritten?: true | undefined;
   // Set when patchResult staged this state; a shared patch keeps the result
   // reference, so readers learn of the write from this mark, not identity.
   readonly resultPatched?: true | undefined;
@@ -35,6 +37,7 @@ export interface ResultCommitOptions {
 
 export interface DriverResultCommitOptions extends ResultCommitOptions {
   readonly retainEqual?: { readonly result: unknown } | undefined;
+  readonly previous?: { readonly result: unknown } | undefined;
   readonly returned: unknown;
   readonly staged: ResultState;
 }
@@ -100,6 +103,7 @@ export function commitResultState(
       resultLoadedAt: loadedAt,
       resultValidity: effectiveResultValidity(validity, policy, loadedAt, now),
       resultValidityCommit: hasExplicitMetadata ? "explicit" : "default",
+      resultWritten: true,
       resultPatched: previous?.resultPatched,
     };
   }
@@ -119,6 +123,7 @@ export function commitResultState(
     resultValidity: effectiveResultValidity(validity, policy, loadedAt, now),
     resultValidityCommit:
       defaultValidity === "preserve" ? (previous?.resultValidityCommit ?? "default") : "default",
+    resultWritten: true,
     resultPatched: previous?.resultPatched,
   };
 }
@@ -126,8 +131,18 @@ export function commitResultState(
 export function commitDriverOperationResult(
   policy: NormalizedResultValidityPolicy,
   now: number,
-  options: DriverResultCommitOptions
+  options: DriverResultCommitOptions,
+  development: boolean
 ): ResultState {
+  // Acquire starts with a written state; refresh retains equal results. Only
+  // an action without setResult/patchResult can keep its committed value as-is.
+  if (
+    options.returned === undefined &&
+    options.retainEqual === undefined &&
+    options.staged.resultWritten !== true
+  ) {
+    return options.staged;
+  }
   const result =
     options.returned === undefined
       ? options.staged
@@ -136,16 +151,20 @@ export function commitDriverOperationResult(
           defaultLoadedAt: options.defaultLoadedAt,
           defaultValidity: options.defaultValidity,
         });
+  const previous = options.retainEqual ?? options.previous;
+  const committed = prepareCommittedResult(
+    result.result,
+    previous?.result,
+    previous !== undefined,
+    development
+  );
   if (
     options.retainEqual === undefined &&
     (options.returned === undefined || options.staged.resultValidityCommit !== "explicit")
   )
-    return result;
+    return Object.is(committed, result.result) ? result : { ...result, result: committed };
   return {
-    result:
-      options.retainEqual !== undefined && plainDataEqual(options.retainEqual.result, result.result)
-        ? options.retainEqual.result
-        : result.result,
+    result: committed,
     resultLoadedAt: result.resultLoadedAt,
     resultValidity:
       options.staged.resultValidityCommit === "explicit"
@@ -153,6 +172,7 @@ export function commitDriverOperationResult(
         : result.resultValidity,
     resultValidityCommit:
       options.staged.resultValidityCommit === "explicit" ? "explicit" : result.resultValidityCommit,
+    resultWritten: true,
     resultPatched: result.resultPatched,
   };
 }

@@ -94,6 +94,8 @@ if (import.meta.env.DEV) {
 
 The attach socket is unauthenticated by design — it only carries data *into* the hub, so an uninvited caller achieves nothing worse than junk in a dashboard. But the hub it dials is a plain loopback port with no notion of who is on the other end, so shipping a call to it in a production build points real user state at whatever answers. Guard it.
 
+A snapshot reads its `sequence` from the events the runtime keeps. A runtime created with `eventBufferSize: 0`, as production builds usually are, keeps none, so its snapshots carry no `sequence`. If you do attach in such a build, give it a nonzero size.
+
 ## Platforms
 
 The main entry imports nothing from `node:`. The transport is a global `WebSocket` carrying ndjson, so the same build attaches from a browser, from Bun, from Node, and from React Native.

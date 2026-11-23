@@ -49,10 +49,9 @@ export function tag(value: string): NodeTag {
  * with the same key reuses the recorded dependencies without calling the
  * resolver again, so a resolver that reads time, globals, or a mutable closure
  * keeps whatever it returned first, until a later full re-plan (for example
- * after any eviction) runs it again. Where `process.env.NODE_ENV` is not "production" at
- * runtime, re-planning re-checks the requested node's dependencies, not its
- * internal ones, and invalidates it on a mismatch; the check is off when
- * `process` is absent.
+ * after any eviction) runs it again. When the runtime was created with
+ * `development: true`, re-planning re-checks the requested node's dependencies,
+ * not its internal ones, and invalidates it on a mismatch.
  *
  * Idempotent: an already-branded resolver — including one read back from
  * `descriptor.dependencies` — passes through unchanged.

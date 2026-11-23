@@ -18,7 +18,6 @@ bun add @frondruntime/core effect mobx
 - Graph/runtime types under `Frond.Graph`, `Frond.Runtime`, `Frond.Events`, `Frond.Signals`, and `Frond.Diagnostics`.
 - Session-flow helpers: `readReady`/`ensureReadyNode` on node handles, single-flight void-input actions (`admission: "join"`), `runTransition`/`createTransition` for ordered multi-node sequences, and the `pendingOperations`/`isQuiescent` runtime reads.
 - The signal bus: `Signals.defineChannel` (optionally typed by an event map), `runtime.publish`, `runtime.subscribeSignals`, and `ctx.signals` inside drivers.
-- MobX-facing node helpers under `Frond.MobX`.
 - Opt-in host utilities: the `withInternal`/`internalOf`/`carryInternal` result envelope for hidden imperative internals, and `createRuntimeCoordinator` for serialized runtime replacement (dev HMR, test isolation).
 - Testing helpers under `@frondruntime/core/testing`.
 
@@ -54,12 +53,18 @@ Driver hooks receive two abort signals. `ctx.signal` is operation-scoped: it abo
 ## Runtime Usage
 
 ```ts
-const runtime = Frond.createRuntime();
+const runtime = Frond.createRuntime({
+  // Required. Keep no events in production unless devtools are attached there.
+  eventBufferSize: import.meta.env.DEV ? 512 : 0,
+  development: import.meta.env.DEV,
+});
 const session = runtime.client.node(SessionNode, Frond.Args.none);
 
 await session.ensureReady();
 const read = session.read();
 ```
+
+Both `eventBufferSize` and `development` are required. Pass `development: false` in production; `true` enables committed-result freezing, the dependency re-plan check, and the React observer check. React Native apps can use `development: __DEV__`.
 
 Only ready reads expose the authored node instance. Pending, error, invalid, unavailable, and unwired reads expose lifecycle data, not partial node objects. A `Ready` read is fully typed: `read.result` is exactly the declared result type (never `| undefined`), and `read.node` is the authored class instance - no casts.
 
@@ -128,7 +133,7 @@ export const Checkout = Frond.Signals.defineChannel<CheckoutEvents>({
   policy: { retention: "bounded", bufferSize: 256 },
 });
 
-const runtime = Frond.createRuntime({ channels: [Checkout] });
+const runtime = Frond.createRuntime({ eventBufferSize: 0, development: false, channels: [Checkout] });
 ```
 
 `Checkout.signal` accepts only declared names, each with the payload its map entry declares. An event typed `void` takes no payload argument at all, and a name the map does not contain is a compile error rather than a message nobody is subscribed to:
@@ -291,7 +296,7 @@ const analytics = FrondReact.useNode(AnalyticsDispatcherNode, {}).result;
 </button>;
 ```
 
-What it is not is a re-render risk. `_result` is `observable.ref` and the envelope mutates inside a stable `Dispatcher` instance, so a dispatch-only component does not re-render when the envelope changes. The flip side is the rule that follows from it: do not render from the envelope, because nothing will tell React it moved.
+What it is not is a re-render risk. The committed result keeps a class instance such as `Dispatcher` by reference, and the envelope mutates inside it without a result write, so a dispatch-only component does not re-render when the envelope changes. The flip side is the rule that follows from it: do not render from the envelope, because nothing will tell React it moved.
 
 "One way to dispatch" is enforced as a module boundary, not as a type. The channel constant stays unexported, so no other module can call `Analytics.signal` at all; the event map interface stays exported, because declaration merging needs it, so features keep contributing events without gaining a way to publish them. Other nodes reach the same method through a declared dependency - `ctx.deps.analytics.result.track(...)` - which is the ordinary dependency path, not a second door.
 
@@ -339,6 +344,8 @@ import * as FrondTest from "@frondruntime/core/testing";
 The testing subpath includes runtime harnesses, deferred drivers, and spec helpers used to test node behavior without React.
 
 ## Migrating
+
+Upgrading from 0.6? Results are frozen when `development: true`, `node.result` is the committed snapshot shared between commits, and `useNode` and `useNodes` must run inside an `observer`. Both `eventBufferSize` and `development` are required; pass `development: false` in production. See [MIGRATION-0.7.md](./MIGRATION-0.7.md).
 
 Upgrading from 0.4.0? Error reports changed shape; see [MIGRATION-0.5.md](./MIGRATION-0.5.md).
 

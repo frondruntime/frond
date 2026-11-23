@@ -89,7 +89,7 @@ class Service extends NodeBase<Spec> {
 
 describe("driver edge spans on a non-Effect node", () => {
   test("an Effect-facade caller traces the acquire and action edges under its own span", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(Service, {});
     const spans: RecordedSpan[] = [];
     try {

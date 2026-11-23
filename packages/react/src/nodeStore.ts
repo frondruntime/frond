@@ -4,7 +4,10 @@ import { FrondReactAdapterInvariant } from "./errors";
 import { ReactRuntimeMetadata } from "./metadata";
 import { projectReactNodeRead } from "./nodeReadProjection";
 import { makeRevivableStoreSubscriptions } from "./storeSubscriptions";
+import { type SuspendPromise, type SuspenseRead, suspendPromise } from "./suspendPromise";
 import type { ReactNodeRuntime, ReactNodeSpec, ReactNodeState } from "./types";
+
+export type ReactNodeStoreMode = "status" | "result";
 
 export interface ReactNodeStore<
   TArgs extends Frond.Key.KeyInput,
@@ -14,7 +17,7 @@ export interface ReactNodeStore<
 > {
   readonly subscribe: (listener: () => void) => () => void;
   readonly getVersion: () => number;
-  readonly read: () => ReactNodeState<TArgs, TDeps, TResult, TNode>;
+  readonly read: () => SuspenseRead<ReactNodeState<TArgs, TDeps, TResult, TNode>>;
   readonly peek: () => Frond.Runtime.RuntimeNodeRead<TResult, TNode>;
   /**
    * Submits `args` when they differ from the last args this store submitted.
@@ -28,10 +31,6 @@ export interface ReactNodeStore<
   ) => Promise<void>;
   readonly dispose: () => void;
 }
-
-// The core's NodeBase keeps this runtime-owned count; a node without it
-// reads undefined, which always compares equal.
-type ResultPatchCounted = { readonly _resultPatchCount?: number | undefined };
 
 // An args update a React store submitted and the runtime has not settled yet,
 // per runtime and node. A mount alignment compares against the newest one
@@ -53,9 +52,8 @@ type LatestArgs = "Settled" | "Unsettled" | "Different" | "Unknown";
 
 type ReadinessAttempt = {
   readonly _tag: "Pending";
-  readonly promise: Promise<void>;
+  readonly promise: SuspendPromise;
   readonly presentation: "Unseen" | "PendingRead" | "ReadyGate";
-  readonly settled: boolean;
 };
 
 export function makeReactNodeStore<
@@ -72,7 +70,7 @@ export function makeReactNodeStore<
     /** The fingerprint of `args`, when the caller already computed it. */
     readonly argsFingerprint?: string | undefined;
   },
-  mode: "status" | "result" = "status"
+  mode: ReactNodeStoreMode = "status"
 ): ReactNodeStore<TArgs, TDeps, TResult, TNode> {
   let readinessAttempt: ReadinessAttempt | undefined;
   let unsubscribe: (() => void) | undefined;
@@ -131,43 +129,38 @@ export function makeReactNodeStore<
   // retaining the previous read would lose changes to args/deps/result.
   let emittedTag: Frond.Runtime.RuntimeNodeRead<TResult, TNode>["_tag"] | undefined;
   let emittedNode: TNode | undefined;
-  let emittedResult: unknown;
   let emittedDeps: unknown;
   let emittedArgs: unknown;
-  let emittedResultPatchCount: number | undefined;
   let emittedErrorKind: Frond.Runtime.RuntimeReadFailureKind | undefined;
   let emittedError: unknown;
+  // Status readers also render the read's own fields (operation, busy,
+  // failure, validity, attempt), so status mode compares those as well. A
+  // bare `emit()` reports adapter-local state the read does not carry (the
+  // readiness attempt, an args submission), so in status mode it always bumps.
+  let emittedRead: Frond.Runtime.RuntimeNodeRead<TResult, TNode> | undefined;
   const emit = (read?: Frond.Runtime.RuntimeNodeRead<TResult, TNode>): void => {
-    if (mode === "status") {
-      subscriptions.emit();
-      return;
-    }
     if (subscriptions.isDisposed()) {
       return;
     }
 
     const next = read ?? handle.read();
     let changed = next._tag !== emittedTag;
+    if (mode === "status") {
+      changed ||=
+        read === undefined || emittedRead === undefined || !readFieldsEqual(emittedRead, next);
+      emittedRead = next;
+    }
     switch (next._tag) {
       case "Ready": {
         // Every graph-constructed node has these accessors; TNode captures
         // only the author's additional instance surface in the handle type.
         const node = next.node as TNode & Frond.FrondNode<TArgs, object, TResult>;
-        const result = node.result;
+        // Result writes do not bump: MobX notifies the relevant readers
+        // through the node's result reference or its observable models.
         const deps = node.deps;
         const args = node.args;
-        // A shared-reference patchResult commit keeps `result`; the core's
-        // patch count tells it apart from a status-only notification.
-        const resultPatchCount = (node as ResultPatchCounted)._resultPatchCount;
-        changed ||=
-          next.node !== emittedNode ||
-          !Object.is(result, emittedResult) ||
-          resultPatchCount !== emittedResultPatchCount ||
-          deps !== emittedDeps ||
-          args !== emittedArgs;
+        changed ||= next.node !== emittedNode || deps !== emittedDeps || args !== emittedArgs;
         emittedNode = next.node;
-        emittedResult = result;
-        emittedResultPatchCount = resultPatchCount;
         emittedDeps = deps;
         emittedArgs = args;
         break;
@@ -201,31 +194,30 @@ export function makeReactNodeStore<
       return;
     }
 
-    if (readinessAttempt?._tag === "Pending") {
+    const nextReadiness = suspendPromise(attempt);
+    if (
+      readinessAttempt !== undefined &&
+      (readinessAttempt.promise === nextReadiness || readinessAttempt.promise.status === "pending")
+    ) {
       return;
     }
 
-    const nextReadiness: Promise<void> = attempt.then(
-      () => {},
-      () => {}
-    );
     const scheduledGeneration = generation;
     readinessAttempt = {
       _tag: "Pending",
       promise: nextReadiness,
       presentation: "Unseen",
-      settled: false,
     };
     void nextReadiness.finally(() => {
       if (scheduledGeneration !== generation) {
         return;
       }
 
-      if (readinessAttempt?.promise === nextReadiness) {
-        readinessAttempt =
-          readinessAttempt.presentation === "Unseen"
-            ? { ...readinessAttempt, settled: true }
-            : undefined;
+      if (
+        readinessAttempt?.promise === nextReadiness &&
+        readinessAttempt.presentation !== "Unseen"
+      ) {
+        readinessAttempt = undefined;
       }
 
       if (!isDisposed()) {
@@ -254,13 +246,13 @@ export function makeReactNodeStore<
    * This matters under StrictMode and aborted renders. React may construct this
    * store more than once before a commit. Duplicate boots must therefore join
    * the same graph-owned readiness attempt instead of creating duplicate
-   * driver acquires. The store keeps only an adapter-local wrapper promise so
-   * Suspense and the ready gate can present one stable local promise while the
-   * runtime remains the source of truth for the underlying attempt.
+   * driver acquires. Wrappers are cached by core attempt outside the store so
+   * React.use and the ready gate see the same promise after store rebuilds.
+   * The runtime remains the source of truth for the underlying attempt.
    *
    * Do not move this into an effect without redesigning Suspense startup. An
-   * effect would run after commit, but a cold `useNode()` render needs to throw
-   * before commit so the nearest Suspense boundary can own the loading state.
+   * effect would run after commit, but a cold `useNode()` render needs to call
+   * React.use before commit so Suspense can own the loading state.
    */
   const scheduleBoot = (options: { readonly allowDisposed?: boolean | undefined } = {}): void => {
     if (isDisposed() && options.allowDisposed !== true) {
@@ -271,7 +263,9 @@ export function makeReactNodeStore<
 
     switch (read._tag) {
       case "Pending": {
-        const { attempt } = read;
+        // Prefer the graph-owned attempt if boot has already installed it.
+        const current = handle.read();
+        const attempt = current._tag === "Pending" ? current.attempt : read.attempt;
         scheduleReadinessAttempt(attempt, { allowDisposed: options.allowDisposed });
         break;
       }
@@ -312,7 +306,7 @@ export function makeReactNodeStore<
   const ensureReady = (): Promise<void> => {
     const currentReadiness = currentReadinessPromise();
 
-    if (currentReadiness !== undefined) {
+    if (currentReadiness?.status === "pending") {
       return currentReadiness;
     }
 
@@ -344,13 +338,13 @@ export function makeReactNodeStore<
     return scheduledReadiness;
   };
 
-  const read = (): ReactNodeState<TArgs, TDeps, TResult, TNode> => {
+  const read = (): SuspenseRead<ReactNodeState<TArgs, TDeps, TResult, TNode>> => {
     const handleRead = handle.read();
 
     const readyGate = readyGateSuspenseAttempt(handleRead);
 
     if (readyGate !== undefined) {
-      throw readyGate;
+      return { _tag: "Pending", promise: readyGate };
     }
 
     return projectReactNodeRead<TArgs, TDeps, TResult, TNode>({
@@ -364,7 +358,7 @@ export function makeReactNodeStore<
     });
   };
 
-  const currentReadinessPromise = (): Promise<void> | undefined =>
+  const currentReadinessPromise = (): SuspendPromise | undefined =>
     readinessAttempt === undefined ? undefined : readinessAttempt.promise;
 
   const markReadinessPresentedByPendingRead = (): void => {
@@ -376,13 +370,12 @@ export function makeReactNodeStore<
       _tag: "Pending",
       promise: readinessAttempt.promise,
       presentation: "PendingRead",
-      settled: readinessAttempt.settled,
     };
   };
 
   const readyGateSuspenseAttempt = (
     handleRead: Frond.Runtime.RuntimeNodeRead<TResult, TNode>
-  ): Promise<void> | undefined => {
+  ): SuspendPromise | undefined => {
     if (handleRead._tag !== "Ready") {
       return undefined;
     }
@@ -397,7 +390,7 @@ export function makeReactNodeStore<
       case "PendingRead":
         return undefined;
       case "Unseen": {
-        if (readinessAttempt?.settled === true) {
+        if (promise.status === "fulfilled") {
           readinessAttempt = undefined;
           return promise;
         }
@@ -406,12 +399,11 @@ export function makeReactNodeStore<
           _tag: "Pending",
           promise,
           presentation: "ReadyGate",
-          settled: false,
         };
         return promise;
       }
       case "ReadyGate": {
-        if (readinessAttempt?.settled === true) {
+        if (promise.status === "fulfilled") {
           readinessAttempt = undefined;
           return undefined;
         }
@@ -425,8 +417,8 @@ export function makeReactNodeStore<
     }
   };
 
-  // Non-throwing counterpart to `read`. Unlike the Suspense/error-throwing
-  // `read`, this drives the same cold-start boot but hands the raw runtime read
+  // Unlike the readiness/error projection in `read`, this drives the same
+  // cold-start boot but hands the raw runtime read
   // back so a caller can render Pending/Error states inline via `useNodeRead`.
   const peek = (): Frond.Runtime.RuntimeNodeRead<TResult, TNode> => {
     const handleRead = handle.read();
@@ -735,4 +727,51 @@ export function makeReactNodeStore<
       readinessAttempt = undefined;
     },
   };
+}
+
+// The runtime rebuilds these records on every read, so they compare one level
+// deep. Every other field, `result` and `error` included, belongs to the app
+// or is a value and compares by identity: reading an app object's fields can
+// run its getters.
+const runtimeRecordFields: ReadonlySet<string> = new Set([
+  "operation",
+  "operationFailure",
+  "resultValidity",
+]);
+
+function readFieldsEqual(previous: object, next: object): boolean {
+  return shallowEqual(
+    previous,
+    next,
+    (key, left, right) =>
+      Object.is(left, right) ||
+      (runtimeRecordFields.has(key) &&
+        isPlainRecord(left) &&
+        isPlainRecord(right) &&
+        shallowEqual(left, right, (_key, inner, other) => Object.is(inner, other)))
+  );
+}
+
+function shallowEqual(
+  previous: object,
+  next: object,
+  equal: (key: string, left: unknown, right: unknown) => boolean
+): boolean {
+  const previousKeys = Object.keys(previous);
+  if (previousKeys.length !== Object.keys(next).length) {
+    return false;
+  }
+  return previousKeys.every(
+    (key) =>
+      Object.prototype.hasOwnProperty.call(next, key) &&
+      equal(key, (previous as Record<string, unknown>)[key], (next as Record<string, unknown>)[key])
+  );
+}
+
+function isPlainRecord(value: unknown): value is object {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }

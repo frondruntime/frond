@@ -15,7 +15,6 @@ export interface RuntimeCore {
   readonly ingest: CoreCall<RuntimeHostService["ingest"]>;
   readonly publish: CoreCall<RuntimeHostService["publish"]>;
   readonly recordUnsafeScheduleFailure: CoreCall<RuntimeHostService["recordUnsafeScheduleFailure"]>;
-  readonly recordMobXProjectionFailure: CoreCall<RuntimeHostService["recordMobXProjectionFailure"]>;
   readonly querySync: (query: RuntimeQuery) => RuntimeQueryResult;
   readonly getSnapshotSync: () => RuntimeSnapshot;
   readonly observeSync: (observer: RuntimeObserver, nodeId?: NodeId) => RuntimeSubscription;

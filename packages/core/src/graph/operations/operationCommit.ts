@@ -1,3 +1,4 @@
+import { runInAction } from "mobx";
 import type { Disposer } from "../../driver";
 import type { GraphNodeCell } from "../cell/cellModel";
 import { phaseArgs } from "../cell/cellPhase";
@@ -13,23 +14,51 @@ interface ReadyOperationCommit {
   readonly operationDisposers: ReadonlyArray<Disposer>;
 }
 
-export function commitReadyOperationResultSync(input: ReadyOperationCommit): void {
+export function commitReadyOperationResultSync(
+  input: ReadyOperationCommit
+): { readonly cause: unknown } | undefined {
   const latest = input.cell.state.getSync();
-  input.cell.state.updateSync((latest) => {
-    commitReadyOperationState({
-      latest,
-      deps: input.deps,
-      resultState: input.resultState,
-      operationDisposers: input.operationDisposers,
+  return runCommitBatch(input.cell, () => {
+    // Publish the snapshot and cell state in one action so readers see a complete commit.
+    if (input.resultState.resultWritten !== true) {
+      updateReadyNodeRuntimeState({
+        node: input.node,
+        args: phaseArgs(latest.phase),
+        deps: input.deps,
+      });
+    } else {
+      updateReadyNodeRuntimeState({
+        node: input.node,
+        args: phaseArgs(latest.phase),
+        deps: input.deps,
+        result: input.resultState.result,
+        resultPatched: input.resultState.resultPatched,
+      });
+    }
+    input.cell.state.updateSync((latest) => {
+      commitReadyOperationState({
+        latest,
+        deps: input.deps,
+        resultState: input.resultState,
+        operationDisposers: input.operationDisposers,
+      });
     });
   });
-  updateReadyNodeRuntimeState({
-    node: input.node,
-    args: phaseArgs(latest.phase),
-    deps: input.deps,
-    result: input.resultState.result,
-    resultPatched: input.resultState.resultPatched,
-  });
+}
+
+/** A reaction thrown while MobX ends its batch cannot undo a landed cell commit. */
+export function runCommitBatch(
+  cell: GraphNodeCell,
+  commit: () => void
+): { readonly cause: unknown } | undefined {
+  const revision = cell.state.getRevisionSync();
+  try {
+    runInAction(commit);
+    return undefined;
+  } catch (cause) {
+    if (cell.state.getRevisionSync() === revision) throw cause;
+    return { cause };
+  }
 }
 
 export function appendOperationDisposersSync(

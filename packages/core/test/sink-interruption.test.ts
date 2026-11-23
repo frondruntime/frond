@@ -64,7 +64,7 @@ test("runtime stop interrupts and finalizes a pending action-start sink", async 
     });
   }
   const gate = gatedActionStartSink();
-  const runtime = createRuntime({ sinks: [gate.sink] });
+  const runtime = createRuntime({ development: true, eventBufferSize: 512, sinks: [gate.sink] });
   try {
     const handle = runtime.client.node(Resource, {});
     await handle.ensureReadyNode();
@@ -97,7 +97,7 @@ test("an aborted action caller interrupts and finalizes its pending start sink",
     });
   }
   const gate = gatedActionStartSink();
-  const runtime = createRuntime({ sinks: [gate.sink] });
+  const runtime = createRuntime({ development: true, eventBufferSize: 512, sinks: [gate.sink] });
   try {
     const handle = runtime.client.node(Resource, {});
     await handle.ensureReadyNode();
@@ -170,7 +170,7 @@ test("runtime stop settles when an interrupted sink's finalizer dies", async () 
         actions: { act: Driver.Action(() => {}) },
       });
     }
-    const runtime = createRuntime({ sinks: [sink] });
+    const runtime = createRuntime({ development: true, eventBufferSize: 512, sinks: [sink] });
     const handle = runtime.client.node(Resource, {});
     await handle.ensureReadyNode();
     const action = handle.actions.act();
@@ -220,7 +220,7 @@ test("runtime stop interrupts every pending sink when one's finalizer dies", asy
           actions: { act: Driver.Action(() => {}) },
         });
       };
-    const runtime = createRuntime({ sinks: [sink] });
+    const runtime = createRuntime({ development: true, eventBufferSize: 512, sinks: [sink] });
     const first = runtime.client.node(makeResource("sinks/stop-first"), {});
     const second = runtime.client.node(makeResource("sinks/stop-second"), {});
     await first.ensureReadyNode();

@@ -4,6 +4,7 @@ import type { DriverRunResult } from "../../driver/types";
 import type { GraphNodeCell } from "../cell/cellModel";
 import { interruptedCancellation } from "../lifecycle/operationDisposers";
 import type { GraphJob } from "../queue/jobQueue";
+import { callbackEffect, forkIn, noCancel } from "../queue/reply";
 import {
   DriverOperationTimedOut,
   type DriverOperationTimeoutMs,
@@ -25,8 +26,6 @@ export interface DriverEdgeInput<A> {
   /** Runs when the edge ends with an exit, before its settle job is posted. */
   readonly onDecided?: (() => void) | undefined;
 }
-
-const noInterrupt = () => Effect.void;
 
 /** The only hook execution boundary. Every exit re-enters through a settle job. */
 export function startEdge<A>(
@@ -69,7 +68,7 @@ export function startEdge<A>(
     result = input.run();
   } catch (cause) {
     failed(cause);
-    return noInterrupt;
+    return noCancel;
   }
 
   const timeoutFailure = () => {
@@ -104,7 +103,7 @@ export function startEdge<A>(
       attributes: input.spanAttributes,
       captureStackTrace: false,
     });
-    worker = context === undefined ? Effect.runFork(effect) : Effect.runForkWith(context)(effect);
+    worker = forkIn(context, effect);
     worker.addObserver((exit) =>
       post(
         exit._tag === "Success"
@@ -116,7 +115,7 @@ export function startEdge<A>(
     try {
       if (!isPromiseLike<A>(result)) {
         post(Exit.succeed(result as A));
-        return noInterrupt;
+        return noCancel;
       }
       // Keep timeouts on Effect, but never wrap a promise hook in an Effect.
       if (input.timeout !== "unbounded") {
@@ -128,8 +127,7 @@ export function startEdge<A>(
             })
           )
         );
-        timer =
-          context === undefined ? Effect.runFork(deadline) : Effect.runForkWith(context)(deadline);
+        timer = forkIn(context, deadline);
       }
       // A thenable may call back more than once. Only its first settlement
       // counts: a repeat must neither settle again nor reach abandoned-resource
@@ -196,12 +194,7 @@ function isPromiseLike<A>(value: unknown): value is PromiseLike<A> {
 
 /** Effect consumers share the same edge, with their caller's services and tracer. */
 export function runTimedDriverOperation<A>(input: DriverEdgeInput<A>): Effect.Effect<A, unknown> {
-  return Effect.withFiber((fiber) =>
-    Effect.callback((resume) => {
-      const cancel = startEdge(input, fiber.context, (exit) => resume(exit));
-      return Effect.suspend(cancel);
-    })
-  );
+  return callbackEffect((context, resume) => startEdge(input, context, (exit) => resume(exit)));
 }
 
 export function withDriverOperationBoundary<A, E, R>(

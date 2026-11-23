@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import * as Frond from "@frondruntime/core";
 import * as FrondTest from "@frondruntime/core/testing";
 import { Effect } from "effect";
+import { observable } from "mobx";
 
 const harnesses: FrondTest.FrondTestHarness[] = [];
 afterEach(async () => {
@@ -280,3 +281,67 @@ test("Test runtimes capture awaited events and Effect host bridges preserve hand
     await fixture.runtime.submit({ _tag: "RuntimeStop" });
   }
 });
+
+test("readySpec with a result function reads it on acquire and on each refresh", async () => {
+  let current = { value: 1 };
+  const stub = FrondTest.readySpec(SourceNode, () => current);
+  const harness = createHarness({ specOverrides: [{ from: SourceNode, to: stub }] });
+  const node = await harness.startNode(SourceNode, {});
+  expect(node.result).toEqual({ value: 1 });
+  current = { value: 2 };
+  const handle = harness.node(SourceNode, {});
+  expect(await handle.refresh()).toMatchObject({ _tag: "Success" });
+  expect(node.result).toEqual({ value: 2 });
+  expect(harness.readReady(handle).result).toEqual({ value: 2 });
+});
+
+test("readySpec with a plain result keeps it across a refresh", async () => {
+  const stub = FrondTest.readySpec(SourceNode, { value: 4 });
+  const harness = createHarness({ specOverrides: [{ from: SourceNode, to: stub }] });
+  const node = await harness.startNode(SourceNode, {});
+  expect(await harness.node(SourceNode, {}).refresh()).toMatchObject({ _tag: "Success" });
+  expect(node.result).toEqual({ value: 4 });
+});
+
+class ReadyModel {
+  value = 1;
+}
+
+for (const [label, createValue] of [
+  ["class", () => new ReadyModel()],
+  ["Map", () => new Map([["value", 1]])],
+  ["observable", () => observable({ value: 1 })],
+  ["function", () => () => 1],
+] as const) {
+  test(`readySpec replaces a ${label} result on every factory refresh`, async () => {
+    type Result = ReturnType<typeof createValue>;
+    type Spec = Frond.NodeSpec<{
+      readonly mode: "async";
+      readonly key: Frond.Key.Singleton;
+      readonly result: Result;
+    }>;
+    let current: Result = createValue();
+    let calls = 0;
+    class ValueNode extends Frond.NodeBase<Spec> {
+      static readonly spec = Frond.serviceSpec.async<Spec>({
+        tag: Frond.tag("compat/harness/opaque-factory"),
+        key: () => Frond.Key.singleton(),
+        acquire: Frond.Driver.Acquire(() => current),
+      });
+    }
+    const stub = FrondTest.readySpec(ValueNode, () => {
+      calls += 1;
+      return current;
+    });
+    const harness = createHarness({ specOverrides: [{ from: ValueNode, to: stub }] });
+    const node = await harness.startNode(ValueNode, {});
+    expect(node.result).toBe(current);
+    current = createValue();
+    const handle = harness.node(ValueNode, {});
+    for (let refresh = 0; refresh < 2; refresh += 1) {
+      expect(await handle.refresh()).toMatchObject({ _tag: "Success" });
+      expect(node.result).toBe(current);
+    }
+    expect(calls).toBe(3);
+  });
+}

@@ -1,7 +1,7 @@
 import type * as Frond from "@frondruntime/core";
 import type { NodeSpecArgs, NodeSpecLike } from "@frondruntime/core";
 import { useEffect, useMemo, useRef } from "react";
-import { getReactArgsFingerprint, validatedNodeIdResolver } from "./argsFingerprint";
+import { resolveReactNodeIdentity, validatedNodeIdResolver } from "./argsFingerprint";
 import { useRuntime } from "./context";
 import { ReactRuntimeMetadata } from "./metadata";
 import { assertStableKeySet, prepareReactNodeMap, type ReactNodeMapEntry } from "./nodeInputMap";
@@ -23,16 +23,12 @@ export function useNodeControls<TSpec extends NodeSpecLike>(
   args: NodeSpecArgs<TSpec>
 ): UseNodeControls {
   const runtime = useRuntime();
-  // One canonicalization per render on a runtime from `createRuntime`: the
-  // fingerprint validates args, then resolution skips its own pass.
   const resolveValidated = validatedNodeIdResolver(runtime);
-  const validatedFingerprint =
-    resolveValidated === undefined ? undefined : getReactArgsFingerprint(args);
-  const nodeId =
-    resolveValidated === undefined
-      ? runtime.resolveNodeIdSync({ spec, args })
-      : resolveValidated({ spec, args });
-  const renderArgsFingerprint = validatedFingerprint ?? getReactArgsFingerprint(args);
+  const { nodeId, argsFingerprint: renderArgsFingerprint } = resolveReactNodeIdentity(
+    runtime,
+    { spec, args },
+    resolveValidated
+  );
   // Biome cannot see that nodeId is the canonical identity for spec and args.
   // Including args would recreate controls for inline object literals with the same Frond key.
   // biome-ignore lint/correctness/useExhaustiveDependencies: nodeId is the stable Frond identity.
@@ -69,7 +65,6 @@ export function useNodeControls<TSpec extends NodeSpecLike>(
         nodeId,
         fingerprint: nextArgsFingerprint,
       },
-      previous: currentArgsFingerprint,
       getCurrent: () => argsFingerprint.current,
       setCurrent: (fingerprint) => {
         argsFingerprint.current = fingerprint;
@@ -142,7 +137,6 @@ export function useNodesControls<const TMap extends ReactNodeInputMap>(
         handle,
         args: entry.args,
         next,
-        previous: previousArgsFingerprint,
         getCurrent: () => argsFingerprints.current.get(entry.key),
         setCurrent: (fingerprint) => {
           argsFingerprints.current.set(entry.key, fingerprint);
@@ -173,47 +167,39 @@ export function makeReactNodeControls(
 
 interface NodeArgsFingerprint {
   readonly nodeId: Frond.Graph.NodeId;
-  readonly fingerprint: string;
+  readonly fingerprint: string | undefined;
 }
 
 /**
  * Installs `next` in the fingerprint slot and dispatches the args update.
  *
- * On failure it only rolls back if no later updateArgs has overtaken the
- * slot. Otherwise it would clobber a newer (live) fingerprint with the stale
- * `previous` snapshot, and later renders carrying the newer args would be
- * skipped as "already current" while the runtime holds them.
+ * The latest failed request leaves the fingerprint unknown: an earlier
+ * submitted fingerprint may have failed too. Keep the identity in the slot
+ * because an absent slot means initialization. Older failures cannot
+ * invalidate a newer request's fingerprint.
  */
 function dispatchArgsUpdate<TArgs>(input: {
   readonly handle: Pick<Frond.Runtime.RuntimeNodeHandle<TArgs, unknown>, "updateArgs">;
   readonly args: TArgs;
   readonly next: NodeArgsFingerprint;
-  readonly previous: NodeArgsFingerprint;
   readonly getCurrent: () => NodeArgsFingerprint | undefined;
   readonly setCurrent: (fingerprint: NodeArgsFingerprint) => void;
 }): void {
-  const rollbackFingerprint = () => {
+  const invalidateFingerprint = () => {
     if (input.getCurrent() === input.next) {
-      input.setCurrent(input.previous);
+      input.setCurrent({ nodeId: input.next.nodeId, fingerprint: undefined });
     }
   };
 
   input.setCurrent(input.next);
   void input.handle.updateArgs(input.args, ReactRuntimeMetadata.argsUpdate()).then((result) => {
     if (result._tag === "Failure") {
-      rollbackFingerprint();
+      invalidateFingerprint();
     }
-  }, rollbackFingerprint);
-}
-
-interface ReactNodeControlEntry {
-  readonly key: string;
-  readonly handle: Frond.Runtime.RuntimeNodeHandle<unknown, unknown>;
-  readonly controls: UseNodeControls;
+  }, invalidateFingerprint);
 }
 
 interface ReactNodesControlsState {
-  readonly entries: ReadonlyArray<ReactNodeControlEntry>;
   readonly handleByKey: ReadonlyMap<string, Frond.Runtime.RuntimeNodeHandle<unknown, unknown>>;
   readonly controls: Record<string, UseNodeControls>;
 }
@@ -244,7 +230,6 @@ function makeReactNodesControls(
   }
 
   return {
-    entries: controlEntries,
     handleByKey: new Map(controlEntries.map((entry) => [entry.key, entry.handle])),
     controls,
   };

@@ -26,7 +26,6 @@ export * as Events from "./events";
 export * as Graph from "./graph";
 export { unwrapEffect, wrapPromise } from "./interop";
 export * as Key from "./keys";
-export * as MobX from "./mobx";
 export type {
   AnyModeSpec,
   AsyncModeSpec,

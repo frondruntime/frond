@@ -6,9 +6,9 @@ import type {
   Runtime,
 } from "@frondruntime/core";
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import { getReactArgsFingerprint, validatedNodeIdResolver } from "./argsFingerprint";
+import { resolveReactNodeIdentity, validatedNodeIdResolver } from "./argsFingerprint";
 import { useRuntime } from "./context";
-import { makeReactNodeStore, type ReactNodeStore } from "./nodeStore";
+import { makeReactNodeStore, type ReactNodeStore, type ReactNodeStoreMode } from "./nodeStore";
 import type { ReactNodeSpec } from "./types";
 
 /**
@@ -17,13 +17,13 @@ import type { ReactNodeSpec } from "./types";
  * Owns everything both hooks have in common: store identity keyed by the
  * canonical node id, the args-fingerprint update gating, dispose-on-unmount,
  * and the external-store subscription. The public hooks are thin tails over
- * the returned store — `read()` (throwing) for `useNodeState`/`useNode`,
+ * the returned store — `read()` (ready state or pending promise) for `useNodeState`/`useNode`,
  * `peek()` (tagged union) for `useNodeRead`.
  */
 export function useReactNodeStore<TSpec extends NodeSpecLike>(
   spec: TSpec,
   args: NodeSpecArgs<TSpec>,
-  mode: "status" | "result" = "status"
+  mode: ReactNodeStoreMode = "status"
 ): ReactNodeStore<
   NodeSpecArgs<TSpec>,
   NodeSpecDeclaredDeps<TSpec>,
@@ -31,16 +31,12 @@ export function useReactNodeStore<TSpec extends NodeSpecLike>(
   Runtime.RuntimeHandleNode<TSpec>
 > {
   const runtime = useRuntime();
-  // One canonicalization per render on a runtime from `createRuntime`: the
-  // fingerprint validates args, then resolution skips its own pass.
   const resolveValidated = validatedNodeIdResolver(runtime);
-  const validatedFingerprint =
-    resolveValidated === undefined ? undefined : getReactArgsFingerprint(args);
-  const nodeId =
-    resolveValidated === undefined
-      ? runtime.resolveNodeIdSync({ spec, args })
-      : resolveValidated({ spec, args });
-  const argsFingerprint = validatedFingerprint ?? getReactArgsFingerprint(args);
+  const { nodeId, argsFingerprint } = resolveReactNodeIdentity(
+    runtime,
+    { spec, args },
+    resolveValidated
+  );
   // Biome cannot see that nodeId is the canonical identity for spec and args.
   // Including args would recreate the store for inline object literals with the same Frond key.
   // biome-ignore lint/correctness/useExhaustiveDependencies: nodeId is the stable Frond identity.
