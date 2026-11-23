@@ -6,9 +6,11 @@ import { leakSlackPerRound, liveSample, objectGrowth } from "./leakTestFixtures"
 
 const retained: Array<unknown> = [];
 
-test("the leak check fails a round that keeps an object", async () => {
+// The kept round holds fifty objects and their array, far above the slack, so
+// a collector that frees unrelated objects between windows cannot hide it.
+test("the leak check fails a round that keeps objects", async () => {
   const growth = await objectGrowth(() => {
-    retained.push({ rows: [1, 2, 3] });
+    retained.push(Array.from({ length: 50 }, (_, index) => ({ index })));
   });
   retained.length = 0;
 
