@@ -133,13 +133,6 @@ function readinessPromise(input: {
   return attempt;
 }
 
-// One read error per failure. Every reader of a failing node throws the same
-// error, so its boundaries, its report and its retry agree. The runtime wraps
-// each failure in a new cause, so a later failure gets a new error. The
-// recovery is the first reader's; its retry readies the node itself, which
-// recovers every reader, and still works after that reader's store is gone.
-const readErrors = new WeakMap<object, Frond.Runtime.FrondRuntimeReadError>();
-
 function runtimeReadError(input: {
   readonly message: string;
   readonly nodeId: Frond.Graph.NodeId;
@@ -153,17 +146,7 @@ function runtimeReadError(input: {
     return input.recovery === undefined ? cause : attachErrorRecovery(cause, input.recovery);
   }
 
-  const shared = typeof cause === "object" && cause !== null ? readErrors.get(cause) : undefined;
-
-  if (shared !== undefined && shared.nodeId === input.nodeId && shared.kind === input.kind) {
-    return shared;
-  }
-
   const error = new Frond.Runtime.FrondRuntimeReadError(input);
-
-  if (typeof cause === "object" && cause !== null) {
-    readErrors.set(cause, error);
-  }
 
   return input.recovery === undefined ? error : attachErrorRecovery(error, input.recovery);
 }
