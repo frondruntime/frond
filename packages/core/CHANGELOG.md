@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.7.0](https://github.com/frondruntime/frond/compare/core-v0.6.1...core-v0.7.0) (2026-11-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* createRuntime requires the development and eventBufferSize options; leaving either out fails the type check and throws FrondRuntimeInvariantViolation at runtime. createTestRuntime defaults them to true and 512.
+* Frond.MobX (createNode, the MobXNode types and FrondMobXProjectionError) is removed. Read node.result on the class node, or useNode in React.
+* committed results are read-only and frozen in development; write through patchResult, setResult or an updater.
+* useNode and useNodes throw FrondReactUsageError in development outside a MobX observer component, and do not rerender on result writes outside one.
+* @frondruntime/react requires React 19 and suspends through React.use.
+
+### Features
+
+* @frondruntime/react requires React 19 and suspends through React.use. ([b079795](https://github.com/frondruntime/frond/commit/b0797955318525e649e6d21cd1d638968b0f8b97))
+* committed results are read-only and frozen in development; write through patchResult, setResult or an updater. ([b079795](https://github.com/frondruntime/frond/commit/b0797955318525e649e6d21cd1d638968b0f8b97))
+* createRuntime requires the development and eventBufferSize options; leaving either out fails the type check and throws FrondRuntimeInvariantViolation at runtime. createTestRuntime defaults them to true and 512. ([b079795](https://github.com/frondruntime/frond/commit/b0797955318525e649e6d21cd1d638968b0f8b97))
+* Frond 0.7, the frozen committed snapshot result ([b079795](https://github.com/frondruntime/frond/commit/b0797955318525e649e6d21cd1d638968b0f8b97))
+* Frond.MobX (createNode, the MobXNode types and FrondMobXProjectionError) is removed. Read node.result on the class node, or useNode in React. ([b079795](https://github.com/frondruntime/frond/commit/b0797955318525e649e6d21cd1d638968b0f8b97))
+* useNode and useNodes throw FrondReactUsageError in development outside a MobX observer component, and do not rerender on result writes outside one. ([b079795](https://github.com/frondruntime/frond/commit/b0797955318525e649e6d21cd1d638968b0f8b97))
+
 ## [0.6.1](https://github.com/frondruntime/frond/compare/core-v0.6.0...core-v0.6.1) (2026-11-20)
 
 
