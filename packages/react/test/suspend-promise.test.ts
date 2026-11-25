@@ -57,3 +57,24 @@ test("a new composite of settled children is fulfilled before its first read", a
   expect(composite.value).toBeUndefined();
   await composite;
 });
+
+test("suspension works on hosts without Promise.withResolvers", async () => {
+  const host = Promise as { withResolvers?: unknown };
+  const withResolvers = Object.getOwnPropertyDescriptor(Promise, "withResolvers");
+  let resolveAttempt!: () => void;
+  const attempt = new Promise<void>((resolve) => {
+    resolveAttempt = resolve;
+  });
+  delete host.withResolvers;
+  try {
+    const wrapper = suspendPromise(attempt);
+    const composite = compositeSuspendPromise([wrapper]);
+    expect(wrapper.status).toBe("pending");
+    resolveAttempt();
+    await composite;
+    expect(wrapper.status).toBe("fulfilled");
+    expect(composite.status).toBe("fulfilled");
+  } finally {
+    if (withResolvers !== undefined) Object.defineProperty(Promise, "withResolvers", withResolvers);
+  }
+});

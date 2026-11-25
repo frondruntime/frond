@@ -25,11 +25,15 @@ export function suspendPromise(attempt: Promise<unknown>): SuspendPromise {
     promise.status = "fulfilled";
     promise.value = undefined;
   };
-  const failure = Promise.withResolvers<void>();
+  // Hermes on React Native 0.83 has no Promise.withResolvers.
+  let resolveFailure!: () => void;
+  const failure = new Promise<void>((resolve) => {
+    resolveFailure = resolve;
+  });
   const fail = (): void => {
     failed.add(promise);
     settle();
-    failure.resolve();
+    resolveFailure();
   };
   const promise: SuspendPromise = Object.assign(
     attempt.then((value) => (isErrorRead(value) ? fail() : settle()), fail),
@@ -39,7 +43,7 @@ export function suspendPromise(attempt: Promise<unknown>): SuspendPromise {
     }
   );
   if (isFailed(attempt)) failed.add(promise);
-  failures.set(promise, failure.promise);
+  failures.set(promise, failure);
   wrappers.set(attempt, promise);
   return promise;
 }
