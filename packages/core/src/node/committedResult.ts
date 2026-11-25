@@ -9,6 +9,7 @@ import {
   isDevelopmentFrozen,
   isFrondFrozen,
   isFullyFrozen,
+  isMutableReference,
   markCommittedFrozen,
   maxResultDepth,
   resultNeedsInPlaceNotification,
@@ -188,11 +189,7 @@ function prepare(
             Number(key) < 4_294_967_295));
       if (!plainSlot) {
         // Symbol payloads and custom array slots are retained without copying.
-        if (
-          typeof descriptor.value === "object" &&
-          descriptor.value !== null &&
-          !isObservable(descriptor.value)
-        )
+        if (isMutableReference(descriptor.value) && !isObservable(descriptor.value))
           notifyInPlace = true;
         if (descriptorsEqual)
           equal = mergeEqual(equal, identityEqual(old?.value, descriptor.value));
@@ -202,6 +199,8 @@ function prepare(
       // Descriptor values preserve equality semantics without invoking accessors.
       const entry: unknown = descriptor.value;
       if (typeof entry !== "object" || entry === null) {
+        // A callable is opaque: retained by identity, it can change in place.
+        if (typeof entry === "function" && !isObservable(entry)) notifyInPlace = true;
         const same = Object.is(entry, old?.value);
         if (descriptorsEqual) equal = mergeEqual(equal, same);
         if (!same) shareable = false;

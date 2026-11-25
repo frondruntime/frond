@@ -244,14 +244,18 @@ actions: {
   live subscription stops accepting events *before* it propagates its own
   error or completion.
 - Refresh and `setResult(value)` share unchanged, fully frozen plain children
-  with the pre-operation committed result. An equal plain refresh retains the
-  committed root; an action's `setResult(value)` keeps a replacement root even
-  when equal.
-  Same-shaped live containers keep identity, and readers of unchanged fields
-  stay quiet. Opaque children and symbol-slot payloads keep the driver's fresh
-  references when the surrounding result changes. Write through driver hooks:
-  a direct mutation of the writable live mirror can persist across an unchanged
-  commit because its frozen source is skipped.
+  with the pre-operation committed result. A refresh or an action's
+  `setResult(value)` equal to the committed result keeps the committed root
+  and notifies nobody.
+  `node.result` is the committed snapshot behind one observable reference:
+  a commit that changes it notifies every reader of `node.result`, with no
+  per-field reactivity for plain data. Opaque children (class instances,
+  functions, `Map`, `Set`, `Date`) and symbol-slot payloads keep the driver's
+  references; a share patch that changes one in place notifies every
+  `node.result` reader, unless it is a MobX observable, which notifies its own
+  readers. Write through driver hooks: the committed result is read-only and
+  frozen in development, and a direct write in production changes every holder
+  of the snapshot without notifying anyone.
 - Refresh is on-demand re-derivation. The runtime does not cascade refresh
   through dependents; a parent refreshing a direct dependency does it
   deliberately with `ctx.refreshDep("name")`.

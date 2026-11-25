@@ -44,15 +44,14 @@ export function unsafeUpdateNodeInCell(
     const drafted = stageResultDraft(
       previous,
       (current) => {
-        const updater = Proxy.revocable(node, {
-          get(target, key, receiver) {
-            return key === "result" ? current : Reflect.get(target, key, receiver);
-          },
-        });
+        // The recipe gets the authored instance itself, so its getters and
+        // methods keep their private fields; an own `result` shadows the
+        // committed one with the draft until the recipe returns.
+        Object.defineProperty(node, "result", { configurable: true, get: () => current });
         try {
-          request.recipe(updater.proxy);
+          request.recipe(node);
         } finally {
-          updater.revoke();
+          delete (node as { result?: unknown }).result;
         }
       },
       false,

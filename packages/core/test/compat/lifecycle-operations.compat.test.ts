@@ -9,8 +9,8 @@ afterEach(async () => {
     await runtime.submit({ _tag: "RuntimeStop", reason: "compatibility teardown" });
   }
 });
-function createRuntime() {
-  const runtime = Frond.createRuntime({ development: true, eventBufferSize: 512 });
+function createRuntime(options: Partial<Frond.Runtime.RuntimeOptions> = {}) {
+  const runtime = Frond.createRuntime({ development: true, eventBufferSize: 512, ...options });
   runtimes.push(runtime);
   return runtime;
 }

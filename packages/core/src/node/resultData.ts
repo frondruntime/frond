@@ -81,10 +81,14 @@ export function markDraftCopy(value: object): void {
  */
 export function resultNeedsInPlaceNotification(value: unknown): boolean {
   return (
-    typeof value === "object" &&
-    value !== null &&
+    isMutableReference(value) &&
     (frozen.has(value) ? needsInPlaceNotification.has(value) : !isObservable(value))
   );
+}
+
+/** An object or a function: either can change in place under one identity. */
+export function isMutableReference(value: unknown): value is object {
+  return (typeof value === "object" && value !== null) || typeof value === "function";
 }
 
 // Plain snapshot eligibility. Equality additionally accepts null-prototype and

@@ -37,8 +37,10 @@ check, a cited skill rule), not with intent.
 - A non-`observer` component reading observable getters.
 - Result committed from an action return value instead of `ctx.setResult` /
   `ctx.patchResult`; class result patched without `resultPatch.nonPlainClone`.
-- A direct write to `node.result`: it changes only the live tree, and an
-  equal refresh keeps the drift.
+- A direct write to `node.result` or anything inside it: the committed
+  snapshot is frozen in development, so the write throws; in production it
+  changes the snapshot and every retained copy, devtools history included,
+  and notifies no reader.
 - Live work whose `stop` does not dispose what `start` returned; liveness
   inferred from component presence.
 - A stateful capability result mutating itself without `ctx.setResult` on
