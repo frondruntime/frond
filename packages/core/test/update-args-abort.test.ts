@@ -35,7 +35,7 @@ test("an aborted args-update caller still leaves the handle on the committed arg
       }),
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const events: string[] = [];
   const subscription = runtime.observe((record) => {
     if (record.event._tag === "GraphNodeArgsUpdateSucceeded") events.push(record.event._tag);
@@ -75,7 +75,7 @@ test("an args update aborted before it is planned never commits", async () => {
       acquire: Driver.Acquire((ctx) => ctx.args.value),
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   try {
     const handle = runtime.client.node(Resource, { value: 1 });
     const node = await handle.ensureReadyNode();
@@ -140,7 +140,7 @@ class OrderedResource extends NodeBase<Spec> {
 for (const aborted of [true, false]) {
   test(`a late reply from an older ${aborted ? "aborted " : ""}args update does not rewind the handle`, async () => {
     const held = holdFirstArgsReply();
-    const runtime = createRuntime({ sinks: [held.sink] });
+    const runtime = createRuntime({ development: true, eventBufferSize: 512, sinks: [held.sink] });
     try {
       const handle = runtime.client.node(OrderedResource, { value: 1 });
       const node = await handle.ensureReadyNode();
@@ -170,7 +170,7 @@ for (const aborted of [true, false]) {
 
 test("a late reply from an older committed args update applies after a newer one failed", async () => {
   const held = holdFirstArgsReply();
-  const runtime = createRuntime({ sinks: [held.sink] });
+  const runtime = createRuntime({ development: true, eventBufferSize: 512, sinks: [held.sink] });
   try {
     const handle = runtime.client.node(OrderedResource, { value: 1 });
     const node = await handle.ensureReadyNode();

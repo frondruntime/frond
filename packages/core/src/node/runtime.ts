@@ -1,5 +1,7 @@
 import { Effect } from "effect";
 import {
+  createAtom,
+  type IAtom,
   makeObservable,
   observable,
   onBecomeObserved,
@@ -10,6 +12,7 @@ import {
 import { type Disposer, type DriverMode, recoverDriverMode } from "../driver/types";
 import type { ActionResult } from "../graph/types";
 import type { KeyInput } from "../keys";
+import { resultNeedsInPlaceNotification } from "./resultData";
 import type {
   ActionContracts,
   NodeActions,
@@ -58,10 +61,8 @@ export class NodeBase<
 
   private _resultObservationReported = false;
 
-  // Runtime-owned: counts committed patchResult writes. A shared patch keeps
-  // the result reference, so the React adapter compares this count as well.
-  // Plain field, not observable: MobX observers see the result reference only.
-  _resultPatchCount = 0;
+  // Shared non-observable objects need notification when a patch keeps their reference.
+  private readonly _resultInPlace: IAtom = createAtom("NodeBase.result.inPlace");
 
   private _closed = false;
 
@@ -142,8 +143,15 @@ export class NodeBase<
     return this._deps;
   }
 
+  /**
+   * The committed snapshot. Plain data is structurally shared and frozen when
+   * the runtime was created with `development: true`;
+   * non-plain objects retain their references. Commit changes through
+   * `ctx.setResult` or `ctx.patchResult`.
+   */
   get result(): NodeSpecResult<TSpec> {
     this._assertOpen("result");
+    this._resultInPlace.reportObserved();
     return this._result;
   }
 
@@ -228,18 +236,22 @@ export class NodeBase<
   ): void {
     this._assertOpen("runtime state");
     runInAction(() => {
+      if ("result" in update) {
+        if (!Object.is(update.result, this._result)) {
+          this._result = update.result as NodeSpecResult<TSpec>;
+        }
+        if (update.resultPatched === true && resultNeedsInPlaceNotification(this._result)) {
+          this._resultInPlace.reportChanged();
+        }
+      }
       if ("args" in update) {
         this._args = update.args as NodeSpecArgs<TSpec>;
       }
       if ("deps" in update) {
         this._deps = update.deps as NodeSpecResolvedDeps<TSpec>;
       }
-      if ("result" in update) {
-        this._result = update.result as NodeSpecResult<TSpec>;
-      }
       this._reportObservedResultIfReady();
     });
-    if (update.resultPatched === true) this._resultPatchCount += 1;
   }
 
   _closeRuntimeNode(): void {

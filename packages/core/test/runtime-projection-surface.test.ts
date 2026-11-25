@@ -97,7 +97,7 @@ describe("runtime projection surface", () => {
   });
 
   test("runtime snapshot uses one projection shape", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node<Record<string, never>, { readonly value: string }>(
       ProjectionReadyNode,
       {}
@@ -209,6 +209,8 @@ describe("runtime projection surface", () => {
       });
     }
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       syncClock: {
         now: () => now,
       },
@@ -244,6 +246,8 @@ describe("runtime projection surface", () => {
 
   test("runtime sync clock fails loudly when it returns malformed time", () => {
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       syncClock: {
         now: () => Number.NaN,
       },
@@ -257,7 +261,7 @@ describe("runtime projection surface", () => {
   });
 
   test("runtime node reads are passive across unwired idle ready and error states", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const ready = runtime.client.node<Record<string, never>, { readonly value: string }>(
       ProjectionReadyNode,
       {}
@@ -315,7 +319,7 @@ describe("runtime projection surface", () => {
         ),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const pending = runtime.client.node<Record<string, never>, { readonly value: string }>(
       PendingNode,
       {}
@@ -400,7 +404,7 @@ describe("runtime projection surface", () => {
 
   test("expired product read is passive and invalidation is explicit readiness work", async () => {
     manualExpirationAcquireCount = 0;
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node<Record<string, never>, { readonly value: string }>(
       ProjectionManualExpirationNode,
       {}

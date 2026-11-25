@@ -7,8 +7,8 @@ afterEach(async () => {
     await runtime.submit({ _tag: "RuntimeStop", reason: "compatibility teardown" });
   }
 });
-function createRuntime(options: Frond.Runtime.RuntimeOptions = {}) {
-  const runtime = Frond.createRuntime(options);
+function createRuntime(options: Partial<Frond.Runtime.RuntimeOptions> = {}) {
+  const runtime = Frond.createRuntime({ development: true, eventBufferSize: 512, ...options });
   runtimes.push(runtime);
   return runtime;
 }
@@ -29,7 +29,11 @@ test("static results remain current when the public synchronous clock advances",
       acquire: Frond.Driver.Acquire(() => "permanent"),
     });
   }
-  const runtime = createRuntime({ syncClock: { now: () => now } });
+  const runtime = createRuntime({
+    development: true,
+    eventBufferSize: 512,
+    syncClock: { now: () => now },
+  });
   const handle = runtime.client.node(StaticNode, Frond.Args.none);
   await handle.ensureReady();
   now += 1_000_000_000;
@@ -55,7 +59,11 @@ test("time-bound reads progress from current through stale to expired without sc
       }),
     });
   }
-  const runtime = createRuntime({ syncClock: { now: () => now } });
+  const runtime = createRuntime({
+    development: true,
+    eventBufferSize: 512,
+    syncClock: { now: () => now },
+  });
   const handle = runtime.client.node(CachedNode, Frond.Args.none);
   await handle.ensureReady();
   expect(handle.read()).toMatchObject({
@@ -88,7 +96,7 @@ test("an already expired acquire result resolves as AcquireFailed with ResultExp
       acquire: Frond.Driver.Acquire(() => Frond.resultCommit("old cache", { loadedAt: 0 })),
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const handle = runtime.client.node(ExpiredNode, Frond.Args.none);
   expect(await handle.ensureReady()).toMatchObject({
     _tag: "Error",
@@ -149,7 +157,7 @@ test("manual invalidation hides the old result and ensureReady reacquires while 
       },
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const handle = runtime.client.node(InvalidatedNode, Frond.Args.none);
   await handle.ensureReady();
   const previousNode = handle.readReady();
@@ -207,7 +215,11 @@ test("time-bound expiration reacquires a fresh result through ensureReady withou
     });
   }
   setSystemTime(origin);
-  const runtime = createRuntime({ syncClock: { now: () => Date.now() } });
+  const runtime = createRuntime({
+    development: true,
+    eventBufferSize: 512,
+    syncClock: { now: () => Date.now() },
+  });
   try {
     const handle = runtime.client.node(ExpiringNode, Frond.Args.none);
     await handle.ensureReady();

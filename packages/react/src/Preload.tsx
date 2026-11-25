@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { CheckedReactNodeInputMap, ReactNodeInputMap } from "./types";
-import { useNodes } from "./useNodes";
+import { useNodeMap } from "./useNodes";
 
 export interface PreloadProps<TLayers extends ReadonlyArray<ReactNodeInputMap>> {
   readonly nodes: TLayers & {
@@ -54,7 +54,7 @@ interface PreloadLayerProps {
 }
 
 function PreloadLayer({ entry, children }: PreloadLayerProps): ReactNode {
-  useNodes(entry as never);
+  useNodeMap(entry as never, false);
 
   return children;
 }

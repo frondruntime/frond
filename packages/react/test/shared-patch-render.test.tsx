@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import "global-jsdom/register";
+import "./setup";
 import {
   type ActionContract,
   createRuntime,
@@ -14,11 +14,8 @@ import {
 } from "@frondruntime/core";
 import { FrondProvider, useNode, useNodes } from "@frondruntime/react";
 import { act, cleanup, render } from "@testing-library/react";
+import { observer } from "mobx-react-lite";
 import { createElement } from "react";
-
-(
-  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
-).IS_REACT_ACT_ENVIRONMENT = true;
 
 const runtimes: Array<ReturnType<typeof createRuntime>> = [];
 afterEach(async () => {
@@ -107,17 +104,17 @@ for (const mode of ["useNode", "useNodes"] as const) {
   const useReader = mode === "useNode" ? useSingle : useComposite;
   describe(`${mode} and a shared-reference patch`, () => {
     test("a committed in-place patch re-renders; a no-write settle does not", async () => {
-      const runtime = createRuntime();
+      const runtime = createRuntime({ development: true, eventBufferSize: 512 });
       runtimes.push(runtime);
       await runtime.submit({ _tag: "RuntimeStart" });
       const handle = runtime.client.node(CounterNode, {});
       await handle.ensureReady();
       let renders = 0;
-      function Reader() {
+      const Reader = observer(function Reader() {
         const node = useReader();
         renders += 1;
         return createElement("output", undefined, `count=${node.result.count}`);
-      }
+      });
       const view = render(
         <FrondProvider runtime={runtime}>
           <Reader />
@@ -146,15 +143,15 @@ for (const mode of ["useNode", "useNodes"] as const) {
     } as const;
     for (const commit of ["setResult", "resultCommit", "swapBack", "refresh"] as const) {
       test(`an in-place patch kept through ${keptThrough[commit]} re-renders`, async () => {
-        const runtime = createRuntime();
+        const runtime = createRuntime({ development: true, eventBufferSize: 512 });
         runtimes.push(runtime);
         await runtime.submit({ _tag: "RuntimeStart" });
         const handle = runtime.client.node(CounterNode, {});
         await handle.ensureReady();
-        function Reader() {
+        const Reader = observer(function Reader() {
           const node = useReader();
           return createElement("output", undefined, `count=${node.result.count}`);
-        }
+        });
         const view = render(
           <FrondProvider runtime={runtime}>
             <Reader />

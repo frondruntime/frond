@@ -15,14 +15,20 @@ export interface TestRuntimeOptions
     Frond.Runtime.RuntimeOptions,
     | "runtimeId"
     | "driverTimeouts"
-    | "eventBufferSize"
     | "sinks"
     | "specOverrides"
     | "channels"
     | "signalSubscribers"
     | "signalPolicies"
     | "syncClock"
-  > {}
+  > {
+  /** Defaults to 512: tests run in development and read retained events. */
+  readonly eventBufferSize?: number | undefined;
+  /** Defaults to true: tests run with development checks and result freezing. */
+  readonly development?: boolean | undefined;
+}
+
+const testEventBufferSize = 512;
 
 export interface TestRuntime {
   readonly runtime: Frond.Runtime.Runtime;
@@ -44,6 +50,8 @@ export function createTestRuntime(options: TestRuntimeOptions = {}): TestRuntime
   } satisfies CapturingRuntimeSink;
   const runtime = createRuntime({
     ...options,
+    eventBufferSize: options.eventBufferSize ?? testEventBufferSize,
+    development: options.development ?? true,
     sinks: [sink, ...providedSinks],
   });
 

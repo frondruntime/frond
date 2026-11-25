@@ -33,7 +33,7 @@ test("a readiness call after a queued release waits for a fresh acquire", async 
       }),
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const handle = runtime.client.node(Resource, {});
   try {
     const first = handle.ensureReady();
@@ -76,7 +76,7 @@ test("a readiness call with nothing queued joins the in-flight acquire", async (
       }),
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const handle = runtime.client.node(Resource, {});
   try {
     const first = handle.ensureReady();

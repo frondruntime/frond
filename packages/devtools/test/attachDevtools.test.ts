@@ -13,7 +13,7 @@ import { HUB_DEFAULT_ATTACH_URL } from "../src/protocol.ts";
 const DEAD_URL = "ws://127.0.0.1:1/attach";
 
 async function runtime() {
-  const created = createRuntime();
+  const created = createRuntime({ development: true, eventBufferSize: 512 });
 
   await created.submit({ _tag: "RuntimeStart" });
 

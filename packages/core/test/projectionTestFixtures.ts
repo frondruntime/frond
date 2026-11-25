@@ -6,11 +6,11 @@ import {
 } from "../src/runtime";
 import { effectBridgeRunner, effectHostFromRuntime } from "../src/testing";
 
-export function makeInspectionSnapshotForbiddenRuntime(options: RuntimeOptions = {}): {
+export function makeInspectionSnapshotForbiddenRuntime(options: Partial<RuntimeOptions> = {}): {
   readonly runtime: Runtime;
   readonly snapshotCalls: () => number;
 } {
-  const source = createRuntime(options);
+  const source = createRuntime({ development: true, eventBufferSize: 512, ...options });
   let snapshotCalls = 0;
   const forbiddenSnapshot = () => {
     snapshotCalls += 1;

@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { Fiber } from "effect";
-import { developmentChecks } from "../src/graph/planning/developmentChecks";
 import {
   CycleDetected,
   Deferred,
@@ -116,18 +115,6 @@ const sortedEdges = (snapshot: {
   readonly edges: ReadonlyArray<{ readonly from: string; readonly to: string }>;
 }) => snapshot.edges.map((edge) => `${edge.from}->${edge.to}`).sort();
 
-async function withReplanCheck(enabled: boolean, run: () => Promise<void>): Promise<void> {
-  const previous = developmentChecks.replanDependencies;
-  developmentChecks.replanDependencies = enabled;
-  try {
-    await run();
-  } finally {
-    developmentChecks.replanDependencies = previous;
-  }
-}
-
-const withProductionChecks = (run: () => Promise<void>) => withReplanCheck(false, run);
-
 const checkModes = [
   { name: "development", enabled: true },
   { name: "production", enabled: false },
@@ -135,8 +122,11 @@ const checkModes = [
 
 type GraphSystem = ReturnType<typeof makeInMemoryGraphSystem>;
 
-async function withGraph(run: (graph: GraphSystem) => Promise<void>): Promise<void> {
-  const graph = makeInMemoryGraphSystem();
+async function withGraph(
+  run: (graph: GraphSystem) => Promise<void>,
+  development = true
+): Promise<void> {
+  const graph = makeInMemoryGraphSystem({ development });
   try {
     await run(graph);
   } finally {
@@ -329,7 +319,10 @@ describe("same-identity re-plan", () => {
   // 0.6 intended change: eviction cleans up dependents first, so the interrupted eviction removed the root, not the leaf.
   test("re-planning a root an interrupted eviction removed re-wires it over the dependencies left in place", async () => {
     const { parentReleaseStarted, rootRequest } = makeHangingChain();
-    const graph = makeInMemoryGraphSystem({ driverTimeouts: { release: 60_000 } });
+    const graph = makeInMemoryGraphSystem({
+      development: false,
+      driverTimeouts: { release: 60_000 },
+    });
     await Effect.runPromise(graph.ensureReadyNode(rootRequest));
     const { wired } = await tearLeafOut(graph, parentReleaseStarted);
 
@@ -337,9 +330,7 @@ describe("same-identity re-plan", () => {
     expect(torn.nodes).toHaveLength(2);
     expect(torn.edges).toHaveLength(1);
 
-    await withProductionChecks(async () => {
-      await Effect.runPromise(graph.ensureNode(rootRequest));
-    });
+    await Effect.runPromise(graph.ensureNode(rootRequest));
     const healed = await Effect.runPromise(graph.snapshot());
 
     expect(sortedNodeIds(healed)).toEqual(sortedNodeIds(wired));
@@ -352,7 +343,10 @@ describe("same-identity re-plan", () => {
   for (const mode of checkModes) {
     test(`re-planning a root whose dependency a dependents eviction removed re-creates it (${mode.name} checks)`, async () => {
       const { rootRequest } = makeHangingChain();
-      const graph = makeInMemoryGraphSystem({ driverTimeouts: { release: 10 } });
+      const graph = makeInMemoryGraphSystem({
+        development: mode.enabled,
+        driverTimeouts: { release: 10 },
+      });
       const root = await Effect.runPromise(graph.ensureNode(rootRequest));
       const wired = await Effect.runPromise(graph.snapshot());
       const leaf = wired.nodes.find((node) => node.tag === "services/fast-path-leaf");
@@ -365,9 +359,7 @@ describe("same-identity re-plan", () => {
       expect(sortedNodeIds(torn)).toEqual([root.nodeId, leaf.nodeId].sort());
       expect(torn.edges).toEqual([]);
 
-      await withReplanCheck(mode.enabled, async () => {
-        await Effect.runPromise(graph.ensureNode(rootRequest));
-      });
+      await Effect.runPromise(graph.ensureNode(rootRequest));
       const healed = await Effect.runPromise(graph.snapshot());
 
       expect(sortedNodeIds(healed)).toEqual(sortedNodeIds(wired));
@@ -425,18 +417,19 @@ describe("same-identity re-plan", () => {
     parentDependencyCalls = 0;
     leafDependencyCalls = 0;
     await Effect.runPromise(graph.ensureNode(request));
-    expect(developmentChecks.replanDependencies).toBe(true);
+
     expect(parentDependencyCalls).toBe(1);
     expect(leafDependencyCalls).toBe(0);
 
-    await withProductionChecks(async () => {
+    await withGraph(async (graph) => {
+      await Effect.runPromise(graph.ensureNode(request));
       parentDependencyCalls = 0;
       leafDependencyCalls = 0;
       await Effect.runPromise(graph.ensureReadyNode(request));
       await Effect.runPromise(graph.ensureNode(request));
       expect(parentDependencyCalls).toBe(0);
       expect(leafDependencyCalls).toBe(0);
-    });
+    }, false);
   });
 
   // 0.6 intended change: production builds trust a pure dependencies(args) and skip the mismatch check.
@@ -481,8 +474,7 @@ describe("same-identity re-plan", () => {
       GraphInvariantViolation
     );
 
-    await withProductionChecks(async () => {
-      const graph = makeInMemoryGraphSystem();
+    await withGraph(async (graph) => {
       const first = await Effect.runPromise(
         graph.ensureNode({ spec: SwitchingNode, args: { id: "a", target: "leaf" } })
       );
@@ -497,89 +489,79 @@ describe("same-identity re-plan", () => {
       expect(second.status._tag).not.toBe("Invalid");
       expect(sortedNodeIds(after)).toEqual(sortedNodeIds(wired));
       expect(sortedEdges(after)).toEqual(sortedEdges(wired));
-    });
+    }, false);
   });
 });
 
 describe("re-plan after a planning failure", () => {
   for (const mode of checkModes) {
     test(`a released self-cycle stays Invalid on re-plan (${mode.name})`, async () => {
-      await withReplanCheck(mode.enabled, () =>
-        withGraph(async (graph) => {
-          const request = { spec: SelfCycleNode, args: {} };
-          const first = await Effect.runPromise(graph.ensureNode(request));
-          expect(first._tag).toBe("Invalid");
-          await Effect.runPromise(graph.releaseNode(first.nodeId));
+      await withGraph(async (graph) => {
+        const request = { spec: SelfCycleNode, args: {} };
+        const first = await Effect.runPromise(graph.ensureNode(request));
+        expect(first._tag).toBe("Invalid");
+        await Effect.runPromise(graph.releaseNode(first.nodeId));
 
-          const second = await Effect.runPromise(graph.ensureNode(request));
-          expect(second._tag).toBe("Invalid");
-          expect(invalidError(second)).toBeInstanceOf(CycleDetected);
-        })
-      );
+        const second = await Effect.runPromise(graph.ensureNode(request));
+        expect(second._tag).toBe("Invalid");
+        expect(invalidError(second)).toBeInstanceOf(CycleDetected);
+      }, mode.enabled);
     });
 
     test(`a released two-node cycle stays Invalid on re-plan (${mode.name})`, async () => {
-      await withReplanCheck(mode.enabled, () =>
-        withGraph(async (graph) => {
-          const request = { spec: CycleFirstNode, args: {} };
-          const first = await Effect.runPromise(graph.ensureNode(request));
-          expect(first._tag).toBe("Invalid");
-          const second = graph.resolveNodeIdSync({ spec: CycleSecondNode, args: {} });
-          await Effect.runPromise(graph.releaseNode(first.nodeId));
-          await Effect.runPromise(graph.releaseNode(second));
+      await withGraph(async (graph) => {
+        const request = { spec: CycleFirstNode, args: {} };
+        const first = await Effect.runPromise(graph.ensureNode(request));
+        expect(first._tag).toBe("Invalid");
+        const second = graph.resolveNodeIdSync({ spec: CycleSecondNode, args: {} });
+        await Effect.runPromise(graph.releaseNode(first.nodeId));
+        await Effect.runPromise(graph.releaseNode(second));
 
-          const replanned = await Effect.runPromise(graph.ensureNode(request));
-          expect(replanned._tag).toBe("Invalid");
-          expect(invalidError(replanned)).toBeInstanceOf(CycleDetected);
-          const ready = await Effect.runPromise(graph.ensureReadyNode(request));
-          expect(ready._tag).toBe("Invalid");
-        })
-      );
+        const replanned = await Effect.runPromise(graph.ensureNode(request));
+        expect(replanned._tag).toBe("Invalid");
+        expect(invalidError(replanned)).toBeInstanceOf(CycleDetected);
+        const ready = await Effect.runPromise(graph.ensureReadyNode(request));
+        expect(ready._tag).toBe("Invalid");
+      }, mode.enabled);
     });
 
     test(`re-planning an ancestor re-checks a released cyclic dependency (${mode.name})`, async () => {
-      await withReplanCheck(mode.enabled, () =>
-        withGraph(async (graph) => {
-          const request = { spec: CycleRootNode, args: {} };
-          await Effect.runPromise(graph.ensureNode(request));
-          const child = graph.resolveNodeIdSync({ spec: SelfCycleNode, args: {} });
-          await Effect.runPromise(graph.releaseNode(child));
+      await withGraph(async (graph) => {
+        const request = { spec: CycleRootNode, args: {} };
+        await Effect.runPromise(graph.ensureNode(request));
+        const child = graph.resolveNodeIdSync({ spec: SelfCycleNode, args: {} });
+        await Effect.runPromise(graph.releaseNode(child));
 
-          await Effect.runPromise(graph.ensureNode(request));
-          const snapshot = await Effect.runPromise(graph.snapshot());
-          expect(snapshot.nodes.find((node) => node.nodeId === child)?.status._tag).toBe("Invalid");
-        })
-      );
+        await Effect.runPromise(graph.ensureNode(request));
+        const snapshot = await Effect.runPromise(graph.snapshot());
+        expect(snapshot.nodes.find((node) => node.nodeId === child)?.status._tag).toBe("Invalid");
+      }, mode.enabled);
     });
 
     test(`a parent over a released dependency whose dependencies() throws stays failed (${mode.name})`, async () => {
-      await withReplanCheck(mode.enabled, () =>
-        withGraph(async (graph) => {
-          throwingDependencyAcquires = 0;
-          const request = { spec: OverThrowingNode, args: {} };
-          expect((await Effect.runPromise(graph.ensureReadyNode(request)))._tag).toBe("Error");
-          const child = graph.resolveNodeIdSync({ spec: ThrowingDependenciesNode, args: {} });
-          await Effect.runPromise(graph.releaseNode(child));
+      await withGraph(async (graph) => {
+        throwingDependencyAcquires = 0;
+        const request = { spec: OverThrowingNode, args: {} };
+        expect((await Effect.runPromise(graph.ensureReadyNode(request)))._tag).toBe("Error");
+        const child = graph.resolveNodeIdSync({ spec: ThrowingDependenciesNode, args: {} });
+        await Effect.runPromise(graph.releaseNode(child));
 
-          expect((await Effect.runPromise(graph.ensureReadyNode(request)))._tag).toBe("Error");
-          expect(throwingDependencyAcquires).toBe(0);
-        })
-      );
+        expect((await Effect.runPromise(graph.ensureReadyNode(request)))._tag).toBe("Error");
+        expect(throwingDependencyAcquires).toBe(0);
+      }, mode.enabled);
     });
 
     for (const unrelatedEviction of [false, true]) {
       test(`a parent over a released dependency with an invalid key stays failed (${mode.name}, unrelated eviction: ${unrelatedEviction})`, async () => {
-        await withReplanCheck(mode.enabled, () =>
-          withGraph(async (graph) => {
-            const request = { spec: OverNonFiniteKeyNode, args: {} };
-            await Effect.runPromise(graph.ensureNode(request));
-            const child = graph.resolveNodeIdSync({ spec: NonFiniteKeyNode, args: {} });
-            await Effect.runPromise(graph.releaseNode(child));
-            if (unrelatedEviction) await evictUnrelatedNode(graph);
+        await withGraph(async (graph) => {
+          const request = { spec: OverNonFiniteKeyNode, args: {} };
+          await Effect.runPromise(graph.ensureNode(request));
+          const child = graph.resolveNodeIdSync({ spec: NonFiniteKeyNode, args: {} });
+          await Effect.runPromise(graph.releaseNode(child));
+          if (unrelatedEviction) await evictUnrelatedNode(graph);
 
-            expect((await Effect.runPromise(graph.ensureReadyNode(request)))._tag).toBe("Error");
-          })
-        );
+          expect((await Effect.runPromise(graph.ensureReadyNode(request)))._tag).toBe("Error");
+        }, mode.enabled);
       });
     }
   }
@@ -600,24 +582,21 @@ describe("re-plan after a planning failure", () => {
       });
     }
 
-    await withProductionChecks(() =>
-      withGraph(async (graph) => {
-        const request = { spec: InvalidNeighborParentNode, args: {} };
-        await Effect.runPromise(graph.ensureNode(request));
-        for (let call = 0; call < 3; call += 1) {
-          await Effect.runPromise(graph.ensureNode({ spec: NonFiniteKeyNode, args: {} }));
-          await Effect.runPromise(graph.ensureNode({ spec: OverNonFiniteKeyNode, args: {} }));
-        }
+    await withGraph(async (graph) => {
+      const request = { spec: InvalidNeighborParentNode, args: {} };
+      await Effect.runPromise(graph.ensureNode(request));
+      for (let call = 0; call < 3; call += 1) {
+        await Effect.runPromise(graph.ensureNode({ spec: NonFiniteKeyNode, args: {} }));
+        await Effect.runPromise(graph.ensureNode({ spec: OverNonFiniteKeyNode, args: {} }));
+      }
 
-        parentDependencyCalls = 0;
-        await Effect.runPromise(graph.ensureNode(request));
-        expect(parentDependencyCalls).toBe(0);
-      })
-    );
+      parentDependencyCalls = 0;
+      await Effect.runPromise(graph.ensureNode(request));
+      expect(parentDependencyCalls).toBe(0);
+    }, false);
   });
 
   test("a development re-plan rejects dependency args that are not canonical", async () => {
-    expect(developmentChecks.replanDependencies).toBe(true);
     await withGraph(async (graph) => {
       await Effect.runPromise(
         graph.ensureNode({ spec: NonCanonicalParentNode, args: { nonCanonical: false } })
@@ -673,22 +652,20 @@ describe("re-plan after a planning failure", () => {
       });
     }
 
-    await withProductionChecks(() =>
-      withGraph(async (graph) => {
-        await Effect.runPromise(
-          graph.ensureNode({ spec: EvictionSwitchingNode, args: { id: "a", target: "leaf" } })
-        );
-        const changed = { spec: EvictionSwitchingNode, args: { id: "a", target: "other" } };
+    await withGraph(async (graph) => {
+      await Effect.runPromise(
+        graph.ensureNode({ spec: EvictionSwitchingNode, args: { id: "a", target: "leaf" } })
+      );
+      const changed = { spec: EvictionSwitchingNode, args: { id: "a", target: "other" } };
 
-        const kept = await Effect.runPromise(graph.ensureNode(changed));
-        expect(kept._tag).toBe("Idle");
+      const kept = await Effect.runPromise(graph.ensureNode(changed));
+      expect(kept._tag).toBe("Idle");
 
-        await evictUnrelatedNode(graph);
-        const replanned = await Effect.runPromise(graph.ensureNode(changed));
-        expect(replanned._tag).toBe("Invalid");
-        expect(invalidError(replanned)).toBeInstanceOf(GraphInvariantViolation);
-      })
-    );
+      await evictUnrelatedNode(graph);
+      const replanned = await Effect.runPromise(graph.ensureNode(changed));
+      expect(replanned._tag).toBe("Invalid");
+      expect(invalidError(replanned)).toBeInstanceOf(GraphInvariantViolation);
+    }, false);
   });
 
   // 0.6 intended change: production does not call a wired node's resolver again, so a resolver that now throws goes unnoticed.
@@ -709,15 +686,13 @@ describe("re-plan after a planning failure", () => {
     }
     const request = { spec: ToggleThrowingNode, args: {} };
 
-    await withProductionChecks(() =>
-      withGraph(async (graph) => {
-        throwOnResolve = false;
-        await Effect.runPromise(graph.ensureNode(request));
-        throwOnResolve = true;
-        expect((await Effect.runPromise(graph.ensureNode(request)))._tag).toBe("Idle");
-        expect((await Effect.runPromise(graph.ensureReadyNode(request)))._tag).toBe("Ready");
-      })
-    );
+    await withGraph(async (graph) => {
+      throwOnResolve = false;
+      await Effect.runPromise(graph.ensureNode(request));
+      throwOnResolve = true;
+      expect((await Effect.runPromise(graph.ensureNode(request)))._tag).toBe("Idle");
+      expect((await Effect.runPromise(graph.ensureReadyNode(request)))._tag).toBe("Ready");
+    }, false);
 
     await withGraph(async (graph) => {
       throwOnResolve = false;

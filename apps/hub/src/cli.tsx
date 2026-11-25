@@ -15,7 +15,7 @@ const runHub = Effect.fnUntraced(function* (config: {
   readonly host: string;
   readonly port: number;
 }) {
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
 
   yield* Effect.addFinalizer(() =>
     Effect.ignore(Effect.promise(() => runtime.submit({ _tag: "RuntimeStop", reason: "hub exit" })))

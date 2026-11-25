@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { isObservableObject } from "mobx";
+import { isObservableObject, runInAction } from "mobx";
 import type {
   AsyncAcquireDriverContext,
   AsyncDisposeContext,
@@ -17,6 +17,8 @@ import type {
   NormalizedLiveStopContext,
   ResultPatchOptions,
 } from "../../driver/types";
+import { containsCommittedPlainData } from "../../node/resultData";
+import { stageResultDraft } from "../../node/resultDraft";
 import type { RuntimeSignalAccess } from "../../signals";
 import type { GraphNodeCell } from "../cell/cellModel";
 import {
@@ -27,6 +29,7 @@ import {
   validateResultValidity,
 } from "../resultValidity";
 import { DriverPromiseFailed, GraphInvariantViolation, type ResultCommit } from "../types";
+import { isPlainObject } from "./patchResultClone";
 
 export function makeDriverContext<TDeps extends object>(input: {
   readonly cell: GraphNodeCell;
@@ -83,22 +86,39 @@ export function makeAcquireDriverContext<TDeps extends object>(input: {
   readonly cloneResultOnPatch?: boolean | undefined;
   readonly resultPatch?: ResultPatchOptions | undefined;
 }): NormalizedAcquireDriverContext<unknown, TDeps, unknown> {
-  let resultClonedForPatch = false;
   const setResult = (
     next: unknown | ResultCommit<unknown> | ((current: unknown) => unknown | ResultCommit<unknown>)
   ): void => {
     const current = input.getCurrentResultState();
-    const nextValue = typeof next === "function" ? next(current.result) : next;
+    const drafted =
+      typeof next === "function" &&
+      (input.cloneResultOnPatch === true || containsCommittedPlainData(current.result))
+        ? stageResultDraft(
+            current.result,
+            (value) => next(value),
+            true,
+            input.resultPatch,
+            input.cell
+          )
+        : undefined;
+    const nextValue =
+      drafted === undefined
+        ? typeof next === "function"
+          ? next(current.result)
+          : next
+        : drafted.value;
     // Contract: result commits are stamped with the clock at commit time, not
     // at operation start. A slow driver must not commit a backdated loadedAt.
     const now = input.now();
-    input.setCurrentResultState(
-      commitResultState(nextValue, current, input.cell.resultValidityPolicy, now, {
-        context: input.cell,
-        defaultLoadedAt: now,
-        defaultValidity: input.setResultDefaultValidity ?? "current",
-      })
-    );
+    const staged = commitResultState(nextValue, current, input.cell.resultValidityPolicy, now, {
+      context: input.cell,
+      defaultLoadedAt: now,
+      defaultValidity: input.setResultDefaultValidity ?? "current",
+    });
+    input.setCurrentResultState({
+      ...staged,
+      resultPatched: drafted === undefined ? staged.resultPatched : true,
+    });
   };
   const setResultValidity = (validity: unknown): void => {
     const current = input.getCurrentResultState();
@@ -107,6 +127,7 @@ export function makeAcquireDriverContext<TDeps extends object>(input: {
       resultLoadedAt: current.resultLoadedAt,
       resultValidity: validateResultValidity(validity, input.cell),
       resultValidityCommit: "explicit",
+      resultWritten: current.resultWritten,
       resultPatched: current.resultPatched,
     });
   };
@@ -122,30 +143,25 @@ export function makeAcquireDriverContext<TDeps extends object>(input: {
       });
     }
 
-    if (input.cloneResultOnPatch === true && !resultClonedForPatch) {
+    if (input.cloneResultOnPatch === true || containsCommittedPlainData(current)) {
       const staged = input.getCurrentResultState();
+      const drafted = stageResultDraft(current, recipe, false, input.resultPatch, input.cell);
       input.setCurrentResultState({
-        resultLoadedAt: staged.resultLoadedAt,
-        resultValidity: staged.resultValidity,
-        resultValidityCommit: staged.resultValidityCommit,
-        result: clonePatchableResult(current, input.resultPatch, input.cell),
+        ...staged,
+        result: drafted.value,
+        resultWritten: true,
         resultPatched: true,
       });
-      resultClonedForPatch = true;
-    } else {
-      assertPatchableResult(current, input.resultPatch, input.cell);
-      const staged = input.getCurrentResultState();
-      if (staged.resultPatched !== true)
-        input.setCurrentResultState({
-          result: staged.result,
-          resultLoadedAt: staged.resultLoadedAt,
-          resultValidity: staged.resultValidity,
-          resultValidityCommit: staged.resultValidityCommit,
-          resultPatched: true,
-        });
+      return;
     }
+    assertPatchableResult(current, input.resultPatch, input.cell);
+    const state = input.getCurrentResultState();
+    input.setCurrentResultState({ ...state, resultWritten: true, resultPatched: true });
 
-    recipe(input.getCurrentResultState().result);
+    // A shared observable result is mutated in place; an action keeps MobX
+    // strict mode quiet and batches the writes into one reaction.
+    const staged = input.getCurrentResultState().result;
+    runInAction(() => recipe(staged));
   };
 
   const effectContext: DriverAcquireContext<unknown, TDeps, unknown> = {
@@ -204,161 +220,6 @@ export function makeAcquireDriverContext<TDeps extends object>(input: {
   };
 
   return { effect: effectContext, async: asyncContext };
-}
-
-function clonePatchableResult(
-  value: unknown,
-  options: ResultPatchOptions | undefined,
-  context: GraphNodeCell
-): unknown {
-  if (Array.isArray(value)) {
-    return value.map((entry) => clonePatchableResult(entry, options, context));
-  }
-
-  // MobX observable objects masquerade as plain objects (the dynamic proxy
-  // reports Object.prototype) while every own property forwards into the
-  // shared `$mobx` administration: a descriptor-copied "clone" is either a
-  // write-through alias (a failed operation leaks its staged writes into
-  // committed state) or a lying pseudo-observable carrying a foreign `$mobx`
-  // slot. They take the documented non-plain contract instead — authors pick
-  // staging semantics through `resultPatch.nonPlainClone`, and without it the
-  // patch fails loudly. Checked before the plain-object path on purpose.
-  if (typeof value === "object" && value !== null && isObservableObject(value)) {
-    return cloneNonPlainResult(value, options, context);
-  }
-
-  if (isPlainObject(value)) {
-    const fastClone = clonePlainDataObject(value, options, context);
-
-    if (fastClone !== undefined) {
-      return fastClone;
-    }
-
-    // Copy EVERY own property — string and symbol keys, enumerable or not —
-    // and keep the original prototype (plain objects may be null-prototype).
-    // Enumerable string-keyed properties are patchable data and are staged by
-    // VALUE snapshot: data values are cloned recursively and accessors are
-    // evaluated into writable data slots, matching the historical
-    // staging-isolation semantics — a staged write must never travel through
-    // an original setter into committed state. Everything else (symbol-keyed
-    // slots such as the result envelope's internal, non-enumerable
-    // properties) is carried by reference with its original descriptor: those
-    // are identity-bearing internals, not patchable data, and cloning them
-    // would break or reject non-plain values like sockets and
-    // AbortControllers.
-    const descriptors = Object.getOwnPropertyDescriptors(value) as Record<
-      PropertyKey,
-      PropertyDescriptor
-    >;
-
-    for (const key of Reflect.ownKeys(descriptors)) {
-      const descriptor = descriptors[key];
-
-      if (descriptor === undefined || typeof key !== "string" || descriptor.enumerable !== true) {
-        continue;
-      }
-
-      if ("value" in descriptor) {
-        descriptor.value = clonePatchableResult(descriptor.value, options, context);
-        continue;
-      }
-
-      descriptors[key] = {
-        value: clonePatchableResult(descriptor.get?.call(value), options, context),
-        writable: true,
-        enumerable: true,
-        configurable: true,
-      };
-    }
-
-    return Object.create(Object.getPrototypeOf(value), descriptors);
-  }
-
-  if (typeof value === "object" && value !== null) {
-    return cloneNonPlainResult(value, options, context);
-  }
-
-  return value;
-}
-
-// Fast path for the common shape — an extensible `Object.prototype` object
-// whose own properties are all writable, configurable, enumerable string-keyed
-// data properties (JSON-decoded payloads). Equivalent to the descriptor copy
-// for that shape: every slot holds the recursive clone.
-// Avoids `getOwnPropertyDescriptors` + `Object.create(proto, descriptors)`,
-// which dominate patch cost on Hermes. Returns `undefined` for any other shape.
-function clonePlainDataObject(
-  value: Record<string, unknown>,
-  options: ResultPatchOptions | undefined,
-  context: GraphNodeCell
-): Record<string, unknown> | undefined {
-  // An own `__proto__` key (JSON.parse makes one) would hit the prototype
-  // setter on `clone[key] = …`; the descriptor path below defines it instead.
-  if (
-    Object.getPrototypeOf(value) !== Object.prototype ||
-    !Object.isExtensible(value) ||
-    Object.prototype.hasOwnProperty.call(value, "__proto__")
-  ) {
-    return undefined;
-  }
-
-  const keys = Object.keys(value);
-
-  if (
-    Object.getOwnPropertyNames(value).length !== keys.length ||
-    Object.getOwnPropertySymbols(value).length !== 0
-  ) {
-    return undefined;
-  }
-
-  for (const key of keys) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-
-    if (descriptor?.writable !== true || descriptor.configurable !== true) {
-      return undefined;
-    }
-  }
-
-  const clone: Record<string, unknown> = {};
-
-  for (const key of keys) {
-    clone[key] = clonePatchableResult(value[key], options, context);
-  }
-
-  return clone;
-}
-
-function cloneNonPlainResult(
-  value: object,
-  options: ResultPatchOptions | undefined,
-  context: GraphNodeCell
-): unknown {
-  const nonPlainClone = options?.nonPlainClone;
-
-  if (nonPlainClone === "share") {
-    return value;
-  }
-
-  if (typeof nonPlainClone === "function") {
-    return nonPlainClone(value);
-  }
-
-  throw new GraphInvariantViolation({
-    nodeId: context.nodeId,
-    tag: context.tag,
-    invariant: "driver patchResult requires resultPatch.nonPlainClone for non-plain result values",
-    cause: { constructorName: value.constructor?.name },
-  });
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-
-  const prototype = Object.getPrototypeOf(value);
-
-  return prototype === Object.prototype || prototype === null;
 }
 
 function assertPatchableResult(

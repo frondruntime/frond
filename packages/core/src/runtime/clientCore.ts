@@ -14,15 +14,12 @@ export interface RuntimeClientCore {
    * `onSubmitted` sees the submission before `project`; on a host with a core
    * it sees it even after the caller aborted, since the commit still happened.
    */
-  readonly submitPromise: {
-    (command: RuntimeCommand): Promise<RuntimeSubmission>;
-    <A>(
-      command: RuntimeCommand,
-      project: (submission: RuntimeSubmission) => A,
-      recover?: (cause: unknown) => A,
-      onSubmitted?: (submission: RuntimeSubmission) => void
-    ): Promise<A>;
-  };
+  readonly submitPromise: <A>(
+    command: RuntimeCommand,
+    project: (submission: RuntimeSubmission) => A,
+    recover?: (cause: unknown) => A,
+    onSubmitted?: (submission: RuntimeSubmission) => void
+  ) => Promise<A>;
   readonly observeSync: RuntimeCore["observeSync"];
   readonly readNodeSnapshot: (nodeId: NodeId) => Promise<RuntimeNodeSnapshotLookup<unknown>>;
   /**
@@ -60,7 +57,7 @@ export function coreOf(
     return {
       submitPromise: <A>(
         command: RuntimeCommand,
-        project?: (submission: RuntimeSubmission) => A,
+        project: (submission: RuntimeSubmission) => A,
         recover?: (cause: unknown) => A,
         onSubmitted?: (submission: RuntimeSubmission) => void
       ) =>
@@ -102,20 +99,17 @@ export function coreOf(
   return {
     submitPromise: <A>(
       command: RuntimeCommand,
-      project?: (submission: RuntimeSubmission) => A,
+      project: (submission: RuntimeSubmission) => A,
       recover?: (cause: unknown) => A,
       onSubmitted?: (submission: RuntimeSubmission) => void
     ) => {
       const submitted = host.submit(command);
-      const projected =
-        project === undefined
-          ? (submitted as Effect.Effect<A, unknown>)
-          : submitted.pipe(
-              Effect.map((submission) => {
-                onSubmitted?.(submission);
-                return project(submission);
-              })
-            );
+      const projected = submitted.pipe(
+        Effect.map((submission) => {
+          onSubmitted?.(submission);
+          return project(submission);
+        })
+      );
       const signal = command.metadata?.signal;
       const running = runner.run(
         signal === undefined ? projected : interruptOnSignal(projected, signal)

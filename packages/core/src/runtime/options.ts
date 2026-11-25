@@ -9,7 +9,7 @@ import type {
   RuntimeSignalSubscriber,
 } from "../signals";
 import { FrondRuntimeInvariantViolation } from "./errors";
-import { nonNegativeIntegerWithDefault } from "./limits";
+import { nonNegativeInteger, nonNegativeIntegerWithDefault } from "./limits";
 import { makeRuntimeId } from "./observability";
 import type { RuntimeId, RuntimeOptions, RuntimeSink, RuntimeSyncClock } from "./types";
 
@@ -28,6 +28,7 @@ export interface RuntimeSignalPolicyRegistry {
 }
 
 export interface NormalizedRuntimeConfig {
+  readonly development: boolean;
   readonly runtimeId: RuntimeId;
   readonly syncClock: RuntimeSyncClock;
   readonly inputIngestionEnabled: boolean;
@@ -44,14 +45,30 @@ export interface NormalizedRuntimeConfig {
   readonly graphConfig: NormalizedGraphSystemConfigBase;
 }
 
-const defaultEventBufferSize = 512;
 const defaultSignalBufferSize = 128;
 
-export function normalizeRuntimeOptions(options: RuntimeOptions = {}): NormalizedRuntimeConfig {
+export function normalizeRuntimeOptions(options: RuntimeOptions): NormalizedRuntimeConfig {
+  // Untyped callers receive the same invariant error for missing options
+  // and invalid containers, before any property is read.
+  if (typeof options !== "object" || options === null) {
+    throw new FrondRuntimeInvariantViolation({
+      message: "Frond runtime options are required: pass eventBufferSize and development.",
+      cause: { options },
+    });
+  }
+
+  if (typeof options.development !== "boolean") {
+    throw new FrondRuntimeInvariantViolation({
+      message: "Frond runtime development must be a boolean.",
+      cause: { development: options.development },
+    });
+  }
+
   const runtimeId = options.runtimeId ?? makeRuntimeId();
   const syncClock = normalizeRuntimeSyncClock(options.syncClock);
 
   return {
+    development: options.development,
     runtimeId,
     syncClock,
     inputIngestionEnabled: options.inputIngestionEnabled ?? true,
@@ -81,6 +98,7 @@ function runtimeOwnedGraphOptions(
 ): GraphSystemOptions {
   return {
     runtimeId,
+    development: options.development,
     specOverrides: options.specOverrides,
     driverTimeouts: options.driverTimeouts,
   };
@@ -112,13 +130,8 @@ function normalizeRuntimeSyncClock(clock: RuntimeSyncClock | undefined): Runtime
   };
 }
 
-function eventBufferSizeLimit(limit: number | undefined): number {
-  return nonNegativeIntegerWithDefault({
-    value: limit,
-    defaultValue: defaultEventBufferSize,
-    label: "Runtime event buffer size",
-    cause: { limit },
-  });
+function eventBufferSizeLimit(limit: number): number {
+  return nonNegativeInteger({ value: limit, label: "Runtime event buffer size", cause: { limit } });
 }
 
 function normalizeRuntimeSignalPolicies(input: {

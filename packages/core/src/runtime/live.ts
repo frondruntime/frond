@@ -2,7 +2,7 @@ import { Effect, Layer } from "effect";
 import { makeRuntimeHost } from "./host";
 import { FrondRuntime, type RuntimeOptions } from "./types";
 
-export const FrondRuntimeLive = (options: RuntimeOptions = {}): Layer.Layer<FrondRuntime> =>
+export const FrondRuntimeLive = (options: RuntimeOptions): Layer.Layer<FrondRuntime> =>
   Layer.effect(FrondRuntime)(
     Effect.gen(function* () {
       const host = yield* makeRuntimeHost(options);
@@ -16,6 +16,6 @@ export const FrondRuntimeLive = (options: RuntimeOptions = {}): Layer.Layer<Fron
     })
   );
 
-export const FrondRuntimeEffect = (options: RuntimeOptions = {}) => {
+export const FrondRuntimeEffect = (options: RuntimeOptions) => {
   return makeRuntimeHost(options).pipe(Effect.map((host) => FrondRuntime.of(host)));
 };

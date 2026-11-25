@@ -35,7 +35,7 @@ const defaultBridgeRunner: RuntimeEffectBridgeRunner = {
  *
  * Host construction runs once; commands call its queue-backed core directly.
  */
-export function createRuntime(options: RuntimeOptions = {}): Runtime {
+export function createRuntime(options: RuntimeOptions): Runtime {
   return bridgeRuntimeHost(defaultBridgeRunner.runSync(makeRuntimeHost(options)));
 }
 
@@ -56,6 +56,7 @@ export function bridgeRuntimeHost(
       cause: host,
     });
   const runtimeHost = {
+    development: host.development,
     resolveNodeIdSync: host.resolveNodeIdSync,
     getStatusSync: host.getStatusSync,
     readNodeSnapshotSync: host.readNodeSnapshotSync,
@@ -80,13 +81,6 @@ export function bridgeRuntimeHost(
     recordUnsafeScheduleFailure: (command: RuntimeCommand, cause: unknown) =>
       corePromise<void, never>((resume) =>
         core.recordUnsafeScheduleFailure(command, cause, undefined, resume)
-      ),
-    recordMobXProjectionFailure: (
-      nodeId: Parameters<RuntimeHostService["recordMobXProjectionFailure"]>[0],
-      cause: unknown
-    ) =>
-      corePromise<void, never>((resume) =>
-        core.recordMobXProjectionFailure(nodeId, cause, undefined, resume)
       ),
     subscribeSignals: async (subscriber: RuntimeSignalSubscriber) =>
       core.subscribeSignalsSync(subscriber),

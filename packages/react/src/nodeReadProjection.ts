@@ -1,6 +1,7 @@
 import type { FrondNode, ResolvedDeps } from "@frondruntime/core";
 import * as Frond from "@frondruntime/core";
 import { attachErrorRecovery, type FrondReactErrorRecovery } from "./errorRecovery";
+import { type SuspendPromise, type SuspenseRead, suspendPromise } from "./suspendPromise";
 import type { ReactNodeState } from "./types";
 
 export function projectReactNodeRead<
@@ -20,20 +21,26 @@ export function projectReactNodeRead<
   readonly ensureReady: () => Promise<void>;
   readonly scheduleBoot: () => void;
   readonly scheduleReadinessAttempt: (attempt: Promise<unknown>) => void;
-  readonly currentReadinessPromise: () => Promise<void> | undefined;
+  readonly currentReadinessPromise: () => SuspendPromise | undefined;
   readonly markReadinessPresentedByPendingRead: () => void;
-}): ReactNodeState<TArgs, TDeps, TResult, TNode> {
+}): SuspenseRead<ReactNodeState<TArgs, TDeps, TResult, TNode>> {
   const read = input.handleRead;
   switch (read._tag) {
     case "Ready": {
       const ready = read;
-      return readyReactNodeState<TArgs, TDeps, TResult, TNode>(input.handle, ready);
+      return {
+        _tag: "Ready",
+        value: readyReactNodeState<TArgs, TDeps, TResult, TNode>(input.handle, ready),
+      };
     }
     case "Pending": {
       const pending = read;
       input.scheduleReadinessAttempt(pending.attempt);
       input.markReadinessPresentedByPendingRead();
-      throw input.currentReadinessPromise() ?? pending.attempt;
+      return {
+        _tag: "Pending",
+        promise: input.currentReadinessPromise() ?? suspendPromise(pending.attempt),
+      };
     }
     case "Error": {
       const errorRead = read;
@@ -61,7 +68,7 @@ export function projectReactNodeRead<
     }
     case "Unwired":
     case "Idle":
-      throw readinessPromise(input);
+      return { _tag: "Pending", promise: readinessPromise(input) };
     default: {
       const unreachable: never = read;
       return unreachable;
@@ -103,11 +110,11 @@ function readyReactNodeState<TArgs, TDeps extends object, TResult, TNode extends
 function readinessPromise(input: {
   readonly handle: Pick<Frond.Runtime.RuntimeNodeHandle<unknown, unknown>, "nodeId">;
   readonly scheduleBoot: () => void;
-  readonly currentReadinessPromise: () => Promise<void> | undefined;
-}): Promise<void> {
+  readonly currentReadinessPromise: () => SuspendPromise | undefined;
+}): SuspendPromise {
   const currentAttempt = input.currentReadinessPromise();
 
-  if (currentAttempt !== undefined) {
+  if (currentAttempt?.status === "pending") {
     return currentAttempt;
   }
 

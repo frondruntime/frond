@@ -22,7 +22,19 @@ definedSignal satisfies Frond.Signals.RuntimeSignal;
 channel satisfies Frond.Signals.RuntimeSignalChannel;
 definedChannel satisfies Frond.Signals.RuntimeSignalChannelDefinition;
 definedChannel.channel satisfies Frond.Signals.RuntimeSignalChannel;
-({ channels: [definedChannel] }) satisfies Frond.Runtime.RuntimeOptions;
+({
+  development: true,
+  eventBufferSize: 0,
+  channels: [definedChannel],
+}) satisfies Frond.Runtime.RuntimeOptions;
+
+// The event buffer has no default: each app picks a size for its own build.
+// @ts-expect-error eventBufferSize is required.
+({ development: true, channels: [definedChannel] }) satisfies Frond.Runtime.RuntimeOptions;
+// @ts-expect-error createRuntime requires development as well as eventBufferSize.
+Frond.createRuntime({ eventBufferSize: 0 });
+// @ts-expect-error createRuntime takes options, including eventBufferSize and development.
+Frond.createRuntime();
 
 type RuntimeHandle = Frond.Runtime.RuntimeNodeHandle<Frond.Args.None, { readonly ok: true }>;
 type RuntimeRead = Frond.Runtime.RuntimeNodeRead<{ readonly ok: true }>;
@@ -35,7 +47,6 @@ type RuntimeClassification = Frond.Events.RuntimeEventClassification;
 type GraphNodeId = Frond.Graph.NodeId;
 type GraphFailure = Frond.Graph.GraphFailure;
 type GraphSnapshot = Frond.Graph.NodeSnapshot;
-type MobXNode = Frond.MobX.MobXNode<Frond.Args.None, object, { readonly ok: true }, object>;
 const nodeSpecError = new Frond.FrondNodeSpecError("typed");
 
 export type PublicSurfaceTypes = [
@@ -49,7 +60,6 @@ export type PublicSurfaceTypes = [
   GraphNodeId,
   GraphFailure,
   GraphSnapshot,
-  MobXNode,
 ];
 
 nodeSpecError satisfies TypeError;
@@ -202,6 +212,9 @@ export type NoRootRuntimeSignalRecord = Expect<
 export type NoRootTestingNamespace = Expect<
   Equal<"Testing" extends keyof typeof Frond ? true : false, false>
 >;
+export type NoMobXNamespace = Expect<
+  Equal<"MobX" extends keyof typeof Frond ? true : false, false>
+>;
 export type NoRootKeysAlias = Expect<
   Equal<"Keys" extends keyof typeof Frond ? true : false, false>
 >;
@@ -277,9 +290,6 @@ export type RootRuntimeNodeHandle = Frond.RuntimeNodeHandle<Frond.Args.None, { r
 
 // @ts-expect-error RuntimeSignalRecord is namespace-owned under Frond.Signals.
 export type RootRuntimeSignalRecord = Frond.RuntimeSignalRecord;
-
-// @ts-expect-error MobXNode is namespace-owned under Frond.MobX.
-export type RootMobXNode = Frond.MobXNode<Frond.Args.None, object, { readonly ok: true }, object>;
 
 // @ts-expect-error Keys alias was removed; use Frond.Key.
 Frond.Keys.singleton;

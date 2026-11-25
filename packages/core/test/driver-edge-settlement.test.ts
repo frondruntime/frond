@@ -52,7 +52,7 @@ describe("a driver thenable that settles more than once", () => {
         }),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(Resource, {});
     try {
       await handle.ensureReadyNode();
@@ -87,7 +87,7 @@ describe("a driver thenable that settles more than once", () => {
         },
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(Resource, {});
     try {
       expect(await handle.actions.act()).toMatchObject({ _tag: "Success", value: "first" });

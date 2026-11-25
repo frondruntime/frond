@@ -13,6 +13,7 @@ import {
 export type GraphRuntimeSpanAttributes = Readonly<Record<string, string>>;
 
 export interface NormalizedGraphSystemConfigBase {
+  readonly development: boolean;
   readonly syncClock: { readonly now: () => number };
   readonly runtimeSpanAttributes: GraphRuntimeSpanAttributes;
   readonly specOverrides: ReadonlyMap<unknown, unknown>;
@@ -48,6 +49,7 @@ export function normalizeGraphSystemConfigBase(
   options: GraphSystemOptions
 ): NormalizedGraphSystemConfigBase {
   return {
+    development: options.development,
     syncClock: options.syncClock ?? defaultSyncClock,
     runtimeSpanAttributes: { "frond.runtime.id": options.runtimeId },
     specOverrides: makeSpecOverrideMap(options.specOverrides ?? emptySpecOverrides),

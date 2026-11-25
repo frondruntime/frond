@@ -1,12 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { observe } from "mobx";
+import { reaction } from "mobx";
 import {
   type ActionContract,
   createRuntime,
   Driver,
   dependencies,
   Key,
-  MobX,
   NodeBase,
   type NodeSpec,
   serviceSpec,
@@ -50,15 +49,14 @@ describe("direct driver edges", () => {
         },
       });
     }
-    const runtime = createRuntime();
-    const node = MobX.createNode(runtime, Resource, {});
-    expect(await node.runAction("touch")).toMatchObject({
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
+    const handle = runtime.client.node(Resource, {});
+    expect(await handle.actions.touch()).toMatchObject({
       _tag: "Failure",
       error: { _tag: "ActionFailed", cause: { _tag: "DriverPromiseFailed", cause } },
     });
     fail = false;
-    expect(await node.runAction("touch")).toMatchObject({ _tag: "Success" });
-    node.dispose();
+    expect(await handle.actions.touch()).toMatchObject({ _tag: "Success" });
     await runtime.submit({ _tag: "RuntimeStop" });
   });
 
@@ -78,27 +76,28 @@ describe("direct driver edges", () => {
         actions: { touch: Driver.Action((ctx) => ctx.patchResult(() => undefined)) },
       });
     }
-    const runtime = createRuntime();
-    const node = MobX.createNode(runtime, Resource, {});
-    await node.ensureReady();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
+    const handle = runtime.client.node(Resource, {});
+    const node = await handle.ensureReadyNode();
     const original = node.result;
     const changes: unknown[] = [];
-    const dispose = observe(node, "result", (change) => changes.push(change.newValue));
-    await node.refresh();
+    const dispose = reaction(
+      () => node.result,
+      (result) => changes.push(result)
+    );
+    await handle.refresh();
     expect(node.result).toBe(original);
-    expect(node.node.result).toBe(original);
     expect(changes).toHaveLength(0);
     value = 2;
-    await node.refresh();
+    await handle.refresh();
     expect(node.result).not.toBe(original);
-    expect(node.result?.list[0]?.value).toBe(2);
+    expect(node.result.list[0]?.value).toBe(2);
     expect(changes).toHaveLength(1);
     const refreshed = node.result;
-    await node.runAction("touch");
-    expect(node.result).not.toBe(refreshed);
-    expect(changes).toHaveLength(2);
+    await handle.actions.touch();
+    expect(node.result).toBe(refreshed);
+    expect(changes).toHaveLength(1);
     dispose();
-    node.dispose();
     await runtime.submit({ _tag: "RuntimeStop" });
   });
 
@@ -114,14 +113,23 @@ describe("direct driver edges", () => {
         actions: { touch: Driver.Action(() => undefined) },
       });
     }
-    const runtime = createRuntime({ syncClock: { now: () => now } });
+    const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
+      syncClock: { now: () => now },
+    });
     const handle = runtime.client.node(Resource, {});
+    const committed = () => {
+      const read = handle.read();
+      return read._tag === "Ready" ? read.result : undefined;
+    };
     const first = await handle.ensureReadyNode();
-    const result = first.result;
+    const result = committed();
     now = 200;
     const second = await handle.ensureReadyNode();
     expect(second).not.toBe(first);
-    expect(second.result).toBe(result);
+    expect(committed()).toBe(result);
+    expect(second.result).toEqual(result);
     await handle.actions.touch();
     const events = await runtime.query({ _tag: "RuntimeEvents" });
     expect(events.events.every((record) => record.recordedAt === record.event.at)).toBe(true);
@@ -148,12 +156,12 @@ describe("direct driver edges", () => {
         refresh: Driver.Refresh((ctx) => ctx.setResult({ date: new Date(0) })),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(Resource, {});
     const node = await handle.ensureReadyNode();
-    const result = node.result;
+    const date = node.result.date;
     await handle.refresh();
-    expect(node.result).not.toBe(result);
+    expect(node.result.date).not.toBe(date);
     await runtime.submit({ _tag: "RuntimeStop" });
   });
 
@@ -173,18 +181,21 @@ describe("direct driver edges", () => {
         },
       });
     }
-    const runtime = createRuntime();
-    const node = MobX.createNode(runtime, Resource, {});
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
+    const handle = runtime.client.node(Resource, {});
+    const node = await handle.ensureReadyNode();
     const order: string[] = [];
-    const dispose = observe(node, "result", () => order.push("mobx"));
-    const action = node.runAction("touch");
+    const dispose = reaction(
+      () => node.result,
+      () => order.push("mobx")
+    );
+    const action = handle.actions.touch();
     expect(calls).toBe(0);
     await action;
     order.push("caller");
-    expect(node.result?.list[0]?.value).toBe(1);
+    expect(node.result.list[0]?.value).toBe(1);
     expect(order).toEqual(["mobx", "caller"]);
     dispose();
-    node.dispose();
     await runtime.submit({ _tag: "RuntimeStop" });
   });
 });

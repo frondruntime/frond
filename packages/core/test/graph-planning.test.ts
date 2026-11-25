@@ -1001,6 +1001,8 @@ describe("graph planning", () => {
     }
 
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       specOverrides: [{ from: OriginalNode, to: OverrideNode }],
     });
     const handle = runtime.client.node<Record<string, never>, string>(OriginalNode, {});
@@ -1046,6 +1048,8 @@ describe("graph planning", () => {
 
     const host = await Effect.runPromise(
       FrondRuntimeEffect({
+        development: true,
+        eventBufferSize: 512,
         specOverrides: [{ from: OriginalNode, to: OverrideNode }],
       })
     );

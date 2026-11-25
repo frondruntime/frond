@@ -15,6 +15,7 @@ import { Deferred, Effect } from "effect";
 import { makeReactNodeControls } from "../src/nodeControls";
 import { projectReactNodeRead } from "../src/nodeReadProjection";
 import { makeReactNodeStore } from "../src/nodeStore";
+import { type SuspendPromise, type SuspenseRead, suspendPromise } from "../src/suspendPromise";
 import { makeReactNodesStore } from "../src/useNodes";
 import { makeInspectionSnapshotForbiddenRuntime } from "./projectionTestFixtures";
 
@@ -83,7 +84,7 @@ class ReactArgsSelectiveNode extends NodeBase<ReactArgsRollbackSpec> {
 
 describe("React node store", () => {
   test("subscribes to runtime events only through the external store subscription", () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     let observed = 0;
     let unsubscribed = 0;
     const countingObserve = (observer: Parameters<RuntimeInstance["observe"]>[0]) => {
@@ -125,8 +126,8 @@ describe("React node store", () => {
     store.dispose();
   });
 
-  test("throws one stable readiness attempt until the node becomes ready", async () => {
-    const runtime = createRuntime();
+  test("returns one stable readiness attempt until the node becomes ready", async () => {
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const args = {};
     const store = makeReactNodeStore(runtime, {
       spec: ReactProfileNode,
@@ -136,17 +137,18 @@ describe("React node store", () => {
 
     await runtime.submit({ _tag: "RuntimeStart" });
 
-    const firstAttempt = readThrownPromise(store.read);
-    const secondAttempt = readThrownPromise(store.read);
+    const firstAttempt = readPendingPromise(store.read);
+    const secondAttempt = readPendingPromise(store.read);
 
     expect(secondAttempt).toBe(firstAttempt);
 
     await firstAttempt;
 
-    const ready = store.read();
+    const ready = readReady(store.read);
 
     expect(ready.node).toBeInstanceOf(ReactProfileNode);
     expect(ready.node.timezone).toBe("UTC");
+    expect(firstAttempt.status).toBe("fulfilled");
 
     store.dispose();
   });
@@ -175,7 +177,7 @@ describe("React node store", () => {
         ),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const args = {};
     const store = makeReactNodeStore(runtime, {
       spec: SlowDisposeNode,
@@ -183,9 +185,25 @@ describe("React node store", () => {
       nodeId: runtime.resolveNodeIdSync({ spec: SlowDisposeNode, args }),
     });
 
+    const coldAttempt = readPendingPromise(store.read);
+    const duplicate = makeReactNodeStore(runtime, {
+      spec: SlowDisposeNode,
+      args,
+      nodeId: runtime.resolveNodeIdSync({ spec: SlowDisposeNode, args }),
+    });
+    expect(readPendingPromise(duplicate.read)).toBe(coldAttempt);
+
     await runtime.submit({ _tag: "RuntimeStart" });
-    const attempt = readThrownPromise(store.read);
+    const attempt = readPendingPromise(store.read);
+    expect(attempt).toBe(coldAttempt);
     await Effect.runPromise(Deferred.await(started));
+
+    const rebuilt = makeReactNodeStore(runtime, {
+      spec: SlowDisposeNode,
+      args,
+      nodeId: runtime.resolveNodeIdSync({ spec: SlowDisposeNode, args }),
+    });
+    expect(readPendingPromise(rebuilt.read)).toBe(attempt);
 
     store.dispose();
     const versionAfterDispose = store.getVersion();
@@ -194,6 +212,8 @@ describe("React node store", () => {
     await attempt;
 
     expect(store.getVersion()).toBe(versionAfterDispose);
+    duplicate.dispose();
+    rebuilt.dispose();
   });
 
   test("ready reads do not require full runtime snapshots", async () => {
@@ -207,9 +227,9 @@ describe("React node store", () => {
     });
 
     await runtime.submit({ _tag: "RuntimeStart" });
-    await readThrownPromise(store.read);
+    await readPendingPromise(store.read);
 
-    const ready = store.read();
+    const ready = readReady(store.read);
 
     expect(ready.node).toBeInstanceOf(ReactProfileNode);
     expect(ready.node.result).toEqual({ timezone: "UTC" });
@@ -218,8 +238,34 @@ describe("React node store", () => {
     store.dispose();
   });
 
+  test("an unseen settled attempt cannot hide a new boot after eviction", async () => {
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
+    await runtime.submit({ _tag: "RuntimeStart" });
+    const args = {};
+    const handle = runtime.client.node(ReactProfileNode, args);
+    const store = makeReactNodeStore(runtime, {
+      spec: ReactProfileNode,
+      args,
+      nodeId: handle.nodeId,
+    });
+    // Settle without presenting the store's readiness promise to React.
+    await handle.ensureReady();
+    await handle.evict("selfAndDependents", "new readiness attempt");
+
+    const next = readPendingPromise(store.read);
+    expect(next.status).toBe("pending");
+    await next;
+    // The first read found Idle, so the ready gate still presents this attempt.
+    // Its metadata lets React.use consume that gate without another suspend.
+    expect(readPendingPromise(store.read)).toBe(next);
+    expect(next.status).toBe("fulfilled");
+    expect(readReady(store.read).node).toBeInstanceOf(ReactProfileNode);
+    store.dispose();
+    await runtime.submit({ _tag: "RuntimeStop" });
+  });
+
   test("cold boot records React readiness metadata", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const args = {};
     const store = makeReactNodeStore(runtime, {
       spec: ReactProfileNode,
@@ -228,7 +274,7 @@ describe("React node store", () => {
     });
 
     await runtime.submit({ _tag: "RuntimeStart" });
-    await readThrownPromise(store.read);
+    await readPendingPromise(store.read);
     const events = (await runtime.query({ _tag: "RuntimeEvents" })).events;
     const ensured = events.find((record) => record.event._tag === "GraphNodeReadyEnsured");
 
@@ -240,52 +286,49 @@ describe("React node store", () => {
   });
 
   test("idle projection schedules readiness through boot instead of raw ensureReady", () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node<Record<string, never>, Profile>(ReactProfileNode, {});
-    const scheduled = Promise.resolve();
+    const scheduled = suspendPromise(Promise.resolve());
     let bootCalls = 0;
     let ensureReadyCalls = 0;
-    let current: Promise<void> | undefined;
-    let thrown: unknown;
+    let current: SuspendPromise | undefined;
+    const projected = projectReactNodeRead<
+      Record<string, never>,
+      Record<string, never>,
+      Profile,
+      ReactProfileNode
+    >({
+      handle,
+      handleRead: {
+        _tag: "Idle",
+        nodeId: handle.nodeId,
+        operation: { _tag: "Idle" },
+        busy: false,
+      },
+      ensureReady: () => {
+        ensureReadyCalls += 1;
+        return Promise.resolve();
+      },
+      scheduleBoot: () => {
+        bootCalls += 1;
+        current = scheduled;
+      },
+      scheduleReadinessAttempt: () => {
+        throw new Error("Idle projection should not receive an existing pending attempt.");
+      },
+      currentReadinessPromise: () => current,
+      markReadinessPresentedByPendingRead: () => {
+        throw new Error("Idle projection should not mark a pending read.");
+      },
+    });
 
-    try {
-      projectReactNodeRead<Record<string, never>, Record<string, never>, Profile, ReactProfileNode>(
-        {
-          handle,
-          handleRead: {
-            _tag: "Idle",
-            nodeId: handle.nodeId,
-            operation: { _tag: "Idle" },
-            busy: false,
-          },
-          ensureReady: () => {
-            ensureReadyCalls += 1;
-            return Promise.resolve();
-          },
-          scheduleBoot: () => {
-            bootCalls += 1;
-            current = scheduled;
-          },
-          scheduleReadinessAttempt: () => {
-            throw new Error("Idle projection should not receive an existing pending attempt.");
-          },
-          currentReadinessPromise: () => current,
-          markReadinessPresentedByPendingRead: () => {
-            throw new Error("Idle projection should not mark a pending read.");
-          },
-        }
-      );
-    } catch (cause) {
-      thrown = cause;
-    }
-
-    expect(thrown).toBe(scheduled);
+    expect(projected).toEqual({ _tag: "Pending", promise: scheduled });
     expect(bootCalls).toBe(1);
     expect(ensureReadyCalls).toBe(0);
   });
 
   test("failed args reconciliation rolls back React store fingerprint so the same args can retry", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const args = { filter: "all" };
     const store = makeReactNodeStore(runtime, {
       spec: ReactArgsRollbackNode,
@@ -294,7 +337,7 @@ describe("React node store", () => {
     });
 
     await runtime.submit({ _tag: "RuntimeStart" });
-    await readThrownPromise(store.read);
+    await readPendingPromise(store.read);
 
     await store.updateArgs({ filter: "active" });
     await store.updateArgs({ filter: "active" });
@@ -309,7 +352,7 @@ describe("React node store", () => {
   });
 
   test("failed older updateArgs does not clobber the fingerprint a newer success set", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const initial = { filter: "init" };
     const store = makeReactNodeStore(runtime, {
       spec: ReactArgsSelectiveNode,
@@ -318,7 +361,7 @@ describe("React node store", () => {
     });
 
     await runtime.submit({ _tag: "RuntimeStart" });
-    await readThrownPromise(store.read);
+    await readPendingPromise(store.read);
 
     // Dispatch both concurrently. The runtime serializes per-node operations so
     // "fail" resolves first (Failure) and "ok" resolves second (Success). Without
@@ -343,7 +386,7 @@ describe("React node store", () => {
   });
 
   test("rejected updateArgs rolls back the fingerprint and allows retry", async () => {
-    const baseRuntime = createRuntime();
+    const baseRuntime = createRuntime({ development: true, eventBufferSize: 512 });
     const runtime = rejectTransportArgsUpdate(baseRuntime, "transport-reject");
     const initial = { filter: "init" };
     const store = makeReactNodeStore(runtime, {
@@ -353,14 +396,14 @@ describe("React node store", () => {
     });
 
     await runtime.submit({ _tag: "RuntimeStart" });
-    await readThrownPromise(store.read);
+    await readPendingPromise(store.read);
 
     await store.updateArgs({ filter: "transport-reject" });
 
     await store.updateArgs({ filter: "transport-reject" });
     await store.updateArgs({ filter: "ok" });
 
-    const ready = store.read();
+    const ready = readReady(store.read);
     const events = (await runtime.query({ _tag: "RuntimeEvents" })).events;
 
     expect(ready.node.result).toEqual({ timezone: "ok" });
@@ -373,7 +416,7 @@ describe("React node store", () => {
   });
 
   test("a transport rejection cannot shadow a newer graph-projected args failure", async () => {
-    const baseRuntime = createRuntime();
+    const baseRuntime = createRuntime({ development: true, eventBufferSize: 512 });
     const runtime = rejectTransportArgsUpdate(baseRuntime, "transport-reject");
     const initial = { filter: "init" };
     const store = makeReactNodeStore(runtime, {
@@ -384,11 +427,11 @@ describe("React node store", () => {
     const handle = runtime.client.node(ReactArgsSelectiveNode, initial);
 
     await runtime.submit({ _tag: "RuntimeStart" });
-    await readThrownPromise(store.read);
+    await readPendingPromise(store.read);
 
     await store.updateArgs({ filter: "transport-reject" });
     const graphFailure = await handle.updateArgs({ filter: "fail" });
-    const read = store.read();
+    const read = readReady(store.read);
     const snapshot = await runtime.getSnapshot();
     const graphNode = snapshot.graph.nodes.find(
       (node) => node.tag === "react/resources/args-selective"
@@ -423,7 +466,7 @@ describe("React node store", () => {
         ),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const initial = { filter: "init" };
     const store = makeReactNodeStore(runtime, {
       spec: SlowFailingArgsNode,
@@ -433,7 +476,7 @@ describe("React node store", () => {
 
     await runtime.submit({ _tag: "RuntimeStart" });
     const unsubscribe = store.subscribe(() => {});
-    await readThrownPromise(store.read);
+    await readPendingPromise(store.read);
 
     const failed = store.updateArgs({ filter: "fail" });
     await Effect.runPromise(Deferred.await(failStarted));
@@ -482,20 +525,26 @@ function rejectTransportArgsUpdate(
   };
 }
 
-function readThrownPromise(read: () => unknown): Promise<unknown> {
-  try {
-    read();
-  } catch (thrown) {
-    if (thrown instanceof Promise) {
-      return thrown;
-    }
+function readPendingPromise<T>(read: () => SuspenseRead<T>): SuspendPromise {
+  const result = read();
+  expect(result._tag).toBe("Pending");
+  if (result._tag !== "Pending") {
+    throw new Error("Expected a pending Suspense read.");
   }
+  return result.promise;
+}
 
-  throw new Error("Expected read to throw a Suspense promise.");
+function readReady<T>(read: () => SuspenseRead<T>): T {
+  const result = read();
+  expect(result._tag).toBe("Ready");
+  if (result._tag !== "Ready") {
+    throw new Error("Expected a ready Suspense read.");
+  }
+  return result.value;
 }
 
 test("node controls route through the runtime handle without reading the node", async () => {
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const handle = runtime.client.node(ReactProfileNode, {});
   const controls = makeReactNodeControls(handle);
 
@@ -517,30 +566,31 @@ test("node controls route through the runtime handle without reading the node", 
 });
 
 test("nodes store returns a ready keyed node map", async () => {
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const args = {};
-  const store = makeReactNodesStore(runtime, [
+  const entries = [
     {
       key: "profile",
       spec: ReactProfileNode,
       args,
       nodeId: runtime.resolveNodeIdSync({ spec: ReactProfileNode, args }),
     },
-  ]);
+  ];
+  const store = makeReactNodesStore(runtime, entries);
 
   await runtime.submit({ _tag: "RuntimeStart" });
-  await readThrownPromise(store.read);
+  await readPendingPromise(store.read);
 
-  const nodes = store.read();
+  const nodes = readReady(store.read);
 
   expect(nodes.profile).toBeInstanceOf(ReactProfileNode);
   expect((nodes.profile as ReactProfileNode).timezone).toBe("UTC");
-  expect(store.read()).toBe(nodes);
+  expect(readReady(store.read)).toBe(nodes);
 
   store.dispose();
 });
 
-test("nodes store throws one stable composite attempt until children become ready", async () => {
+test("nodes store returns one stable composite attempt until children become ready", async () => {
   const startedA = await Effect.runPromise(Deferred.make<void>());
   const startedB = await Effect.runPromise(Deferred.make<void>());
   const gateA = await Effect.runPromise(Deferred.make<Profile>());
@@ -590,9 +640,9 @@ test("nodes store throws one stable composite attempt until children become read
     });
   }
 
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const args = {};
-  const store = makeReactNodesStore(runtime, [
+  const entries = [
     {
       key: "a",
       spec: SlowNodeA,
@@ -605,26 +655,32 @@ test("nodes store throws one stable composite attempt until children become read
       args,
       nodeId: runtime.resolveNodeIdSync({ spec: SlowNodeB, args }),
     },
-  ]);
+  ];
+  const store = makeReactNodesStore(runtime, entries);
 
   await runtime.submit({ _tag: "RuntimeStart" });
 
-  const firstAttempt = readThrownPromise(store.read);
-  const secondAttempt = readThrownPromise(store.read);
+  const firstAttempt = readPendingPromise(store.read);
+  const secondAttempt = readPendingPromise(store.read);
 
   expect(secondAttempt).toBe(firstAttempt);
 
   await Effect.runPromise(Deferred.await(startedA));
   await Effect.runPromise(Deferred.await(startedB));
 
+  const rebuilt = makeReactNodesStore(runtime, entries);
+  expect(readPendingPromise(rebuilt.read)).toBe(firstAttempt);
+
   await Effect.runPromise(Deferred.succeed(gateA, { timezone: "UTC" }));
   await Effect.runPromise(Deferred.succeed(gateB, { timezone: "CET" }));
   await firstAttempt;
 
-  const nodes = store.read();
+  const nodes = readReady(store.read);
 
   expect((nodes.a as SlowNodeA).result).toEqual({ timezone: "UTC" });
   expect((nodes.b as SlowNodeB).result).toEqual({ timezone: "CET" });
+  expect(firstAttempt.status).toBe("fulfilled");
 
+  rebuilt.dispose();
   store.dispose();
 });

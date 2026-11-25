@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import "global-jsdom/register";
+import "./setup";
 import {
   type ActionContract,
   createRuntime,
@@ -24,11 +24,8 @@ import {
   useNodes,
 } from "@frondruntime/react";
 import { act, cleanup, render } from "@testing-library/react";
+import { observer } from "mobx-react-lite";
 import { Component, createElement, type ReactNode, Suspense } from "react";
-
-(
-  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
-).IS_REACT_ACT_ENVIRONMENT = true;
 
 const runtimes: Array<ReturnType<typeof createRuntime>> = [];
 afterEach(async () => {
@@ -89,7 +86,7 @@ function counterFixture() {
 }
 
 async function startRuntime() {
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   runtimes.push(runtime);
   await runtime.submit({ _tag: "RuntimeStart" });
   return runtime;
@@ -131,11 +128,11 @@ for (const mode of ["useNode", "useNodes"] as const) {
       let resultRenders = 0;
       let statusRenders = 0;
       let busy = false;
-      function ResultReader() {
+      const ResultReader = observer(function ResultReader() {
         const current = useReader(CounterNode, {});
         resultRenders += 1;
         return createElement("output", undefined, String(current.result));
-      }
+      });
       function StatusReader() {
         busy = useNodeState(CounterNode, {}).busy;
         statusRenders += 1;
@@ -173,11 +170,11 @@ for (const mode of ["useNode", "useNodes"] as const) {
       const runtime = await startRuntime();
       const node = await runtime.client.node(CounterNode, {}).ensureReadyNode();
       let renders = 0;
-      function Reader() {
+      const Reader = observer(function Reader() {
         const current = useReader(CounterNode, {});
         renders += 1;
         return createElement("output", undefined, String(current.result));
-      }
+      });
       const view = render(
         <FrondProvider runtime={runtime}>
           <Reader />
@@ -196,7 +193,7 @@ for (const mode of ["useNode", "useNodes"] as const) {
       expect(renders).toBe(afterResult);
     });
 
-    test("renders changed dependency accessors without changing the parent result", async () => {
+    test("observes child results and replaced dependencies without changing the parent result", async () => {
       let childResult = 0;
       type ChildSpec = NodeSpec<{
         readonly mode: "async";
@@ -238,11 +235,11 @@ for (const mode of ["useNode", "useNodes"] as const) {
       const parent = await handle.ensureReadyNode();
       const previousDeps = parent.deps;
       let renders = 0;
-      function Reader() {
+      const Reader = observer(function Reader() {
         const current = useReader(ParentNode, {});
         renders += 1;
         return createElement("output", undefined, String(current.deps.child.result));
-      }
+      });
       const view = render(
         <FrondProvider runtime={runtime}>
           <Reader />
@@ -262,7 +259,10 @@ for (const mode of ["useNode", "useNodes"] as const) {
       // A child result mutation keeps the dependency entry reference-equal.
       expect(parent.deps).toBe(previousDeps);
       expect(parent.deps.child.result).toBe(1);
-      expect(renders).toBe(before);
+      // The observer tracks the child's result even though the dependency entry is unchanged.
+      expect(renders).toBe(before + 1);
+      expect(view.getByText("1")).toBeTruthy();
+      const afterChild = renders;
       await act(async () => {
         // Releasing just the child preserves the parent incarnation, then
         // reacquiring replaces the actual dependency entry on parent refresh.
@@ -274,7 +274,7 @@ for (const mode of ["useNode", "useNodes"] as const) {
       expect(parent.result).toBe("parent");
       expect(parent.deps).not.toBe(previousDeps);
       expect(view.getByText("1")).toBeTruthy();
-      expect(renders).toBeGreaterThan(before);
+      expect(renders).toBeGreaterThan(afterChild);
     });
 
     test("re-enters Suspense after eviction and delivers a readiness error", async () => {
@@ -286,11 +286,11 @@ for (const mode of ["useNode", "useNodes"] as const) {
         const handle = runtime.client.node(CounterNode, {});
         await handle.ensureReadyNode();
         let renders = 0;
-        function Reader() {
+        const Reader = observer(function Reader() {
           renders += 1;
           const node = useReader(CounterNode, {});
           return createElement("output", undefined, String(node.result));
-        }
+        });
         const view = render(
           <FrondProvider runtime={runtime}>
             <ReadErrorBoundary>

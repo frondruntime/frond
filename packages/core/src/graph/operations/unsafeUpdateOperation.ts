@@ -1,10 +1,13 @@
 import { type Context, Exit } from "effect";
+import { prepareCommittedResult } from "../../node/committedResult";
+import { stageResultDraft } from "../../node/resultDraft";
 import type { GraphNodeCell } from "../cell/cellModel";
 import { phaseReadyData, projectCellPhase } from "../cell/cellPhase";
 import { finishObserverWork } from "../driverExecution/effectRunner";
 import { updateReadyNodeRuntimeState } from "../planning/readyNodeRuntime";
 import { type GraphCancel, type GraphResume, noCancel } from "../queue/reply";
 import type { UnsafeUpdateNodeRequest, UnsafeUpdateNodeResult } from "../types";
+import { runCommitBatch } from "./operationCommit";
 import { makeUnsafeUpdateNodeFailure } from "./operationFailures";
 
 export function unsafeUpdateNodeInCell(
@@ -35,25 +38,74 @@ export function unsafeUpdateNodeInCell(
   const { node } = ready.ready;
   let result: UnsafeUpdateNodeResult;
   try {
-    request.recipe(node);
+    const previous = (node as { readonly result?: unknown }).result;
+    // The updater receives a draft of committed data while other node fields
+    // retain their unsafe write-through behavior.
+    const drafted = stageResultDraft(
+      previous,
+      (current) => {
+        // The recipe gets the authored instance itself, so its getters and
+        // methods keep their private fields; an own `result` shadows the
+        // committed one with the draft until the recipe returns.
+        Object.defineProperty(node, "result", { configurable: true, get: () => current });
+        try {
+          request.recipe(node);
+        } finally {
+          delete (node as { result?: unknown }).result;
+        }
+      },
+      false,
+      { nonPlainClone: "share" },
+      cell
+    );
     result = {
       _tag: "Success",
       nodeId: cell.nodeId,
-      value: (node as { readonly result?: unknown }).result,
+      value: prepareCommittedResult(drafted.value, previous, true, cell.development),
     };
   } catch (cause) {
     resume(Exit.succeed(makeUnsafeUpdateNodeFailure(cell, request, cause)));
     return noCancel;
   }
-  cell.state.updateSync(() => {
-    ready.ready.result = result.value;
-  });
-  updateReadyNodeRuntimeState({ node, result: result.value });
+  let observerFailure: ReturnType<typeof runCommitBatch>;
+  try {
+    observerFailure = runCommitBatch(cell, () => {
+      cell.state.updateSync(() => {
+        ready.ready.result = result.value;
+      });
+      updateReadyNodeRuntimeState({ node, result: result.value, resultPatched: true });
+    });
+  } catch (cause) {
+    resume(Exit.succeed(makeUnsafeUpdateNodeFailure(cell, request, cause)));
+    return noCancel;
+  }
+  if (observerFailure !== undefined) {
+    finishObserverWork(
+      cell.reportObserverFailure({
+        channel: "node-change",
+        value: [cell.nodeId],
+        cause: observerFailure.cause,
+      }),
+      context,
+      () => notifyUnsafeUpdate(cell, result, context, resume),
+      cell.jobs
+    );
+  } else {
+    notifyUnsafeUpdate(cell, result, context, resume);
+  }
+  return noCancel;
+}
+
+function notifyUnsafeUpdate(
+  cell: GraphNodeCell,
+  result: UnsafeUpdateNodeResult,
+  context: Context.Context<never> | undefined,
+  resume: GraphResume<UnsafeUpdateNodeResult>
+): void {
   finishObserverWork(
     cell.notifyChanged(cell.nodeId),
     context,
     () => resume(Exit.succeed(result)),
     cell.jobs
   );
-  return noCancel;
 }

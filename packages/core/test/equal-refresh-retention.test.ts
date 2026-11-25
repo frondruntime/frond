@@ -20,12 +20,14 @@ async function refreshed(initial: unknown, replacement: unknown): Promise<unknow
       refresh: Frond.Driver.Refresh((ctx) => ctx.setResult(replacement)),
     });
   }
-  const runtime = Frond.createRuntime();
+  const runtime = Frond.createRuntime({ development: true, eventBufferSize: 512 });
   try {
     const handle = runtime.client.node(Resource, {});
-    const node = await handle.ensureReadyNode();
+    await handle.ensureReadyNode();
     expect(await handle.refresh()).toMatchObject({ _tag: "Success" });
-    return node.result;
+    // The committed value; `node.result` is the runtime's live mirror of it.
+    const read = handle.read();
+    return read._tag === "Ready" ? read.result : undefined;
   } finally {
     await runtime.submit({ _tag: "RuntimeStop" });
   }
@@ -131,7 +133,7 @@ function nodeOf(results: () => unknown) {
 }
 
 async function refreshTwice(results: () => unknown) {
-  const runtime = Frond.createRuntime();
+  const runtime = Frond.createRuntime({ development: true, eventBufferSize: 512 });
   const handle = runtime.client.node(nodeOf(results), {});
   await handle.ensureReady();
   const before = handle.readReady().result;
@@ -208,7 +210,11 @@ test("a failed expiry re-acquire forgets the previous result", async () => {
       }),
     });
   }
-  const runtime = Frond.createRuntime({ syncClock: { now: () => now } });
+  const runtime = Frond.createRuntime({
+    development: true,
+    eventBufferSize: 512,
+    syncClock: { now: () => now },
+  });
   try {
     const handle = runtime.client.node(Resource, {});
     const first = (await handle.ensureReadyNode()).result;

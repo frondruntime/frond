@@ -26,7 +26,9 @@ The two sanctioned imperative places in a React tree are the composition root
 
 ## Consumption
 
-Default: Suspense-throwing reads plus MobX observation.
+Default: Suspense reads through React 19's `use(promise)` plus MobX observation.
+The adapter caches readiness promises across renders and uncommitted store
+rebuilds. Readiness failures still throw to the nearest ErrorBoundary.
 
 ```tsx
 import * as Frond from "@frondruntime/core";
@@ -39,9 +41,11 @@ export const Orders = observer(function Orders(): React.ReactNode {
 });
 ```
 
-- `useNode` re-renders on graph-level changes only. Any component reading
+- `useNode` re-renders on graph-level changes only. A result write reaches
+  a component only through MobX, so any component that reads `result` or
   getters over observable state **must** be wrapped in `observer` — this is
-  load-bearing, not optional.
+  load-bearing, not optional. Runtimes created with `development: true` throw
+  when `useNode` or `useNodes` renders outside an observer.
 - `useNodeState` when the UI needs `busy`, `operationFailure`, or
   `resultValidity`. Caller-visible operation failures surface as
   `operationFailure`; render-critical failures throw to the nearest
@@ -106,8 +110,16 @@ host object. See frond-graph-topology for the node side.
 ## Bootstrap (Composition Root)
 
 - Create the runtime **once, outside React render**, synchronously:
-  `Frond.createRuntime({ specOverrides, sinks, channels })`. Do not wrap it in
+  `Frond.createRuntime({ eventBufferSize, development, specOverrides, sinks, channels })`. Do not wrap it in
   a promise, a boot node, or a lease.
+- `eventBufferSize` is required: the recent events the runtime keeps for
+  `events()`, the `RuntimeEvents` query and devtools snapshots. Pass 0 in
+  production unless devtools are attached there, and 512 in development:
+  `eventBufferSize: import.meta.env.DEV ? 512 : 0`.
+- `development` is required: use `development: import.meta.env.DEV` (React
+  Native: `development: __DEV__`), and pass false in production. It controls
+  committed-result freezing, the dependency re-plan check, and the React
+  observer check.
 - HMR and tests replace runtime generations through
   `Frond.createRuntimeCoordinator()` — do not hand-roll generation tracking.
 - Spec overrides at the composition root are the production injection seam:

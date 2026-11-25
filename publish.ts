@@ -785,7 +785,7 @@ class ProfileNode extends Frond.NodeBase<ProfileSpec> {
 type AssertAnyModeSpec<TSpec extends Frond.AnyModeSpec> = TSpec;
 export type ProfileSpecIsAnyModeSpec = AssertAnyModeSpec<ProfileSpec>;
 
-const runtime = Frond.createRuntime();
+const runtime = Frond.createRuntime({ eventBufferSize: 512, development: true });
 const handle = runtime.client.node(ProfileNode, { id: "1" });
 
 // 0.2 handle surface: sync ready-or-throw projection plus the awaited variant.

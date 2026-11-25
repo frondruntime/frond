@@ -11,6 +11,22 @@ export function getReactArgsFingerprint(value: unknown): string {
  */
 export type ValidatedNodeIdResolver = (request: Frond.Graph.NodeRequest) => Frond.Graph.NodeId;
 
+/** Validated resolvers need canonical args first; wrappers keep their public validation order. */
+export function resolveReactNodeIdentity(
+  runtime: Pick<Frond.Runtime.Runtime, "resolveNodeIdSync">,
+  request: Frond.Graph.NodeRequest,
+  resolveValidated: ValidatedNodeIdResolver | undefined
+): { readonly nodeId: Frond.Graph.NodeId; readonly argsFingerprint: string } {
+  const { args } = request;
+  if (resolveValidated === undefined) {
+    const nodeId = runtime.resolveNodeIdSync(request);
+    return { nodeId, argsFingerprint: getReactArgsFingerprint(args) };
+  }
+
+  const argsFingerprint = getReactArgsFingerprint(args);
+  return { nodeId: resolveValidated(request), argsFingerprint };
+}
+
 // Core's `resolveValidatedNodeIdSlot` (`runtime/core.ts`): a runtime built by
 // `createRuntime` owns it, non-enumerable. It is not a package export.
 const resolveValidatedNodeIdSlot = Symbol.for("frond.runtime.resolveValidatedNodeIdSync");

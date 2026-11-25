@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import "global-jsdom/register";
+import "../setup";
 import {
   type ActionContract,
   Driver,
@@ -20,10 +20,6 @@ import {
 } from "@frondruntime/react";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { Suspense, useState } from "react";
-
-(
-  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
-).IS_REACT_ACT_ENVIRONMENT = true;
 
 const harnesses: Array<ReturnType<typeof createFrondTestHarness>> = [];
 const observers: MutationObserver[] = [];
@@ -112,12 +108,14 @@ test.each([
     );
   }
   const harness = await startHarness();
-  const view = render(
-    <FrondProvider runtime={harness.runtime}>
-      <Suspense fallback="booting">
-        <Content />
-      </Suspense>
-    </FrondProvider>
+  const view = await act(async () =>
+    render(
+      <FrondProvider runtime={harness.runtime}>
+        <Suspense fallback="booting">
+          <Content />
+        </Suspense>
+      </FrondProvider>
+    )
   );
   expect(await view.findByText("1:idle:Idle:Current")).toBeTruthy();
   const states = observeStates(view.container);
@@ -206,12 +204,14 @@ test.each([
     );
   }
   const harness = await startHarness();
-  const view = render(
-    <FrondProvider runtime={harness.runtime}>
-      <Suspense fallback="booting">
-        <Content />
-      </Suspense>
-    </FrondProvider>
+  const view = await act(async () =>
+    render(
+      <FrondProvider runtime={harness.runtime}>
+        <Suspense fallback="booting">
+          <Content />
+        </Suspense>
+      </FrondProvider>
+    )
   );
   expect(await view.findByText("saved:idle:none:none")).toBeTruthy();
   const states = observeStates(view.container);
@@ -332,10 +332,12 @@ test("singular controls ensure refresh release and evict without a Suspense read
     );
   }
   const harness = await startHarness();
-  const view = render(
-    <FrondProvider runtime={harness.runtime}>
-      <Content />
-    </FrondProvider>
+  const view = await act(async () =>
+    render(
+      <FrondProvider runtime={harness.runtime}>
+        <Content />
+      </FrondProvider>
+    )
   );
   expect(view.getByText("controls only")).toBeTruthy();
   expect(harness.node(ResourceNode, {}).read()._tag).toBe("Unwired");
@@ -433,10 +435,12 @@ test("plural controls keep keyed resources independent through every lifecycle m
     );
   }
   const harness = await startHarness();
-  const view = render(
-    <FrondProvider runtime={harness.runtime}>
-      <Content />
-    </FrondProvider>
+  const view = await act(async () =>
+    render(
+      <FrondProvider runtime={harness.runtime}>
+        <Content />
+      </FrondProvider>
+    )
   );
   const states = observeStates(view.container);
   for (const [button, expected] of [

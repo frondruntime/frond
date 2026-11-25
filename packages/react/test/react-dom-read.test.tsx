@@ -67,7 +67,7 @@ function makeSubscriptionCountingRuntime(): {
   readonly runtime: RuntimeInstance;
   readonly counts: { observed: number; unsubscribed: number };
 } {
-  const base = createRuntime();
+  const base = createRuntime({ development: true, eventBufferSize: 512 });
   const counts = { observed: 0, unsubscribed: 0 };
   const countingObserve = (observer: Parameters<RuntimeInstance["observe"]>[0]) => {
     counts.observed += 1;
@@ -113,7 +113,7 @@ describe("React DOM useNodeRead", () => {
       return createElement("output", undefined, readLabel(read));
     };
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
 
     // No Suspense boundary anywhere in the tree: a thrown Pending would crash
@@ -156,7 +156,7 @@ describe("React DOM useNodeRead", () => {
       return createElement("output", undefined, readLabel(read));
     };
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
 
     // No ErrorBoundary and no Suspense: a thrown readiness error would unmount
@@ -245,7 +245,7 @@ describe("React DOM useNodeRead", () => {
       );
     };
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
 
     const view = render(createElement(FrondProvider, { runtime }, createElement(Shell)));
@@ -325,7 +325,7 @@ describe("React DOM useNodeRead", () => {
       });
     }
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
     const handle = runtime.client.node<EmptyArgs, Profile>(ReadAttachWindowNode, {});
     await handle.ensureReady();

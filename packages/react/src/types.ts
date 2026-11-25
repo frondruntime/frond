@@ -100,4 +100,4 @@ export interface ReactNodeState<TArgs, TDeps extends object, TResult, TNode exte
 }
 
 export interface ReactNodeRuntime
-  extends Pick<Frond.Runtime.Runtime, "client" | "resolveNodeIdSync"> {}
+  extends Pick<Frond.Runtime.Runtime, "client" | "resolveNodeIdSync" | "development"> {}

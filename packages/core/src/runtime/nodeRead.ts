@@ -116,7 +116,7 @@ function publicRuntimeNodeRead<TResult, TNode extends object>(
     }
     case "Ready": {
       const ready = read;
-      if (ready.resultValidity._tag === "Expired") {
+      if (!isDisplayableReadyRead(ready)) {
         return {
           _tag: "Idle",
           nodeId: ready.nodeId,
@@ -127,10 +127,7 @@ function publicRuntimeNodeRead<TResult, TNode extends object>(
         } satisfies RuntimeNodeRead<TResult, TNode>;
       }
 
-      return {
-        ...ready,
-        resultValidity: ready.resultValidity,
-      } satisfies RuntimeNodeRead<TResult, TNode>;
+      return ready;
     }
     case "Expired": {
       const { nodeId, tag, operation, busy, operationFailure } = read;
@@ -180,6 +177,12 @@ function publicRuntimeNodeRead<TResult, TNode extends object>(
   }
 }
 
+function isDisplayableReadyRead<TResult, TNode extends object>(
+  read: Extract<RawRuntimeNodeRead<TResult, TNode>, { readonly _tag: "Ready" }>
+): read is Extract<RuntimeNodeRead<TResult, TNode>, { readonly _tag: "Ready" }> {
+  return read.resultValidity._tag !== "Expired";
+}
+
 function snapshotReadFields(snapshot: RuntimeNodeSnapshot<unknown>) {
   return {
     tag: snapshot.tag,
@@ -210,7 +213,10 @@ function readyRuntimeNodeRead<TResult, TNode extends object>(
     node: currentNode,
     result: nodeSnapshot.result,
     resultValidity: nodeSnapshot.resultValidity ?? { _tag: "Current" },
-    ...snapshotReadFields(nodeSnapshot),
+    tag: nodeSnapshot.tag,
+    operation: nodeSnapshot.operation,
+    busy: nodeSnapshot.operation._tag === "Running",
+    operationFailure: nodeSnapshot.operationFailure,
   } satisfies RawRuntimeNodeRead<TResult, TNode>;
 }
 

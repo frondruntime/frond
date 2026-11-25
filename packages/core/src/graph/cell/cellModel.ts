@@ -9,6 +9,7 @@ import type {
   GraphCleanupFailureObserver,
   GraphLiveFailureObserver,
   GraphNodeChangeObserver,
+  GraphObserverFailureObserver,
   GraphOperationStartObserver,
   GraphReadinessFailureObserver,
   GraphResultValidityObserver,
@@ -26,15 +27,18 @@ import type { GraphCellQueue } from "./cellQueue";
 import type { GraphCellState, GraphCellStateReader } from "./cellState";
 
 export interface GraphPlanState {
+  readonly development: boolean;
   readonly syncClock: { readonly now: () => number };
   readonly jobs: GraphJobQueue;
   readonly enqueue: (effect: Effect.Effect<void>) => void;
   readonly nodes: Map<NodeId, GraphNodeCell>;
   readonly edges: Map<string, EdgeSnapshot>;
-  // Last committed revision of each evicted cell, keyed by node id. A recreated
-  // cell seeds its revision past this so `readVersion` stays monotonic across
-  // evict + recreate for the same node identity instead of ABA-ing back to 0.
-  readonly evictedRevisionByNodeId: Map<NodeId, number>;
+  // The highest committed revision of any evicted cell. A cell created after
+  // an eviction seeds its revision past this, so `readVersion` stays
+  // monotonic across evict + recreate for the same node identity instead of
+  // ABA-ing back to 0. One number for the graph, not one entry per evicted
+  // node id, which would grow with every id evicted and never recreated.
+  evictedRevisionFloor: number;
   // Bumped whenever eviction deletes a cell and its edges, and whenever a cell
   // enters Invalid or a release takes one out of it. A cell wired at an older
   // generation may have lost a dependency (directly or further down) to an
@@ -56,6 +60,7 @@ export interface GraphPlanState {
   readonly notifyActionCompleted: GraphActionCompletionObserver;
   readonly notifyResultValidityChanged: GraphResultValidityObserver;
   readonly notifyReadinessFailed: GraphReadinessFailureObserver;
+  readonly reportObserverFailure: GraphObserverFailureObserver;
   readonly notifyLiveDemandChanged: (
     nodeId: NodeId,
     liveDemand: NodeLiveDemandSnapshot
@@ -75,6 +80,7 @@ export interface GraphPlanState {
 }
 
 export interface GraphNodeCellView {
+  readonly development: boolean;
   readonly syncClock: { readonly now: () => number };
   readonly nodeId: NodeId;
   readonly tag: string;
@@ -97,6 +103,7 @@ export interface GraphNodeCell extends GraphNodeCellView {
   readonly notifyActionCompleted: GraphActionCompletionObserver;
   readonly notifyResultValidityChanged: GraphResultValidityObserver;
   readonly notifyReadinessFailed: GraphReadinessFailureObserver;
+  readonly reportObserverFailure: GraphObserverFailureObserver;
   // The `GraphPlanState.wiringGeneration` at which this cell and its whole
   // dependency closure were last planned, recorded, and not Invalid; 0 until
   // the first such wiring.

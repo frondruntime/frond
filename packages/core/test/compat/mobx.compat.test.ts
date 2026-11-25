@@ -6,7 +6,7 @@ import {
   type FrondTestHarness,
 } from "@frondruntime/core/testing";
 import { Effect } from "effect";
-import { autorun, reaction } from "mobx";
+import { reaction } from "mobx";
 
 const harnesses: FrondTestHarness[] = [];
 const disposers: Array<() => void> = [];
@@ -104,13 +104,12 @@ function createScenario(mode: "async" | "effect") {
       },
     });
   }
-  // Both branches expose the same MobX projection contract; the authored action mode differs.
-  const projection =
+  // Both handles expose the same read contract; authored action modes differ.
+  const handle =
     mode === "async"
-      ? Frond.MobX.createNode(harness.runtime, AsyncProfileNode, { region: "east" })
-      : Frond.MobX.createNode(harness.runtime, EffectProfileNode, { region: "east" });
-  disposers.push(() => projection.dispose());
-  return { harness, projection, acquiring, acquireGate, acting, actionGate };
+      ? harness.node(AsyncProfileNode, { region: "east" })
+      : harness.node(EffectProfileNode, { region: "east" });
+  return { harness, handle, acquiring, acquireGate, acting, actionGate };
 }
 
 function distinct(states: ReadonlyArray<string>) {
@@ -118,7 +117,7 @@ function distinct(states: ReadonlyArray<string>) {
 }
 
 function boot(scenario: ReturnType<typeof createScenario>) {
-  const read = scenario.projection.handle.boot();
+  const read = scenario.handle.boot();
   if (read._tag !== "Pending") throw new Error("Expected a boot attempt");
   return read.attempt;
 }
@@ -128,71 +127,63 @@ function expectReadyFields(
   value: string,
   region = "east"
 ) {
-  const { projection } = scenario;
-  expect(projection.nodeId).toBe(projection.handle.nodeId);
-  expect(projection.args).toEqual({ region });
-  expect(projection.node.args).toEqual({ region });
-  expect(projection.node.deps.transport.result).toEqual({ region: "east" });
-  expect(projection.result).toEqual({ value });
-  expect(projection.node.result).toEqual({ value });
-  expect(projection.status).toEqual({ _tag: "Wired", run: { _tag: "Ready" } });
-  expect(projection.operation).toEqual({ _tag: "Idle" });
-  expect(projection.busy).toBe(false);
-  expect(projection.operationFailure).toBeUndefined();
-  expect(projection.failure).toBeUndefined();
-  expect(projection.resultValidity).toMatchObject({ _tag: "Current" });
-  expect(projection.snapshot).toMatchObject({
-    _tag: "Ready",
-    nodeId: projection.nodeId,
-    result: { value },
-    node: projection.node,
-    status: projection.status,
-    operation: projection.operation,
-    resultValidity: projection.resultValidity,
-  });
+  const { handle } = scenario;
+  const read = handle.read();
+  expect(read._tag).toBe("Ready");
+  if (read._tag !== "Ready") throw new Error("Expected a ready node");
+  expect(read.node.nodeId).toBe(handle.nodeId);
+  expect(handle.args).toEqual({ region });
+  expect(read.node.args).toEqual({ region });
+  expect(read.node.deps.transport.result).toEqual({ region: "east" });
+  expect(read.result).toEqual({ value });
+  expect(read.node.result).toBe(read.result);
+  expect(read.operation).toEqual({ _tag: "Idle" });
+  expect(read.busy).toBe(false);
+  expect(read.operationFailure).toBeUndefined();
+  expect(read.resultValidity).toMatchObject({ _tag: "Current" });
 }
 
-describe("0.5 MobX compatibility", () => {
+describe("class node and handle compatibility", () => {
   for (const mode of ["async", "effect"] as const) {
-    test(`${mode} MobX fields are fresh when readiness, actions, refresh, and argument updates resolve`, async () => {
+    test(`${mode} class node fields are fresh when readiness, actions, refresh, and argument updates resolve`, async () => {
       const scenario = createScenario(mode);
-      const { projection, acquireGate, actionGate } = scenario;
+      const { handle, acquireGate, actionGate } = scenario;
       acquireGate.resolve();
       actionGate.resolve();
-      await projection.ensureReady();
+      await handle.ensureReady();
       expectReadyFields(scenario, "acquired");
-      await projection.ensure();
+      await handle.ensure();
       expectReadyFields(scenario, "acquired");
-      const authoredAction = projection.node.actions.write("authored");
+      const authoredAction = handle.readReady().actions.write("authored");
       expect(
         await (Effect.isEffect(authoredAction)
           ? Frond.unwrapEffect(authoredAction)
           : authoredAction)
       ).toBe("receipt:authored");
       expectReadyFields(scenario, "authored");
-      expect(await projection.runAction("write", "changed")).toMatchObject({
+      expect(await Frond.unwrapEffect(handle.action("write", "changed"))).toMatchObject({
         _tag: "Success",
         value: "receipt:changed",
       });
       expectReadyFields(scenario, "changed");
-      expect(await projection.refresh()).toEqual({
+      expect(await handle.refresh()).toEqual({
         _tag: "Success",
-        nodeId: projection.nodeId,
+        nodeId: handle.nodeId,
         value: { value: "refreshed" },
       });
       expectReadyFields(scenario, "refreshed");
-      await projection.handle.ensureReady();
+      await handle.ensureReady();
       expectReadyFields(scenario, "refreshed");
-      expect(await projection.handle.updateArgs({ region: "west" })).toMatchObject({
+      expect(await handle.updateArgs({ region: "west" })).toMatchObject({
         _tag: "Success",
       });
       expectReadyFields(scenario, "refreshed", "west");
     });
 
-    test(`${mode} boot attempts expose fresh MobX fields when the awaited attempt resolves`, async () => {
+    test(`${mode} boot attempts expose fresh class node fields when the awaited attempt resolves`, async () => {
       const scenario = createScenario(mode);
-      const { projection, acquiring, acquireGate } = scenario;
-      const boot = projection.handle.boot();
+      const { handle, acquiring, acquireGate } = scenario;
+      const boot = handle.boot();
       if (boot._tag !== "Pending") throw new Error("Expected a boot attempt");
       await acquiring.promise;
       acquireGate.resolve();
@@ -200,66 +191,60 @@ describe("0.5 MobX compatibility", () => {
       expectReadyFields(scenario, "acquired");
     });
 
-    test(`${mode} reactions observe pending then ready and busy then idle across driver gates`, async () => {
-      const { projection, acquiring, acquireGate, acting, actionGate } = createScenario(mode);
-      const readiness: string[] = [];
-      const operation: string[] = [];
-      const pending = createDeferred<void>();
-      const busy = createDeferred<void>();
-      disposers.push(
-        autorun(() => {
-          const status = projection.status;
-          const state = status._tag === "Wired" ? status.run._tag : status._tag;
-          readiness.push(state);
-          if (state === "Pending") pending.resolve();
-        })
-      );
-      disposers.push(
-        reaction(
-          () => projection.busy,
-          (value) => {
-            operation.push(value ? "busy" : "idle");
-            if (value) busy.resolve();
-          },
-          { fireImmediately: true }
-        )
-      );
-      const ready = projection.ensureReady();
+    test(`${mode} reads expose pending then ready and busy then idle across driver gates`, async () => {
+      const { handle, acquiring, acquireGate, acting, actionGate } = createScenario(mode);
+      const ready = handle.ensureReady();
       await acquiring.promise;
-      await pending.promise;
-      expect(projection.result).toBeUndefined();
+      expect(handle.read()).toMatchObject({ _tag: "Pending", busy: false });
       acquireGate.resolve();
       await ready;
-      const action = projection.runAction("write", "changed");
+      const node = handle.readReady();
+      const observed = [node.result.value];
+      disposers.push(
+        reaction(
+          () => node.result.value,
+          (value) => observed.push(value)
+        )
+      );
+      expect(handle.read()).toMatchObject({ _tag: "Ready", busy: false });
+      const action = Frond.unwrapEffect(handle.action("write", "changed"));
       await acting.promise;
-      await busy.promise;
-      expect(projection.result).toEqual({ value: "acquired" });
+      expect(handle.read()).toMatchObject({
+        _tag: "Ready",
+        busy: true,
+        operation: { _tag: "Running", kind: "action" },
+        result: { value: "acquired" },
+      });
+      expect(node.result).toEqual({ value: "acquired" });
       actionGate.resolve();
       expect(await action).toMatchObject({ _tag: "Success", value: "receipt:changed" });
-      expect(distinct(readiness)).toEqual(["Unwired", "Pending", "Ready"]);
-      expect(distinct(operation)).toEqual(["idle", "busy", "idle"]);
+      expect(handle.read()).toMatchObject({ _tag: "Ready", busy: false });
+      expect(observed).toEqual(["acquired", "changed"]);
     });
   }
 
   for (const operation of ["action", "refresh", "boot"] as const) {
     test(`${operation} started inside a MobX reaction settles with the committed result`, async () => {
       const scenario = createScenario("async");
-      const { projection, acquireGate, actionGate } = scenario;
+      const { handle, acquireGate, actionGate } = scenario;
       acquireGate.resolve();
       actionGate.resolve();
       const completed = createDeferred<unknown>();
-      if (operation !== "boot") await projection.ensureReady();
+      if (operation !== "boot") await handle.ensureReady();
       const trigger = createDeferred<void>();
       disposers.push(
         reaction(
-          () => projection.result?.value ?? "missing",
+          () => {
+            const read = handle.read();
+            return read._tag === "Ready" ? read.node.result.value : "missing";
+          },
           (value) => {
             if (operation === "boot" ? value !== "missing" : value !== "trigger") return;
             const pending =
               operation === "action"
-                ? projection.runAction("write", "reaction")
+                ? Frond.unwrapEffect(handle.action("write", "reaction"))
                 : operation === "refresh"
-                  ? projection.refresh()
+                  ? handle.refresh()
                   : boot(scenario);
             void pending.then(completed.resolve, completed.reject);
             trigger.resolve();
@@ -267,7 +252,7 @@ describe("0.5 MobX compatibility", () => {
           { fireImmediately: operation === "boot" }
         )
       );
-      if (operation !== "boot") await projection.runAction("write", "trigger");
+      if (operation !== "boot") await Frond.unwrapEffect(handle.action("write", "trigger"));
       await trigger.promise;
       await completed.promise;
       expectReadyFields(
@@ -280,11 +265,11 @@ describe("0.5 MobX compatibility", () => {
   for (const operation of ["action", "refresh", "boot"] as const) {
     test(`${operation} started inside a runtime listener settles without blocking event delivery`, async () => {
       const scenario = createScenario("async");
-      const { projection, harness, acquireGate, actionGate } = scenario;
+      const { handle, harness, acquireGate, actionGate } = scenario;
       acquireGate.resolve();
       actionGate.resolve();
       const completed = createDeferred<unknown>();
-      if (operation !== "boot") await projection.ensureReady();
+      if (operation !== "boot") await handle.ensureReady();
       let submitted = false;
       const subscription = harness.runtime.observe((record) => {
         const event = record.event;
@@ -292,15 +277,15 @@ describe("0.5 MobX compatibility", () => {
           operation === "boot"
             ? event._tag === "RuntimeSignalPublished"
             : event._tag === "GraphActionSucceeded" &&
-              event.nodeId === projection.nodeId &&
+              event.nodeId === handle.nodeId &&
               event.input === "trigger";
         if (!matches || submitted) return;
         submitted = true;
         const pending =
           operation === "action"
-            ? projection.runAction("write", "listener")
+            ? Frond.unwrapEffect(handle.action("write", "listener"))
             : operation === "refresh"
-              ? projection.refresh()
+              ? handle.refresh()
               : boot(scenario);
         void pending.then(completed.resolve, completed.reject);
       });
@@ -309,7 +294,7 @@ describe("0.5 MobX compatibility", () => {
         await harness.runtime.publish(
           Frond.Signals.signal({ channel: Frond.Signals.channel("compat/mobx/boot"), name: "boot" })
         );
-      } else await projection.runAction("write", "trigger");
+      } else await Frond.unwrapEffect(handle.action("write", "trigger"));
       await completed.promise;
       expectReadyFields(
         scenario,
@@ -376,67 +361,54 @@ describe("0.5 MobX compatibility", () => {
         },
       });
     }
-    const projection = Frond.MobX.createNode(harness.runtime, ParentNode, Frond.Args.none);
-    disposers.push(() => projection.dispose());
-    await projection.ensureReady();
-    expect(projection.result).toEqual({ value: "during-acquire" });
+    const handle = harness.node(ParentNode, Frond.Args.none);
+    await handle.ensureReady();
+    expect(handle.readReady().result).toEqual({ value: "during-acquire" });
     expect(independent.readReady().result).toEqual({ value: "acquired" });
-    expect(await projection.runAction("write")).toMatchObject({
+    expect(await Frond.unwrapEffect(handle.action("write"))).toMatchObject({
       _tag: "Success",
       value: "during-action",
     });
-    expect(projection.node.deps.child.result).toEqual({ value: "during-action" });
-    expect(await projection.refresh()).toMatchObject({ _tag: "Success" });
-    expect(projection.result).toEqual({ value: "refreshed" });
-    expect(projection.node.deps.child.result).toEqual({ value: "refreshed" });
+    expect(handle.readReady().deps.child.result).toEqual({ value: "during-action" });
+    expect(await handle.refresh()).toMatchObject({ _tag: "Success" });
+    expect(handle.readReady().result).toEqual({ value: "refreshed" });
+    expect(handle.readReady().deps.child.result).toEqual({ value: "refreshed" });
   });
 
-  test("success listeners see committed and authored results before the MobX projection catches up for the caller", async () => {
+  test("success listeners and callers see the committed class node result", async () => {
     const scenario = createScenario("async");
-    const { harness, projection, acquireGate, actionGate } = scenario;
+    const { harness, handle, acquireGate, actionGate } = scenario;
     acquireGate.resolve();
     actionGate.resolve();
-    await projection.ensureReady();
+    await handle.ensureReady();
     const observations: string[] = [];
     disposers.push(
       reaction(
-        () => projection.node.result.value,
+        () => handle.readReady().result.value,
         (value) => {
-          const read = projection.handle.read();
+          const read = handle.read();
           observations.push(
             `mobx:${value}:${read._tag === "Ready" ? read.result.value : read._tag}`
           );
         }
       )
     );
-    disposers.push(
-      reaction(
-        () => projection.result?.value,
-        (value) => observations.push(`projection:${value}`)
-      )
-    );
     const subscription = harness.runtime.observe((record) => {
-      if (record.event._tag !== "GraphActionSucceeded" || record.event.nodeId !== projection.nodeId)
+      if (record.event._tag !== "GraphActionSucceeded" || record.event.nodeId !== handle.nodeId)
         return;
-      const read = projection.handle.read();
+      const read = handle.read();
       expect(read).toMatchObject({ _tag: "Ready", result: { value: "ordered" } });
-      observations.push(`listener:${projection.node.result.value}:${projection.result?.value}`);
+      observations.push(`listener:${handle.readReady().result.value}`);
     });
     disposers.push(() => subscription.unsubscribe());
-    expect(await projection.runAction("write", "ordered")).toMatchObject({
+    expect(await Frond.unwrapEffect(handle.action("write", "ordered"))).toMatchObject({
       _tag: "Success",
       value: "receipt:ordered",
     });
-    observations.push(`caller:${projection.result?.value}`);
-    // 0.5 behavior: the authored MobX write precedes the graph snapshot commit. Success listeners
-    // see the committed graph and authored node, but the separate MobX projection is still stale.
-    // 0.6 intended change (docs/v06-architecture.md, "Ordering rules": commit, then MobX write,
-    // then listeners): the MobX reaction already reads the committed graph. 0.5 recorded
-    // "mobx:ordered:acquired".
+    observations.push(`caller:${handle.readReady().result.value}`);
     expect(distinct(observations)).toEqual([
       "mobx:ordered:ordered",
-      "listener:ordered:acquired",
-      "projection:ordered",
+      "listener:ordered",
       "caller:ordered",
     ]);
     expectReadyFields(scenario, "ordered");

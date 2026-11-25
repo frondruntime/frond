@@ -41,7 +41,7 @@ afterEach(async () => {
 });
 
 async function startedRuntime(): Promise<Runtime.Runtime> {
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
 
   await runtime.submit({ _tag: "RuntimeStart" });
 

@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import "global-jsdom/register";
+import "../setup";
 import {
   Driver,
   Key,
@@ -28,11 +28,8 @@ import {
 import { TestFrondProvider } from "@frondruntime/react/testing";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { Effect } from "effect";
+import { observer } from "mobx-react-lite";
 import { Component, type ReactNode, StrictMode, Suspense, useState } from "react";
-
-(
-  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
-).IS_REACT_ACT_ENVIRONMENT = true;
 
 const harnesses: Array<ReturnType<typeof createFrondTestHarness>> = [];
 
@@ -84,43 +81,45 @@ test("a boot failure reaches the boundary with a report and recovers through exp
       acquire: Driver.Acquire(async () => (recover ? "recovered content" : boot.promise)),
     });
   }
-  function Content() {
+  const Content = observer(function Content() {
     return <output>{useNode(RecoverableNode, {}).result}</output>;
-  }
+  });
   const harness = await startHarness();
   const consoleError = spyOn(console, "error").mockImplementation(() => {});
   try {
-    const view = render(
-      <FrondProvider runtime={harness.runtime}>
-        <Boundary
-          fallback={(error, reset) => {
-            captured = error;
-            const report = getErrorReport(error);
-            const recovery = getErrorRecovery(error);
-            return (
-              <>
-                <output>
-                  {report.kind}:{report.causeType}:{report.causeMessage}:
-                  {String(isRecoverableNodeError(error))}
-                </output>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (recovery === undefined) throw new Error("Missing readiness recovery");
-                    pending = recovery.retry().then(reset);
-                  }}
-                >
-                  retry
-                </button>
-              </>
-            );
-          }}
-        >
-          <Suspense fallback={<output>booting</output>}>
-            <Content />
-          </Suspense>
-        </Boundary>
-      </FrondProvider>
+    const view = await act(async () =>
+      render(
+        <FrondProvider runtime={harness.runtime}>
+          <Boundary
+            fallback={(error, reset) => {
+              captured = error;
+              const report = getErrorReport(error);
+              const recovery = getErrorRecovery(error);
+              return (
+                <>
+                  <output>
+                    {report.kind}:{report.causeType}:{report.causeMessage}:
+                    {String(isRecoverableNodeError(error))}
+                  </output>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (recovery === undefined) throw new Error("Missing readiness recovery");
+                      pending = recovery.retry().then(reset);
+                    }}
+                  >
+                    retry
+                  </button>
+                </>
+              );
+            }}
+          >
+            <Suspense fallback={<output>booting</output>}>
+              <Content />
+            </Suspense>
+          </Boundary>
+        </FrondProvider>
+      )
     );
     expect(view.getByText("booting")).toBeTruthy();
     await act(async () => boot.reject(new Error("backend unavailable")));
@@ -180,31 +179,33 @@ test("useNodes sends a failed sibling boot to the boundary without exposing a pa
       acquire: Driver.Acquire(() => failure.promise),
     });
   }
-  function Content() {
+  const Content = observer(function Content() {
     const nodes = useNodes({ ready: [ReadyNode, {}], failed: [FailedNode, {}] });
     return (
       <output>
         {nodes.ready.result}/{nodes.failed.result}
       </output>
     );
-  }
+  });
   const harness = await startHarness();
   const consoleError = spyOn(console, "error").mockImplementation(() => {});
   try {
-    const view = render(
-      <FrondProvider runtime={harness.runtime}>
-        <Boundary
-          fallback={(error) => (
-            <output>
-              {getErrorReport(error).failingNode?.tag}:{String(isRecoverableNodeError(error))}
-            </output>
-          )}
-        >
-          <Suspense fallback={<output>booting together</output>}>
-            <Content />
-          </Suspense>
-        </Boundary>
-      </FrondProvider>
+    const view = await act(async () =>
+      render(
+        <FrondProvider runtime={harness.runtime}>
+          <Boundary
+            fallback={(error) => (
+              <output>
+                {getErrorReport(error).failingNode?.tag}:{String(isRecoverableNodeError(error))}
+              </output>
+            )}
+          >
+            <Suspense fallback={<output>booting together</output>}>
+              <Content />
+            </Suspense>
+          </Boundary>
+        </FrondProvider>
+      )
     );
     expect(view.getByText("booting together")).toBeTruthy();
     expect(view.queryByText("ready sibling")).toBeNull();
@@ -308,7 +309,7 @@ test("Preload boots siblings together and waits for each layer before displaying
       }),
     });
   }
-  function Content() {
+  const Content = observer(function Content() {
     const nodes = useNodes({
       first: [FirstNode, {}],
       sibling: [SiblingNode, {}],
@@ -319,21 +320,23 @@ test("Preload boots siblings together and waits for each layer before displaying
         {nodes.first.result}/{nodes.sibling.result}/{nodes.second.result}
       </output>
     );
-  }
+  });
   const harness = await startHarness();
-  const view = render(
-    <FrondProvider runtime={harness.runtime}>
-      <Suspense fallback={<output>preloading</output>}>
-        <Preload
-          nodes={[
-            { first: [FirstNode, {}], sibling: [SiblingNode, {}] },
-            { second: [SecondNode, {}] },
-          ]}
-        >
-          <Content />
-        </Preload>
-      </Suspense>
-    </FrondProvider>
+  const view = await act(async () =>
+    render(
+      <FrondProvider runtime={harness.runtime}>
+        <Suspense fallback={<output>preloading</output>}>
+          <Preload
+            nodes={[
+              { first: [FirstNode, {}], sibling: [SiblingNode, {}] },
+              { second: [SecondNode, {}] },
+            ]}
+          >
+            <Content />
+          </Preload>
+        </Suspense>
+      </FrondProvider>
+    )
   );
   await act(async () => {
     await Promise.all([firstEntered.promise, siblingEntered.promise]);
@@ -352,12 +355,14 @@ test("Preload boots siblings together and waits for each layer before displaying
 
 test("an empty Preload displays children immediately", async () => {
   const harness = await startHarness();
-  const view = render(
-    <FrondProvider runtime={harness.runtime}>
-      <Preload nodes={[]}>
-        <output>immediate children</output>
-      </Preload>
-    </FrondProvider>
+  const view = await act(async () =>
+    render(
+      <FrondProvider runtime={harness.runtime}>
+        <Preload nodes={[]}>
+          <output>immediate children</output>
+        </Preload>
+      </FrondProvider>
+    )
   );
   expect(view.getByText("immediate children")).toBeTruthy();
 });
@@ -376,7 +381,7 @@ test.each([
   const harness = await startHarness({
     specOverrides: [{ from: ProvidedNode, to: readySpec(ProvidedNode, "test value") }],
   });
-  function Content() {
+  const Content = observer(function Content() {
     const runtime = useRuntime();
     const client = useRuntimeClient();
     const same = runtime === harness.runtime && client === harness.client;
@@ -385,17 +390,19 @@ test.each([
         {String(same)}:{useNode(ProvidedNode, {}).result}
       </output>
     );
-  }
+  });
   const children = (
     <Suspense fallback="booting">
       <Content />
     </Suspense>
   );
-  const view = render(
-    source === "harness" ? (
-      <TestFrondProvider harness={harness}>{children}</TestFrondProvider>
-    ) : (
-      <TestFrondProvider runtime={harness.runtime}>{children}</TestFrondProvider>
+  const view = await act(async () =>
+    render(
+      source === "harness" ? (
+        <TestFrondProvider harness={harness}>{children}</TestFrondProvider>
+      ) : (
+        <TestFrondProvider runtime={harness.runtime}>{children}</TestFrondProvider>
+      )
     )
   );
   expect(await view.findByText("true:test value")).toBeTruthy();
@@ -413,31 +420,33 @@ test("TestFrondProvider owns an isolated runtime through StrictMode and stops it
   }
   const stopped = Promise.withResolvers<void>();
   let ownedRuntime: Runtime.Runtime | undefined;
-  function Content() {
+  const Content = observer(function Content() {
     ownedRuntime = useRuntime();
     return <output>{useNode(OwnedNode, {}).result}</output>;
-  }
-  const view = render(
-    <StrictMode>
-      <TestFrondProvider
-        options={{
-          specOverrides: [{ from: OwnedNode, to: readySpec(OwnedNode, "isolated value") }],
-          sinks: [
-            {
-              name: "compat-owned-stop",
-              handle: (record) =>
-                Effect.sync(() => {
-                  if (record.event._tag === "RuntimeStopped") stopped.resolve();
-                }),
-            },
-          ],
-        }}
-      >
-        <Suspense fallback="booting">
-          <Content />
-        </Suspense>
-      </TestFrondProvider>
-    </StrictMode>
+  });
+  const view = await act(async () =>
+    render(
+      <StrictMode>
+        <TestFrondProvider
+          options={{
+            specOverrides: [{ from: OwnedNode, to: readySpec(OwnedNode, "isolated value") }],
+            sinks: [
+              {
+                name: "compat-owned-stop",
+                handle: (record) =>
+                  Effect.sync(() => {
+                    if (record.event._tag === "RuntimeStopped") stopped.resolve();
+                  }),
+              },
+            ],
+          }}
+        >
+          <Suspense fallback="booting">
+            <Content />
+          </Suspense>
+        </TestFrondProvider>
+      </StrictMode>
+    )
   );
   expect(await view.findByText("isolated value")).toBeTruthy();
   view.unmount();
@@ -503,10 +512,12 @@ test("usePublish and context hooks follow the provider runtime when it changes",
       </>
     );
   }
-  const view = render(
-    <FrondProvider runtime={first.runtime}>
-      <Content screen="first" expected={first} />
-    </FrondProvider>
+  const view = await act(async () =>
+    render(
+      <FrondProvider runtime={first.runtime}>
+        <Content screen="first" expected={first} />
+      </FrondProvider>
+    )
   );
   expect(view.getByText("first:true:idle")).toBeTruthy();
   await act(async () => {

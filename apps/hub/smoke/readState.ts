@@ -257,7 +257,7 @@ async function runtimeRows(): Promise<ReadonlyArray<RuntimeRow>> {
 
 /* --------------------------------------------------------------- the check */
 
-const hubRuntime = createRuntime();
+const hubRuntime = createRuntime({ development: true, eventBufferSize: 512 });
 await hubRuntime.submit({ _tag: "RuntimeStart" });
 
 // Minted here and handed to both halves of the self-attachment, exactly as the
@@ -291,7 +291,7 @@ const apps: Array<{ readonly detach: () => void; readonly stop: () => Promise<un
 
 /** Attaches another app to the hub, `"full"` so real values can be asserted on. */
 async function startApp(name: string) {
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   await runtime.submit({ _tag: "RuntimeStart" });
 
   const detach = attachDevtools({

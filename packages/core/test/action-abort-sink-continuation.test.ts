@@ -55,7 +55,7 @@ test("an action aborted during its start sink starts no further sink of its own"
       });
     },
   };
-  const runtime = createRuntime({ sinks: [sink] });
+  const runtime = createRuntime({ development: true, eventBufferSize: 512, sinks: [sink] });
   try {
     const handle = runtime.client.node(Resource, {});
     await handle.ensureReadyNode();

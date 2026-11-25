@@ -126,6 +126,8 @@ void abstractSlot;
 
 // The override is accepted by createRuntime specOverrides and the client.
 const runtime = createRuntime({
+  development: true,
+  eventBufferSize: 512,
   specOverrides: [{ from: TransportNode, to: OverriddenTransport }],
 });
 const handle = runtime.client.node(OverriddenTransport, Args.none);

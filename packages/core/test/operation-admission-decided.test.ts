@@ -78,7 +78,7 @@ function joinNode(name: string, gatedSecondRun = false) {
 describe("join admission and decided operations", () => {
   test("a call after the interrupted only caller's worker finished runs a fresh action", async () => {
     const { JoinNode, probe, started, gate } = joinNode("admission-decided/action");
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(JoinNode, Args.none);
     await handle.ensureReady();
     await Effect.runPromise(
@@ -98,7 +98,7 @@ describe("join admission and decided operations", () => {
 
   test("a call while the abandoned action still runs joins it", async () => {
     const { JoinNode, probe, started, gate } = joinNode("admission-decided/action-running");
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(JoinNode, Args.none);
     await handle.ensureReady();
     const controller = new AbortController();
@@ -126,7 +126,7 @@ describe("join admission and decided operations", () => {
       "admission-decided/action-successor",
       true
     );
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(JoinNode, Args.none);
     await handle.ensureReady();
     await Effect.runPromise(
@@ -154,7 +154,7 @@ describe("join admission and decided operations", () => {
 
   test("a refresh after the interrupted only caller's worker finished runs a fresh refresh", async () => {
     const { JoinNode, probe, started, gate } = joinNode("admission-decided/refresh");
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(JoinNode, Args.none);
     await handle.ensureReady();
     const controller = new AbortController();

@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
-import type { NodeId } from "../src/graph";
 import { FrondRuntimeClosed, type RuntimeEvent, type RuntimeEventRecord } from "../src/runtime";
 import { Signals } from "../src/signals";
 import {
@@ -44,6 +43,8 @@ function parkedSinkRuntime(
   const parked = Promise.withResolvers<void>();
   let parking = true;
   const runtime = createRuntime({
+    development: true,
+    eventBufferSize: 512,
     sinks: [
       {
         name: "parked",
@@ -128,7 +129,7 @@ async function stopBehindReadinessFailure(throwOn?: RuntimeEvent["_tag"]) {
 
 describe("runtime host lifecycle", () => {
   test("a second start while running settles without starting the graph again", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const events: Array<RuntimeEventRecord> = [];
     const subscription = runtime.observe((event) => {
       events.push(event);
@@ -150,7 +151,7 @@ describe("runtime host lifecycle", () => {
   });
 
   test("a stop after a stop settles from the first stop and emits nothing new", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const events: Array<RuntimeEventRecord> = [];
     runtime.observe((event) => {
       events.push(event);
@@ -171,7 +172,7 @@ describe("runtime host lifecycle", () => {
   });
 
   test("stopping an idle runtime closes it to a later start", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
 
     await expect(runtime.submit({ _tag: "RuntimeStop" })).resolves.toEqual({
       _tag: "RuntimeStopped",
@@ -185,7 +186,7 @@ describe("runtime host lifecycle", () => {
   });
 
   test("a stopped runtime refuses signal subscriptions and reports stopped status", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
     await runtime.submit({ _tag: "RuntimeStop" });
 
@@ -202,48 +203,12 @@ describe("runtime host lifecycle", () => {
     expect(runtime.getSnapshotSync().status).toBe("stopped");
   });
 
-  // The MobX adapter records a projection that rejects late through this
-  // facade method, which the Runtime type does not list.
-  test("a MobX projection failure recorded after the stop starts no sink and emits nothing", async () => {
-    let started = 0;
-    const runtime = createRuntime({
-      sinks: [
-        {
-          name: "blocking-diagnostics",
-          handle: (record) =>
-            record.event._tag === "RuntimeObserverFailureObserved"
-              ? Effect.sync(() => {
-                  started += 1;
-                }).pipe(Effect.andThen(Effect.never))
-              : Effect.void,
-        },
-      ],
-    });
-    const events: Array<RuntimeEventRecord> = [];
-    runtime.observe((event) => {
-      events.push(event);
-    });
-    const recorder = runtime as typeof runtime & {
-      readonly recordMobXProjectionFailure: (nodeId: NodeId, cause: unknown) => Promise<void>;
-    };
-    await runtime.submit({ _tag: "RuntimeStart" });
-    await runtime.submit({ _tag: "RuntimeStop" });
-
-    const recorded = recorder.recordMobXProjectionFailure(
-      "mobx/late-projection" as NodeId,
-      new Error("late projection")
-    );
-
-    expect(started).toBe(0);
-    expect(events.at(-1)?.event._tag).toBe("RuntimeStopped");
-    expect(eventTags(events, "RuntimeObserverFailureObserved")).toBe(0);
-    await expect(recorded).resolves.toBeUndefined();
-  }, 1000);
-
   test("an input whose sink the stop interrupts settles without starting another sink", async () => {
     const sinks: string[] = [];
     const received = Promise.withResolvers<void>();
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       sinks: [
         {
           name: "blocking-input",
@@ -341,6 +306,8 @@ describe("runtime host lifecycle", () => {
     const release = Promise.withResolvers<void>();
     let parking = true;
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       sinks: [
         {
           name: "parked-diagnostic",
@@ -389,6 +356,8 @@ describe("runtime host lifecycle", () => {
     const release = Promise.withResolvers<void>();
     let parking = true;
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       sinks: [
         {
           name: "parked-signal",

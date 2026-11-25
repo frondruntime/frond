@@ -1,3 +1,5 @@
+import { isFrondFrozen } from "../../node/resultData";
+
 // Pairs compared before the cycle memo starts. Flat and small results never
 // allocate one; a cycle keeps yielding pairs, so it crosses this and ends.
 const cycleMemoThreshold = 1024;
@@ -48,18 +50,9 @@ function objectsEqual(rootLeft: object, rootRight: object): boolean {
     for (const key of keys) {
       const leftSlot = Object.getOwnPropertyDescriptor(left, key);
       const rightSlot = Object.getOwnPropertyDescriptor(right, key);
-      if (
-        leftSlot === undefined ||
-        rightSlot === undefined ||
-        !("value" in leftSlot) ||
-        !("value" in rightSlot) ||
-        leftSlot.enumerable !== rightSlot.enumerable ||
-        leftSlot.writable !== rightSlot.writable ||
-        leftSlot.configurable !== rightSlot.configurable
-      )
-        return false;
-      const leftValue: unknown = leftSlot.value;
-      const rightValue: unknown = rightSlot.value;
+      if (!sameDataDescriptor(leftSlot, rightSlot)) return false;
+      const leftValue: unknown = leftSlot?.value;
+      const rightValue: unknown = rightSlot?.value;
       if (Object.is(leftValue, rightValue)) continue;
       if (
         typeof leftValue !== "object" ||
@@ -74,13 +67,39 @@ function objectsEqual(rootLeft: object, rootRight: object): boolean {
   return true;
 }
 
-function samePlainShape(left: object, right: object): boolean {
+export function samePlainShape(
+  left: object,
+  right: object,
+  freezingRight = false,
+  committingRight = freezingRight
+): boolean {
+  // Frond's commit mark preserves plain-data semantics; an author's freeze makes
+  // the value opaque to snapshot preparation. Equal commits must keep that choice.
+  if (isFrondFrozen(left) !== (committingRight || isFrondFrozen(right))) return false;
   const prototype = Object.getPrototypeOf(left);
   if (prototype !== Object.getPrototypeOf(right)) return false;
-  if (Object.isExtensible(left) !== Object.isExtensible(right)) return false;
+  if (Object.isExtensible(left) !== (freezingRight ? false : Object.isExtensible(right)))
+    return false;
   const array = Array.isArray(left);
   if (array !== Array.isArray(right)) return false;
   return array
     ? prototype === Array.prototype
     : prototype === Object.prototype || prototype === null;
+}
+
+/** Compare data descriptors, optionally under the candidate's impending freeze. */
+export function sameDataDescriptor(
+  left: PropertyDescriptor | undefined,
+  right: PropertyDescriptor | undefined,
+  freezingRight = false
+): boolean {
+  return (
+    left !== undefined &&
+    right !== undefined &&
+    "value" in left &&
+    "value" in right &&
+    left.enumerable === right.enumerable &&
+    left.writable === (freezingRight ? false : right.writable) &&
+    left.configurable === (freezingRight ? false : right.configurable)
+  );
 }

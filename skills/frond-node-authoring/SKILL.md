@@ -72,9 +72,15 @@ export class OrdersNode extends Frond.NodeBase<OrdersSpec> {
 - Action return values are caller-facing output only. Result changes go
   exclusively through `ctx.setResult`, `ctx.patchResult`,
   `ctx.setResultValidity`.
-- `ctx.patchResult((current) => { ... })` clones plain objects/arrays before
-  running the recipe. A non-plain (class-instance) result requires the
-  spec-level `resultPatch.nonPlainClone` opt-in; without it, patching fails
+- `node.result` is read-only. A direct write, even inside `runInAction`,
+  changes only the live tree the components read, never the committed result
+  that devtools, `ctx.setResult(updater)` and `ctx.patchResult` start from. A
+  refresh that brings equal data keeps the drift on screen.
+- In actions and refreshes, `ctx.patchResult((current) => { ... })` stages a
+  copy-on-write draft of plain objects/arrays. `ctx.setResult(updater)` receives
+  the same kind of draft; drafts are revoked when the callback returns.
+  A non-plain (class-instance) result requires the spec-level
+  `resultPatch.nonPlainClone` opt-in; without it, patching fails
   with a typed error. Prefer plain result shapes plus class getters.
 - Prefer inferred action `input` and driver `ctx` types inside the factory
   input. Annotate only when TypeScript cannot infer.
@@ -181,9 +187,10 @@ Rules:
   lossy in the carry direction. It never appears in `JSON.stringify`,
   `Object.keys`, or spread output — so internals cannot escape, and a spread
   copy silently drops the slot. `internalOf` then throws a `TypeError` on a
-  result that looks identical. Prefer `ctx.patchResult`, which mutates in place
-  and never changes the object reference. When you must replace the whole
-  result, re-attach explicitly:
+  result that looks identical. Prefer `ctx.patchResult`, which replaces
+  committed plain data copy-on-write, preserves symbol/envelope slots, and keeps
+  the live `node.result` identity for same-shaped plain data. When you must
+  replace the whole result, re-attach explicitly:
 
   ```ts
   // DON'T: the copy is not enveloped; the next internalOf() throws.
@@ -236,6 +243,19 @@ actions: {
 - Live hygiene: `stop` is idempotent (memoize the cleanup promise), and a
   live subscription stops accepting events *before* it propagates its own
   error or completion.
+- Refresh and `setResult(value)` share unchanged, fully frozen plain children
+  with the pre-operation committed result. A refresh or an action's
+  `setResult(value)` equal to the committed result keeps the committed root
+  and notifies nobody.
+  `node.result` is the committed snapshot behind one observable reference:
+  a commit that changes it notifies every reader of `node.result`, with no
+  per-field reactivity for plain data. Opaque children (class instances,
+  functions, `Map`, `Set`, `Date`) and symbol-slot payloads keep the driver's
+  references; a share patch that changes one in place notifies every
+  `node.result` reader, unless it is a MobX observable, which notifies its own
+  readers. Write through driver hooks: the committed result is read-only and
+  frozen in development, and a direct write in production changes every holder
+  of the snapshot without notifying anyone.
 - Refresh is on-demand re-derivation. The runtime does not cascade refresh
   through dependents; a parent refreshing a direct dependency does it
   deliberately with `ctx.refreshDep("name")`.

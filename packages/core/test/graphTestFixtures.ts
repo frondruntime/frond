@@ -46,6 +46,7 @@ export function makeInMemoryGraphSystem(
   return makeSourceGraphSystem({
     ...options,
     runtimeId: options.runtimeId ?? "mock-test-runtime",
+    development: options.development ?? true,
   });
 }
 

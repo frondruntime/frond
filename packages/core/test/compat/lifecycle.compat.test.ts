@@ -9,8 +9,8 @@ afterEach(async () => {
   }
 });
 
-function createRuntime() {
-  const runtime = Frond.createRuntime();
+function createRuntime(options: Partial<Frond.Runtime.RuntimeOptions> = {}) {
+  const runtime = Frond.createRuntime({ development: true, eventBufferSize: 512, ...options });
   runtimes.push(runtime);
   return runtime;
 }
@@ -45,7 +45,7 @@ test("boot calls in one turn and across turns share acquisition and expose order
       return `Hello ${this.result}`;
     }
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const handle = runtime.client.node(ProfileNode, Frond.Args.none);
   expect(handle.read()).toMatchObject({ _tag: "Unwired", nodeId: handle.nodeId });
   expect(runtime.readNodeSnapshotSync(handle.nodeId)).toEqual({
@@ -111,7 +111,7 @@ test("structural keys canonicalize argument order and preserve distinct keyed no
       }),
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const first = runtime.client.node(AccountNode, { account: "one", region: "west" });
   const equivalent = runtime.client.node(AccountNode, { region: "west", account: "one" });
   const different = runtime.client.node(AccountNode, { account: "two", region: "west" });
@@ -140,7 +140,7 @@ test("singleton handles share the first acquired node despite different non-key 
       acquire: Frond.Driver.Acquire(({ args }) => args.selection),
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const first = runtime.client.node(SelectionNode, { selection: "first" });
   const later = runtime.client.node(SelectionNode, { selection: "later" });
   await first.ensureReady();
@@ -191,7 +191,7 @@ function createDependencyChain() {
 
 test("parent readiness waits for its child and release permits fresh child acquisition", async () => {
   const { ChildNode, ParentNode, order } = createDependencyChain();
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const parent = runtime.client.node(ParentNode, Frond.Args.none);
   const child = runtime.client.node(ChildNode, Frond.Args.none);
   await parent.ensureReady();
@@ -213,7 +213,7 @@ test("parent readiness waits for its child and release permits fresh child acqui
 
 test("evicting a child removes its dependent and both can boot with a fresh incarnation", async () => {
   const { ChildNode, ParentNode } = createDependencyChain();
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const parent = runtime.client.node(ParentNode, Frond.Args.none);
   const child = runtime.client.node(ChildNode, Frond.Args.none);
   await parent.ensureReady();
@@ -290,7 +290,7 @@ test("three-level diamond readiness shares the leaf before either branch and the
       }),
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const root = runtime.client.node(RootNode, Frond.Args.none);
   const readiness = root.ensureReady();
   await leafEntered.promise;
@@ -331,7 +331,7 @@ test("runtime events preserve semantic order for boot refresh action and evictio
       },
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const handle = runtime.client.node(EventNode, Frond.Args.none);
   const eventTags: string[] = [];
   const semanticTags = new Set([

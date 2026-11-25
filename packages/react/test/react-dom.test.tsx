@@ -17,6 +17,7 @@ import {
 import { createFrondTestHarness, readySpec } from "@frondruntime/core/testing";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { Deferred, Effect } from "effect";
+import { observer } from "mobx-react-lite";
 import {
   Activity,
   Component,
@@ -87,20 +88,22 @@ describe("React DOM adapter", () => {
     });
     await harness.start();
 
-    const TestingProviderView = () => {
+    const TestingProviderView = observer(() => {
       const node = useNode(TestingProviderNode, {});
 
       return createElement("output", undefined, node.result);
-    };
+    });
 
-    const view = render(
-      createElement(
-        TestFrondProvider,
-        { harness },
+    const view = await act(async () =>
+      render(
         createElement(
-          Suspense,
-          { fallback: createElement("span", undefined, "loading") },
-          createElement(TestingProviderView)
+          TestFrondProvider,
+          { harness },
+          createElement(
+            Suspense,
+            { fallback: createElement("span", undefined, "loading") },
+            createElement(TestingProviderView)
+          )
         )
       )
     );
@@ -148,11 +151,17 @@ describe("React DOM adapter", () => {
       );
     };
 
-    const view = render(
-      createElement(
-        StrictMode,
-        undefined,
-        createElement(TestFrondProvider, { options: { sinks: [sink] } }, createElement(CommandView))
+    const view = await act(async () =>
+      render(
+        createElement(
+          StrictMode,
+          undefined,
+          createElement(
+            TestFrondProvider,
+            { options: { sinks: [sink] } },
+            createElement(CommandView)
+          )
+        )
       )
     );
 
@@ -183,8 +192,10 @@ describe("React DOM adapter", () => {
           }
         }),
     } satisfies Runtime.RuntimeSink;
-    const view = render(
-      createElement(TestFrondProvider, { options: { sinks: [sink] } }, createElement("span"))
+    const view = await act(async () =>
+      render(
+        createElement(TestFrondProvider, { options: { sinks: [sink] } }, createElement("span"))
+      )
     );
     const timerSpy = spyOn(globalThis, "setTimeout");
 
@@ -223,10 +234,10 @@ describe("React DOM adapter", () => {
       });
     }
 
-    const NodeView = () => {
+    const NodeView = observer(() => {
       const node = useNode(ActivityProviderNode, {});
       return createElement("output", undefined, node.result);
-    };
+    });
     const Shell = () => {
       const [mode, setMode] = useState<"visible" | "hidden">("visible");
       return createElement(
@@ -248,7 +259,7 @@ describe("React DOM adapter", () => {
         )
       );
     };
-    const view = render(createElement(Shell));
+    const view = await act(async () => render(createElement(Shell)));
 
     expect(await view.findByText("ready-1")).toBeTruthy();
     fireEvent.click(view.getByText("visible"));
@@ -283,11 +294,11 @@ describe("React DOM adapter", () => {
       });
     }
 
-    const ProviderNodeView = ({ tick }: { readonly tick: number }) => {
+    const ProviderNodeView = observer(({ tick }: { readonly tick: number }) => {
       const node = useNode(StableOptionsProviderNode, {});
 
       return createElement("output", undefined, `${node.result}:${tick}`);
-    };
+    });
 
     const ProviderShell = () => {
       const [tick, setTick] = useState(0);
@@ -311,7 +322,7 @@ describe("React DOM adapter", () => {
       );
     };
 
-    const view = render(createElement(ProviderShell));
+    const view = await act(async () => render(createElement(ProviderShell)));
 
     expect(await view.findByText("ready-1:0")).toBeTruthy();
 
@@ -338,24 +349,26 @@ describe("React DOM adapter", () => {
     }
     let renderedNode: DomProfileNode | undefined;
 
-    const ProfileView = () => {
+    const ProfileView = observer(() => {
       const profile = useNode(DomProfileNode, {});
       renderedNode = profile;
 
       return createElement("output", { "data-testid": "timezone" }, profile.timezone);
-    };
+    });
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
 
-    const view = render(
-      createElement(
-        FrondProvider,
-        { runtime },
+    const view = await act(async () =>
+      render(
         createElement(
-          Suspense,
-          { fallback: createElement("span", undefined, "loading") },
-          createElement(ProfileView)
+          FrondProvider,
+          { runtime },
+          createElement(
+            Suspense,
+            { fallback: createElement("span", undefined, "loading") },
+            createElement(ProfileView)
+          )
         )
       )
     );
@@ -391,17 +404,19 @@ describe("React DOM adapter", () => {
         acquire: Driver.Acquire((ctx) => Effect.succeed(ctx.args.payload.length.toString())),
       });
     }
-    const View = () => {
+    const View = observer(() => {
       const node = useNode(LargeArgsNode, { payload: "x".repeat(3_000) });
       return createElement("output", undefined, node.result);
-    };
-    const runtime = createRuntime();
+    });
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
-    const view = render(
-      createElement(
-        FrondProvider,
-        { runtime },
-        createElement(Suspense, { fallback: "loading" }, createElement(View))
+    const view = await act(async () =>
+      render(
+        createElement(
+          FrondProvider,
+          { runtime },
+          createElement(Suspense, { fallback: "loading" }, createElement(View))
+        )
       )
     );
 
@@ -431,7 +446,7 @@ describe("React DOM adapter", () => {
       }
       let renderCount = 0;
 
-      const ProfileView = () => {
+      const ProfileView = observer(() => {
         const [tick, setTick] = useState(0);
         renderCount += 1;
         useEffect(() => {
@@ -447,32 +462,34 @@ describe("React DOM adapter", () => {
         useNode(InlineCallbackNode, args);
 
         return createElement("output", undefined, "ready");
-      };
+      });
 
-      const runtime = createRuntime();
+      const runtime = createRuntime({ development: true, eventBufferSize: 512 });
       await runtime.submit({ _tag: "RuntimeStart" });
 
-      const view = render(
-        createElement(
-          FrondProvider,
-          { runtime },
+      const view = await act(async () =>
+        render(
           createElement(
-            TestErrorBoundary,
-            {
-              fallback: (_reset, error) => {
-                const report = getErrorReport(error);
-
-                return createElement(
-                  "output",
-                  undefined,
-                  `${report.rootTag}:${report.rootMessage}`
-                );
-              },
-            },
+            FrondProvider,
+            { runtime },
             createElement(
-              Suspense,
-              { fallback: createElement("span", undefined, "loading") },
-              createElement(ProfileView)
+              TestErrorBoundary,
+              {
+                fallback: (_reset, error) => {
+                  const report = getErrorReport(error);
+
+                  return createElement(
+                    "output",
+                    undefined,
+                    `${report.rootTag}:${report.rootMessage}`
+                  );
+                },
+              },
+              createElement(
+                Suspense,
+                { fallback: createElement("span", undefined, "loading") },
+                createElement(ProfileView)
+              )
             )
           )
         )
@@ -518,26 +535,28 @@ describe("React DOM adapter", () => {
       }
     }
 
-    const ProfileView = () => {
+    const ProfileView = observer(() => {
       const profile = useNode(StrictColdBootNode, {});
 
       return createElement("output", { "data-testid": "timezone" }, profile.timezone);
-    };
+    });
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
 
-    const view = render(
-      createElement(
-        StrictMode,
-        undefined,
+    const view = await act(async () =>
+      render(
         createElement(
-          FrondProvider,
-          { runtime },
+          StrictMode,
+          undefined,
           createElement(
-            Suspense,
-            { fallback: createElement("span", undefined, "loading") },
-            createElement(ProfileView)
+            FrondProvider,
+            { runtime },
+            createElement(
+              Suspense,
+              { fallback: createElement("span", undefined, "loading") },
+              createElement(ProfileView)
+            )
           )
         )
       )
@@ -582,43 +601,45 @@ describe("React DOM adapter", () => {
         }
       }
 
-      const ProfileView = () => {
+      const ProfileView = observer(() => {
         const profile = useNode(ExpiredProfileNode, {});
 
         return createElement("output", undefined, profile.timezone);
-      };
+      });
 
-      const runtime = createRuntime();
+      const runtime = createRuntime({ development: true, eventBufferSize: 512 });
       await runtime.submit({ _tag: "RuntimeStart" });
 
-      const view = render(
-        createElement(
-          FrondProvider,
-          { runtime },
+      const view = await act(async () =>
+        render(
           createElement(
-            TestErrorBoundary,
-            {
-              fallback: (_reset, error) => {
-                if (!(error instanceof Runtime.FrondRuntimeReadError)) {
-                  return createElement("output", undefined, "unexpected-error");
-                }
-
-                const cause = error.cause;
-
-                if (
-                  !(cause instanceof Graph.AcquireFailed) ||
-                  !(cause.cause instanceof Graph.ResultExpired)
-                ) {
-                  return createElement("output", undefined, "unexpected-cause");
-                }
-
-                return createElement("output", undefined, "expired-result-error");
-              },
-            },
+            FrondProvider,
+            { runtime },
             createElement(
-              Suspense,
-              { fallback: createElement("span", undefined, "loading") },
-              createElement(ProfileView)
+              TestErrorBoundary,
+              {
+                fallback: (_reset, error) => {
+                  if (!(error instanceof Runtime.FrondRuntimeReadError)) {
+                    return createElement("output", undefined, "unexpected-error");
+                  }
+
+                  const cause = error.cause;
+
+                  if (
+                    !(cause instanceof Graph.AcquireFailed) ||
+                    !(cause.cause instanceof Graph.ResultExpired)
+                  ) {
+                    return createElement("output", undefined, "unexpected-cause");
+                  }
+
+                  return createElement("output", undefined, "expired-result-error");
+                },
+              },
+              createElement(
+                Suspense,
+                { fallback: createElement("span", undefined, "loading") },
+                createElement(ProfileView)
+              )
             )
           )
         )
@@ -673,17 +694,19 @@ describe("React DOM adapter", () => {
       );
     };
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
 
-    const view = render(
-      createElement(
-        FrondProvider,
-        { runtime },
+    const view = await act(async () =>
+      render(
         createElement(
-          Suspense,
-          { fallback: createElement("span", undefined, "loading") },
-          createElement(ProfileView, { filter: "all" })
+          FrondProvider,
+          { runtime },
+          createElement(
+            Suspense,
+            { fallback: createElement("span", undefined, "loading") },
+            createElement(ProfileView, { filter: "all" })
+          )
         )
       )
     );
@@ -733,7 +756,7 @@ describe("React DOM adapter", () => {
       }
     }
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
     const handle = runtime.client.node<EmptyArgs, Profile>(AttachWindowNode, {});
     await handle.ensureReady();
@@ -743,7 +766,10 @@ describe("React DOM adapter", () => {
       nodeId: runtime.resolveNodeIdSync({ spec: AttachWindowNode, args: {} }),
     });
 
-    expect(store.read().node.timezone).toBe("initial");
+    const initial = store.read();
+    expect(initial._tag).toBe("Ready");
+    if (initial._tag !== "Ready") throw new Error("Expected the preloaded node to be ready.");
+    expect(initial.value.node.timezone).toBe("initial");
     const versionBeforeMissedRefresh = store.getVersion();
 
     await act(async () => {
@@ -754,7 +780,9 @@ describe("React DOM adapter", () => {
 
     let deliveredTimezone: string | undefined;
     const unsubscribe = store.subscribe(() => {
-      deliveredTimezone = store.read().node.timezone;
+      const read = store.read();
+      if (read._tag !== "Ready") throw new Error("Expected the refreshed node to be ready.");
+      deliveredTimezone = read.value.node.timezone;
     });
 
     expect(deliveredTimezone).toBe("fresh-1");
@@ -787,7 +815,7 @@ describe("React DOM adapter", () => {
       return createElement("output", undefined, profile.node.label);
     };
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
 
     const renderTree = (filter: string) =>
@@ -806,7 +834,7 @@ describe("React DOM adapter", () => {
         (record) => record.event._tag === "GraphNodeArgsUpdateStarted"
       ).length;
 
-    const view = render(renderTree("all"));
+    const view = await act(async () => render(renderTree("all")));
     expect(await view.findByText("all")).toBeTruthy();
 
     // A fresh object literal of equal args must not trigger any reconciliation.
@@ -845,13 +873,13 @@ describe("React DOM adapter", () => {
       }
     }
 
-    const ProfilesView = ({ filter }: { readonly filter: string }) => {
+    const ProfilesView = observer(({ filter }: { readonly filter: string }) => {
       const nodes = useNodes({ filtered: [NoOpArgsNodesProfileNode, { filter }] });
 
       return createElement("output", undefined, nodes.filtered.label);
-    };
+    });
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
 
     const renderTree = (filter: string) =>
@@ -870,7 +898,7 @@ describe("React DOM adapter", () => {
         (record) => record.event._tag === "GraphNodeArgsUpdateStarted"
       ).length;
 
-    const view = render(renderTree("all"));
+    const view = await act(async () => render(renderTree("all")));
     expect(await view.findByText("all")).toBeTruthy();
 
     const afterMount = await startedCount();
@@ -915,11 +943,11 @@ describe("React DOM adapter", () => {
         }
       }
 
-      const ProfileView = () => {
+      const ProfileView = observer(() => {
         const profile = useNode(RetryProfileNode, {});
 
         return createElement("output", undefined, profile.timezone);
-      };
+      });
 
       const RetryFallback = ({ reset }: { readonly reset: () => void }) => {
         const controls = useNodeControls(RetryProfileNode, {});
@@ -936,20 +964,22 @@ describe("React DOM adapter", () => {
         );
       };
 
-      const runtime = createRuntime();
+      const runtime = createRuntime({ development: true, eventBufferSize: 512 });
       await runtime.submit({ _tag: "RuntimeStart" });
 
-      const view = render(
-        createElement(
-          FrondProvider,
-          { runtime },
+      const view = await act(async () =>
+        render(
           createElement(
-            TestErrorBoundary,
-            { fallback: (reset) => createElement(RetryFallback, { reset }) },
+            FrondProvider,
+            { runtime },
             createElement(
-              Suspense,
-              { fallback: createElement("span", undefined, "loading") },
-              createElement(ProfileView)
+              TestErrorBoundary,
+              { fallback: (reset) => createElement(RetryFallback, { reset }) },
+              createElement(
+                Suspense,
+                { fallback: createElement("span", undefined, "loading") },
+                createElement(ProfileView)
+              )
             )
           )
         )
@@ -992,58 +1022,60 @@ describe("React DOM adapter", () => {
         }
       }
 
-      const ProfileView = () => {
+      const ProfileView = observer(() => {
         const profile = useNode(RecoverableProfileNode, {});
 
         return createElement("output", undefined, profile.timezone);
-      };
+      });
 
-      const runtime = createRuntime();
+      const runtime = createRuntime({ development: true, eventBufferSize: 512 });
       await runtime.submit({ _tag: "RuntimeStart" });
 
-      const view = render(
-        createElement(
-          FrondProvider,
-          { runtime },
+      const view = await act(async () =>
+        render(
           createElement(
-            TestErrorBoundary,
-            {
-              fallback: (reset, error) => {
-                const recovery = getErrorRecovery(error);
-
-                if (recovery === undefined) {
-                  return createElement("output", undefined, "missing-recovery");
-                }
-
-                return createElement(
-                  "div",
-                  undefined,
-                  createElement("output", undefined, `${recovery.reason}:${recovery.retryable}`),
-                  createElement(
-                    "button",
-                    {
-                      type: "button",
-                      onClick: reset,
-                    },
-                    "render-reset"
-                  ),
-                  createElement(
-                    "button",
-                    {
-                      type: "button",
-                      onClick: () => {
-                        void recovery.retry().then(reset);
-                      },
-                    },
-                    "runtime-retry"
-                  )
-                );
-              },
-            },
+            FrondProvider,
+            { runtime },
             createElement(
-              Suspense,
-              { fallback: createElement("span", undefined, "loading") },
-              createElement(ProfileView)
+              TestErrorBoundary,
+              {
+                fallback: (reset, error) => {
+                  const recovery = getErrorRecovery(error);
+
+                  if (recovery === undefined) {
+                    return createElement("output", undefined, "missing-recovery");
+                  }
+
+                  return createElement(
+                    "div",
+                    undefined,
+                    createElement("output", undefined, `${recovery.reason}:${recovery.retryable}`),
+                    createElement(
+                      "button",
+                      {
+                        type: "button",
+                        onClick: reset,
+                      },
+                      "render-reset"
+                    ),
+                    createElement(
+                      "button",
+                      {
+                        type: "button",
+                        onClick: () => {
+                          void recovery.retry().then(reset);
+                        },
+                      },
+                      "runtime-retry"
+                    )
+                  );
+                },
+              },
+              createElement(
+                Suspense,
+                { fallback: createElement("span", undefined, "loading") },
+                createElement(ProfileView)
+              )
             )
           )
         )
@@ -1091,11 +1123,11 @@ describe("React DOM adapter", () => {
         }
       }
 
-      const ProfileView = () => {
+      const ProfileView = observer(() => {
         const profile = useNode(UnmountedRetryNode, {});
 
         return createElement("output", undefined, profile.timezone);
-      };
+      });
 
       let evictPromise: Promise<unknown> | undefined;
       const ControlsView = () => {
@@ -1116,30 +1148,32 @@ describe("React DOM adapter", () => {
       let capturedRecovery: ReturnType<typeof getErrorRecovery>;
       let capturedReset: (() => void) | undefined;
 
-      const runtime = createRuntime();
+      const runtime = createRuntime({ development: true, eventBufferSize: 512 });
       await runtime.submit({ _tag: "RuntimeStart" });
 
-      const view = render(
-        createElement(
-          FrondProvider,
-          { runtime },
+      const view = await act(async () =>
+        render(
           createElement(
-            TestErrorBoundary,
-            {
-              fallback: (reset, error) => {
-                capturedRecovery = getErrorRecovery(error);
-                capturedReset = reset;
-
-                return createElement("span", undefined, "boundary-error");
-              },
-            },
+            FrondProvider,
+            { runtime },
             createElement(
-              Suspense,
-              { fallback: createElement("span", undefined, "loading") },
-              createElement(ProfileView)
-            )
-          ),
-          createElement(ControlsView)
+              TestErrorBoundary,
+              {
+                fallback: (reset, error) => {
+                  capturedRecovery = getErrorRecovery(error);
+                  capturedReset = reset;
+
+                  return createElement("span", undefined, "boundary-error");
+                },
+              },
+              createElement(
+                Suspense,
+                { fallback: createElement("span", undefined, "loading") },
+                createElement(ProfileView)
+              )
+            ),
+            createElement(ControlsView)
+          )
         )
       );
 
@@ -1189,50 +1223,52 @@ describe("React DOM adapter", () => {
         });
       }
 
-      const ProfileView = () => {
+      const ProfileView = observer(() => {
         useNode(DecoratedErrorNode, {});
 
         return createElement("output", undefined, "ready");
-      };
+      });
 
-      const runtime = createRuntime();
+      const runtime = createRuntime({ development: true, eventBufferSize: 512 });
       await runtime.submit({ _tag: "RuntimeStart" });
 
-      const view = render(
-        createElement(
-          FrondProvider,
-          { runtime },
+      const view = await act(async () =>
+        render(
           createElement(
-            TestErrorBoundary,
-            {
-              fallback: (_reset, error) => {
-                if (!(error instanceof Runtime.FrondRuntimeReadError)) {
-                  return createElement("output", undefined, "unexpected-error");
-                }
-
-                const cause = error.cause;
-
-                if (!(cause instanceof Graph.AcquireFailed)) {
-                  return createElement("output", undefined, "unexpected-cause");
-                }
-
-                if (getErrorRecovery(error) === undefined) {
-                  return createElement("output", undefined, "missing-recovery");
-                }
-
-                return createElement(
-                  "output",
-                  {
-                    "data-keys": JSON.stringify(Object.keys(error)),
-                  },
-                  `${error.name}:${error.kind}:${String(error.retryable)}:${cause._tag}`
-                );
-              },
-            },
+            FrondProvider,
+            { runtime },
             createElement(
-              Suspense,
-              { fallback: createElement("span", undefined, "loading") },
-              createElement(ProfileView)
+              TestErrorBoundary,
+              {
+                fallback: (_reset, error) => {
+                  if (!(error instanceof Runtime.FrondRuntimeReadError)) {
+                    return createElement("output", undefined, "unexpected-error");
+                  }
+
+                  const cause = error.cause;
+
+                  if (!(cause instanceof Graph.AcquireFailed)) {
+                    return createElement("output", undefined, "unexpected-cause");
+                  }
+
+                  if (getErrorRecovery(error) === undefined) {
+                    return createElement("output", undefined, "missing-recovery");
+                  }
+
+                  return createElement(
+                    "output",
+                    {
+                      "data-keys": JSON.stringify(Object.keys(error)),
+                    },
+                    `${error.name}:${error.kind}:${String(error.retryable)}:${cause._tag}`
+                  );
+                },
+              },
+              createElement(
+                Suspense,
+                { fallback: createElement("span", undefined, "loading") },
+                createElement(ProfileView)
+              )
             )
           )
         )
@@ -1318,10 +1354,12 @@ describe("React DOM adapter", () => {
       );
     };
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
 
-    const view = render(createElement(FrondProvider, { runtime }, createElement(ControlsView)));
+    const view = await act(async () =>
+      render(createElement(FrondProvider, { runtime }, createElement(ControlsView)))
+    );
 
     expect(view.getByText("idle")).toBeTruthy();
     expect(acquired).toBe(0);
@@ -1414,10 +1452,12 @@ describe("React DOM adapter", () => {
       );
     };
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
 
-    const view = render(createElement(FrondProvider, { runtime }, createElement(ControlsView)));
+    const view = await act(async () =>
+      render(createElement(FrondProvider, { runtime }, createElement(ControlsView)))
+    );
 
     expect(view.getByText("idle")).toBeTruthy();
     expect(acquired.size).toBe(0);
@@ -1456,7 +1496,7 @@ describe("React DOM adapter", () => {
       }
     }
 
-    const VisibleNodeView = () => {
+    const VisibleNodeView = observer(() => {
       const profile = useNode(EvictedVisibleNode, {});
       const controls = useNodeControls(EvictedVisibleNode, {});
 
@@ -1475,18 +1515,20 @@ describe("React DOM adapter", () => {
           "evict"
         )
       );
-    };
+    });
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
-    const view = render(
-      createElement(
-        FrondProvider,
-        { runtime },
+    const view = await act(async () =>
+      render(
         createElement(
-          Suspense,
-          { fallback: createElement("span", undefined, "loading") },
-          createElement(VisibleNodeView)
+          FrondProvider,
+          { runtime },
+          createElement(
+            Suspense,
+            { fallback: createElement("span", undefined, "loading") },
+            createElement(VisibleNodeView)
+          )
         )
       )
     );
@@ -1522,11 +1564,11 @@ describe("React DOM adapter", () => {
       }
     }
 
-    const VisibleNodeView = () => {
+    const VisibleNodeView = observer(() => {
       const profile = useNode(StrictEvictedVisibleNode, {});
 
       return createElement("output", undefined, profile.timezone);
-    };
+    });
 
     let evictPromise: Promise<unknown> | undefined;
     const ControlsView = () => {
@@ -1544,21 +1586,23 @@ describe("React DOM adapter", () => {
       );
     };
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
-    const view = render(
-      createElement(
-        StrictMode,
-        undefined,
+    const view = await act(async () =>
+      render(
         createElement(
-          FrondProvider,
-          { runtime },
+          StrictMode,
+          undefined,
           createElement(
-            Suspense,
-            { fallback: createElement("span", undefined, "loading") },
-            createElement(VisibleNodeView)
-          ),
-          createElement(ControlsView)
+            FrondProvider,
+            { runtime },
+            createElement(
+              Suspense,
+              { fallback: createElement("span", undefined, "loading") },
+              createElement(VisibleNodeView)
+            ),
+            createElement(ControlsView)
+          )
         )
       )
     );
@@ -1600,13 +1644,13 @@ describe("React DOM adapter", () => {
         }
       }
 
-      const ProfileView = () => {
+      const ProfileView = observer(() => {
         const profile = useNode(ActivityRevivalNode, {});
 
         return createElement("output", undefined, profile.timezone);
-      };
+      });
 
-      const runtime = createRuntime();
+      const runtime = createRuntime({ development: true, eventBufferSize: 512 });
       await runtime.submit({ _tag: "RuntimeStart" });
       const handle = runtime.client.node<EmptyArgs, Profile>(ActivityRevivalNode, {});
 
@@ -1634,7 +1678,9 @@ describe("React DOM adapter", () => {
         );
       };
 
-      const view = render(createElement(FrondProvider, { runtime }, createElement(App)));
+      const view = await act(async () =>
+        render(createElement(FrondProvider, { runtime }, createElement(App)))
+      );
 
       expect(await view.findByText("ready-1")).toBeTruthy();
 
@@ -1718,9 +1764,11 @@ describe("React DOM adapter", () => {
       );
     };
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
-    const view = render(createElement(FrondProvider, { runtime }, createElement(ControlsView)));
+    const view = await act(async () =>
+      render(createElement(FrondProvider, { runtime }, createElement(ControlsView)))
+    );
 
     fireEvent.click(view.getByText("ensure"));
     expect(await view.findByText("ready")).toBeTruthy();
@@ -1791,9 +1839,11 @@ describe("React DOM adapter", () => {
       );
     };
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
-    const view = render(createElement(FrondProvider, { runtime }, createElement(ControlsView)));
+    const view = await act(async () =>
+      render(createElement(FrondProvider, { runtime }, createElement(ControlsView)))
+    );
 
     fireEvent.click(view.getByText("switch"));
     await act(async () => {
@@ -1896,9 +1946,11 @@ describe("React DOM adapter", () => {
       );
     };
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
-    const view = render(createElement(FrondProvider, { runtime }, createElement(ControlsView)));
+    const view = await act(async () =>
+      render(createElement(FrondProvider, { runtime }, createElement(ControlsView)))
+    );
 
     fireEvent.click(view.getByText("ensure"));
     expect(await view.findByText("ready")).toBeTruthy();
@@ -2006,26 +2058,28 @@ describe("React DOM adapter", () => {
       }
     }
 
-    const ProfilesView = () => {
+    const ProfilesView = observer(() => {
       const nodes = useNodes({
         b: [ParallelNodeB, {}],
         a: [ParallelNodeA, {}],
       });
 
       return createElement("output", undefined, `${nodes.a.timezone}/${nodes.b.timezone}`);
-    };
+    });
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
 
-    const view = render(
-      createElement(
-        FrondProvider,
-        { runtime },
+    const view = await act(async () =>
+      render(
         createElement(
-          Suspense,
-          { fallback: createElement("span", undefined, "loading") },
-          createElement(ProfilesView)
+          FrondProvider,
+          { runtime },
+          createElement(
+            Suspense,
+            { fallback: createElement("span", undefined, "loading") },
+            createElement(ProfilesView)
+          )
         )
       )
     );
@@ -2081,29 +2135,31 @@ describe("React DOM adapter", () => {
         });
       }
 
-      const ProfilesView = () => {
+      const ProfilesView = observer(() => {
         const nodes = useNodes({
           good: [GoodNode, {}],
           failing: [FailingNode, {}],
         });
 
         return createElement("output", undefined, Object.keys(nodes).sort().join(","));
-      };
+      });
 
-      const runtime = createRuntime();
+      const runtime = createRuntime({ development: true, eventBufferSize: 512 });
       await runtime.submit({ _tag: "RuntimeStart" });
 
-      const view = render(
-        createElement(
-          FrondProvider,
-          { runtime },
+      const view = await act(async () =>
+        render(
           createElement(
-            TestErrorBoundary,
-            { fallback: () => createElement("span", undefined, "child-error") },
+            FrondProvider,
+            { runtime },
             createElement(
-              Suspense,
-              { fallback: createElement("span", undefined, "loading") },
-              createElement(ProfilesView)
+              TestErrorBoundary,
+              { fallback: () => createElement("span", undefined, "child-error") },
+              createElement(
+                Suspense,
+                { fallback: createElement("span", undefined, "loading") },
+                createElement(ProfilesView)
+              )
             )
           )
         )
@@ -2160,26 +2216,28 @@ describe("React DOM adapter", () => {
       }
     }
 
-    const ProfilesView = ({ filter }: { readonly filter: string }) => {
+    const ProfilesView = observer(({ filter }: { readonly filter: string }) => {
       const nodes = useNodes({
         filtered: [FilteredNodesProfileNode, { filter }],
         static: [StaticNodesProfileNode, {}],
       });
 
       return createElement("output", undefined, `${nodes.filtered.label}/${nodes.static.label}`);
-    };
+    });
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
 
-    const view = render(
-      createElement(
-        FrondProvider,
-        { runtime },
+    const view = await act(async () =>
+      render(
         createElement(
-          Suspense,
-          { fallback: createElement("span", undefined, "loading") },
-          createElement(ProfilesView, { filter: "all" })
+          FrondProvider,
+          { runtime },
+          createElement(
+            Suspense,
+            { fallback: createElement("span", undefined, "loading") },
+            createElement(ProfilesView, { filter: "all" })
+          )
         )
       )
     );
@@ -2228,11 +2286,11 @@ describe("React DOM adapter", () => {
       }
     }
 
-    const NodesView = () => {
+    const NodesView = observer(() => {
       const nodes = useNodes({ profile: [StrictNodesEvictedNode, {}] });
 
       return createElement("output", undefined, nodes.profile.timezone);
-    };
+    });
 
     let evictPromise: Promise<unknown> | undefined;
     const ControlsView = () => {
@@ -2250,21 +2308,23 @@ describe("React DOM adapter", () => {
       );
     };
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
-    const view = render(
-      createElement(
-        StrictMode,
-        undefined,
+    const view = await act(async () =>
+      render(
         createElement(
-          FrondProvider,
-          { runtime },
+          StrictMode,
+          undefined,
           createElement(
-            Suspense,
-            { fallback: createElement("span", undefined, "loading") },
-            createElement(NodesView)
-          ),
-          createElement(ControlsView)
+            FrondProvider,
+            { runtime },
+            createElement(
+              Suspense,
+              { fallback: createElement("span", undefined, "loading") },
+              createElement(NodesView)
+            ),
+            createElement(ControlsView)
+          )
         )
       )
     );
@@ -2283,14 +2343,16 @@ describe("React DOM adapter", () => {
   });
 
   test("empty Preload renders children immediately", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
 
-    const view = render(
-      createElement(
-        FrondProvider,
-        { runtime },
-        createElement(Preload, { nodes: [] }, createElement("output", undefined, "ready"))
+    const view = await act(async () =>
+      render(
+        createElement(
+          FrondProvider,
+          { runtime },
+          createElement(Preload, { nodes: [] }, createElement("output", undefined, "ready"))
+        )
       )
     );
 
@@ -2331,27 +2393,29 @@ describe("React DOM adapter", () => {
       });
     }
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
 
-    const view = render(
-      createElement(
-        FrondProvider,
-        { runtime },
+    const view = await act(async () =>
+      render(
         createElement(
-          Suspense,
-          { fallback: createElement("span", undefined, "loading") },
+          FrondProvider,
+          { runtime },
           createElement(
-            Preload,
-            {
-              nodes: [
-                {
-                  a: [PreloadLayerNodeA, {}],
-                  b: [PreloadLayerNodeB, {}],
-                },
-              ],
-            },
-            createElement("output", undefined, "children")
+            Suspense,
+            { fallback: createElement("span", undefined, "loading") },
+            createElement(
+              Preload,
+              {
+                nodes: [
+                  {
+                    a: [PreloadLayerNodeA, {}],
+                    b: [PreloadLayerNodeB, {}],
+                  },
+                ],
+              },
+              createElement("output", undefined, "children")
+            )
           )
         )
       )
@@ -2408,25 +2472,27 @@ describe("React DOM adapter", () => {
       });
     }
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
 
-    const view = render(
-      createElement(
-        FrondProvider,
-        { runtime },
+    const view = await act(async () =>
+      render(
         createElement(
-          Suspense,
-          { fallback: createElement("span", undefined, "loading") },
+          FrondProvider,
+          { runtime },
           createElement(
-            Preload,
-            {
-              nodes: [
-                { first: [FirstPreloadLayerNode, {}] },
-                { second: [SecondPreloadLayerNode, {}] },
-              ],
-            },
-            createElement("output", undefined, "children")
+            Suspense,
+            { fallback: createElement("span", undefined, "loading") },
+            createElement(
+              Preload,
+              {
+                nodes: [
+                  { first: [FirstPreloadLayerNode, {}] },
+                  { second: [SecondPreloadLayerNode, {}] },
+                ],
+              },
+              createElement("output", undefined, "children")
+            )
           )
         )
       )
@@ -2461,29 +2527,31 @@ describe("React DOM adapter", () => {
         });
       }
 
-      const runtime = createRuntime();
+      const runtime = createRuntime({ development: true, eventBufferSize: 512 });
       await runtime.submit({ _tag: "RuntimeStart" });
 
-      const view = render(
-        createElement(
-          FrondProvider,
-          { runtime },
+      const view = await act(async () =>
+        render(
           createElement(
-            TestErrorBoundary,
-            {
-              fallback: (_reset, error) =>
-                error instanceof Runtime.FrondRuntimeReadError &&
-                getErrorRecovery(error) !== undefined
-                  ? createElement("output", undefined, `${error.kind}:${String(error.retryable)}`)
-                  : createElement("output", undefined, "unexpected-error"),
-            },
+            FrondProvider,
+            { runtime },
             createElement(
-              Suspense,
-              { fallback: createElement("span", undefined, "loading") },
+              TestErrorBoundary,
+              {
+                fallback: (_reset, error) =>
+                  error instanceof Runtime.FrondRuntimeReadError &&
+                  getErrorRecovery(error) !== undefined
+                    ? createElement("output", undefined, `${error.kind}:${String(error.retryable)}`)
+                    : createElement("output", undefined, "unexpected-error"),
+              },
               createElement(
-                Preload,
-                { nodes: [{ profile: [FailingPreloadNode, {}] }] },
-                createElement("output", undefined, "children")
+                Suspense,
+                { fallback: createElement("span", undefined, "loading") },
+                createElement(
+                  Preload,
+                  { nodes: [{ profile: [FailingPreloadNode, {}] }] },
+                  createElement("output", undefined, "children")
+                )
               )
             )
           )
@@ -2519,32 +2587,34 @@ describe("React DOM adapter", () => {
         });
       }
 
-      const ProfileView = () => {
+      const ProfileView = observer(() => {
         useNode(InvalidReadNode, {});
 
         return createElement("output", undefined, "ready");
-      };
+      });
 
-      const runtime = createRuntime();
+      const runtime = createRuntime({ development: true, eventBufferSize: 512 });
       await runtime.submit({ _tag: "RuntimeStart" });
 
-      const view = render(
-        createElement(
-          FrondProvider,
-          { runtime },
+      const view = await act(async () =>
+        render(
           createElement(
-            TestErrorBoundary,
-            {
-              fallback: (_reset, error) =>
-                error instanceof Runtime.FrondRuntimeReadError &&
-                getErrorRecovery(error) === undefined
-                  ? createElement("output", undefined, `${error.kind}:${String(error.retryable)}`)
-                  : createElement("output", undefined, "unexpected-error"),
-            },
+            FrondProvider,
+            { runtime },
             createElement(
-              Suspense,
-              { fallback: createElement("span", undefined, "loading") },
-              createElement(ProfileView)
+              TestErrorBoundary,
+              {
+                fallback: (_reset, error) =>
+                  error instanceof Runtime.FrondRuntimeReadError &&
+                  getErrorRecovery(error) === undefined
+                    ? createElement("output", undefined, `${error.kind}:${String(error.retryable)}`)
+                    : createElement("output", undefined, "unexpected-error"),
+              },
+              createElement(
+                Suspense,
+                { fallback: createElement("span", undefined, "loading") },
+                createElement(ProfileView)
+              )
             )
           )
         )
@@ -2569,32 +2639,34 @@ describe("React DOM adapter", () => {
         });
       }
 
-      const ProfileView = () => {
+      const ProfileView = observer(() => {
         useNode(StoppedRuntimeNode, {});
 
         return createElement("output", undefined, "ready");
-      };
+      });
 
-      const runtime = createRuntime();
+      const runtime = createRuntime({ development: true, eventBufferSize: 512 });
       await runtime.submit({ _tag: "RuntimeStart" });
       await runtime.submit({ _tag: "RuntimeStop", reason: "test stop" });
 
-      const view = render(
-        createElement(
-          FrondProvider,
-          { runtime },
+      const view = await act(async () =>
+        render(
           createElement(
-            TestErrorBoundary,
-            {
-              fallback: (_reset, error) =>
-                error instanceof Runtime.FrondRuntimeReadError
-                  ? createElement("output", undefined, `${error.kind}:${String(error.retryable)}`)
-                  : createElement("output", undefined, "unexpected-error"),
-            },
+            FrondProvider,
+            { runtime },
             createElement(
-              Suspense,
-              { fallback: createElement("span", undefined, "loading") },
-              createElement(ProfileView)
+              TestErrorBoundary,
+              {
+                fallback: (_reset, error) =>
+                  error instanceof Runtime.FrondRuntimeReadError
+                    ? createElement("output", undefined, `${error.kind}:${String(error.retryable)}`)
+                    : createElement("output", undefined, "unexpected-error"),
+              },
+              createElement(
+                Suspense,
+                { fallback: createElement("span", undefined, "loading") },
+                createElement(ProfileView)
+              )
             )
           )
         )
@@ -2630,23 +2702,25 @@ describe("React DOM adapter", () => {
       }
     }
 
-    const ProfileView = () => {
+    const ProfileView = observer(() => {
       const profile = useNode(PendingProfileNode, {});
 
       return createElement("output", undefined, profile.timezone);
-    };
+    });
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     await runtime.submit({ _tag: "RuntimeStart" });
 
-    const firstView = render(
-      createElement(
-        FrondProvider,
-        { runtime },
+    const firstView = await act(async () =>
+      render(
         createElement(
-          Suspense,
-          { fallback: createElement("span", undefined, "loading") },
-          createElement(ProfileView)
+          FrondProvider,
+          { runtime },
+          createElement(
+            Suspense,
+            { fallback: createElement("span", undefined, "loading") },
+            createElement(ProfileView)
+          )
         )
       )
     );
@@ -2655,14 +2729,16 @@ describe("React DOM adapter", () => {
     expect(attempts).toBe(1);
     firstView.unmount();
 
-    const secondView = render(
-      createElement(
-        FrondProvider,
-        { runtime },
+    const secondView = await act(async () =>
+      render(
         createElement(
-          Suspense,
-          { fallback: createElement("span", undefined, "loading") },
-          createElement(ProfileView)
+          FrondProvider,
+          { runtime },
+          createElement(
+            Suspense,
+            { fallback: createElement("span", undefined, "loading") },
+            createElement(ProfileView)
+          )
         )
       )
     );
@@ -2705,44 +2781,51 @@ describe("React DOM adapter", () => {
       }
     }
 
-    const ProfileView = () => {
+    const ProfileView = observer(() => {
       const profile = useNode(RuntimeSwapNode, {});
 
       return createElement("output", undefined, profile.timezone);
-    };
+    });
 
-    const firstRuntime = createRuntime();
+    const firstRuntime = createRuntime({ development: true, eventBufferSize: 512 });
     const secondRuntime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       specOverrides: [{ from: RuntimeSwapNode, to: RuntimeSwapOverrideNode }],
     });
     await firstRuntime.submit({ _tag: "RuntimeStart" });
     await secondRuntime.submit({ _tag: "RuntimeStart" });
 
-    const view = render(
-      createElement(
-        FrondProvider,
-        { runtime: firstRuntime },
+    const view = await act(async () =>
+      render(
         createElement(
-          Suspense,
-          { fallback: createElement("span", undefined, "loading") },
-          createElement(ProfileView)
+          FrondProvider,
+          { runtime: firstRuntime },
+          createElement(
+            Suspense,
+            { fallback: createElement("span", undefined, "loading") },
+            createElement(ProfileView)
+          )
         )
       )
     );
 
     expect(await view.findByText("base")).toBeTruthy();
 
-    view.rerender(
-      createElement(
-        FrondProvider,
-        { runtime: secondRuntime },
+    // The next runtime is cold: await the React.use readiness retry.
+    await act(async () => {
+      view.rerender(
         createElement(
-          Suspense,
-          { fallback: createElement("span", undefined, "loading") },
-          createElement(ProfileView)
+          FrondProvider,
+          { runtime: secondRuntime },
+          createElement(
+            Suspense,
+            { fallback: createElement("span", undefined, "loading") },
+            createElement(ProfileView)
+          )
         )
-      )
-    );
+      );
+    });
 
     expect(await view.findByText("override")).toBeTruthy();
   });
@@ -2760,7 +2843,7 @@ describe("React DOM adapter", () => {
         });
       }
 
-      const ProfilesView = ({ includeExtra }: { readonly includeExtra: boolean }) => {
+      const ProfilesView = observer(({ includeExtra }: { readonly includeExtra: boolean }) => {
         const nodes = useNodes(
           includeExtra
             ? {
@@ -2773,24 +2856,26 @@ describe("React DOM adapter", () => {
         );
 
         return createElement("output", undefined, Object.keys(nodes).sort().join(","));
-      };
+      });
 
-      const runtime = createRuntime();
+      const runtime = createRuntime({ development: true, eventBufferSize: 512 });
       await runtime.submit({ _tag: "RuntimeStart" });
 
-      const view = render(
-        createElement(
-          FrondProvider,
-          { runtime },
+      const view = await act(async () =>
+        render(
           createElement(
-            TestErrorBoundary,
-            {
-              fallback: () => createElement("span", undefined, "key-set-error"),
-            },
+            FrondProvider,
+            { runtime },
             createElement(
-              Suspense,
-              { fallback: createElement("span", undefined, "loading") },
-              createElement(ProfilesView, { includeExtra: false })
+              TestErrorBoundary,
+              {
+                fallback: () => createElement("span", undefined, "key-set-error"),
+              },
+              createElement(
+                Suspense,
+                { fallback: createElement("span", undefined, "loading") },
+                createElement(ProfilesView, { includeExtra: false })
+              )
             )
           )
         )

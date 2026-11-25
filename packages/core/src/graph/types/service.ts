@@ -50,6 +50,7 @@ export interface DriverOperationTimeouts {
 export type DriverOperationTimeoutOptions = Partial<DriverOperationTimeouts>;
 
 export interface GraphSystemOptions {
+  readonly development: boolean;
   readonly runtimeId: string;
   readonly syncClock?: { readonly now: () => number } | undefined;
   readonly specOverrides?: ReadonlyArray<SpecOverride> | undefined;

@@ -68,7 +68,7 @@ test("aborting an action interrupts and awaits its parked validity sink", async 
       );
     },
   };
-  const runtime = createRuntime({ sinks: [sink] });
+  const runtime = createRuntime({ development: true, eventBufferSize: 512, sinks: [sink] });
   try {
     const handle = runtime.client.node(Resource, {});
     await handle.ensureReadyNode();

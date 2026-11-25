@@ -50,6 +50,8 @@ import type { RuntimeSubmission } from "./submissions";
  * are inspection/projection reads only and must not schedule graph work.
  */
 export interface Runtime {
+  /** Whether this runtime enables development checks and committed-result freezing. */
+  readonly development: boolean;
   readonly resolveNodeIdSync: (request: NodeRequest) => NodeRead["nodeId"];
   readonly getStatusSync: () => RuntimeStatus;
   readonly readNodeSnapshotSync: (nodeId: NodeRead["nodeId"]) => RuntimeNodeSnapshotLookup<unknown>;

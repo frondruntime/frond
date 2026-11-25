@@ -29,7 +29,6 @@ import {
   sameDependencyIds,
 } from "./dependencyDefinitions";
 import type { NodeDescriptor } from "./descriptor";
-import { developmentChecks } from "./developmentChecks";
 import {
   type KeyResolutionFailure,
   type ResolvedNodeIdentity,
@@ -65,15 +64,9 @@ function materializeCellIfFresh(
     planningOutcome._tag === "Success"
       ? planningOutcome.value.base
       : baseForInvalidPlan(request.args);
-  // Seed the revision past any evicted predecessor for this node id so
-  // `readVersion` stays monotonic across evict + recreate instead of ABA-ing.
-  // Consume the entry: the recreated cell starts past the recorded value and a
-  // later eviction re-records it, so keeping it would only leak one map entry
-  // per distinct evicted node id.
-  const evictedRevision = state.evictedRevisionByNodeId.get(nodeId);
-  if (evictedRevision !== undefined) {
-    state.evictedRevisionByNodeId.delete(nodeId);
-  }
+  // Seed the revision past every evicted cell, any evicted predecessor for
+  // this node id included, so `readVersion` stays monotonic across evict +
+  // recreate instead of ABA-ing.
   const nodeState = makeGraphCellState(
     {
       phase:
@@ -84,7 +77,7 @@ function materializeCellIfFresh(
       nextAttemptId: 0,
       nextLiveGeneration: 1,
     } satisfies GraphNodeState,
-    evictedRevision === undefined ? 0 : evictedRevision + 1
+    state.evictedRevisionFloor + 1
   );
 
   // Owner: planning owns graph identity and dependency records before readiness.
@@ -93,6 +86,7 @@ function materializeCellIfFresh(
     state.specByTag.set(descriptor.tag, request.spec);
   }
   state.nodes.set(nodeId, {
+    development: state.development,
     jobs: state.jobs,
     syncClock: state.syncClock,
     nodeId,
@@ -114,6 +108,7 @@ function materializeCellIfFresh(
     notifyActionCompleted: state.notifyActionCompleted,
     notifyResultValidityChanged: state.notifyResultValidityChanged,
     notifyReadinessFailed: state.notifyReadinessFailed,
+    reportObserverFailure: state.reportObserverFailure,
     wiredGeneration: 0,
   });
 }
@@ -176,8 +171,7 @@ function planNode(
     existing._tag === "Found" &&
     currentProjection._tag !== "Removed" &&
     currentCell.cell.wiredGeneration === state.wiringGeneration &&
-    (!developmentChecks.replanDependencies ||
-      confirmWiredDependencies(state, currentCell.cell, descriptor, request))
+    (!state.development || confirmWiredDependencies(state, currentCell.cell, descriptor, request))
   ) {
     return projectNodeRead(currentCell.cell, currentState);
   }

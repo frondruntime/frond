@@ -163,7 +163,7 @@ describe("report coverage: one failure, exactly one report", () => {
 
   test("an action on a fresh node whose implicit acquire fails reports only the acquire", async () => {
     const { reports, sink } = collectReports();
-    const runtime = createRuntime({ sinks: [sink] });
+    const runtime = createRuntime({ development: true, eventBufferSize: 512, sinks: [sink] });
     const node = runtime.client.node(FailingAcquireNode, {});
 
     const result = await unwrapEffect(node.action("touch", undefined));
@@ -181,7 +181,7 @@ describe("report coverage: one failure, exactly one report", () => {
 
   test("an action on a ready node whose dependency re-failed reports only the dependency", async () => {
     const { reports, sink } = collectReports();
-    const runtime = createRuntime({ sinks: [sink] });
+    const runtime = createRuntime({ development: true, eventBufferSize: 512, sinks: [sink] });
     const dependent = runtime.client.node(DependentNode, {});
     const wallet = runtime.client.node(ExpiringWalletNode, {});
     const quote = runtime.client.node(ExpiringQuoteNode, {});
@@ -205,7 +205,7 @@ describe("report coverage: one failure, exactly one report", () => {
 
   test("an action observing one reported and one unreported dependency reports the latter once", async () => {
     const { reports, sink } = collectReports();
-    const runtime = createRuntime({ sinks: [sink] });
+    const runtime = createRuntime({ development: true, eventBufferSize: 512, sinks: [sink] });
     const dependent = runtime.client.node(DependentNode, {});
     const wallet = runtime.client.node(ExpiringWalletNode, {});
 
@@ -225,7 +225,7 @@ describe("report coverage: one failure, exactly one report", () => {
 
   test("a dependency that fails without a readiness attempt is still reported once", async () => {
     const { reports, sink } = collectReports();
-    const runtime = createRuntime({ sinks: [sink] });
+    const runtime = createRuntime({ development: true, eventBufferSize: 512, sinks: [sink] });
 
     await runtime.client
       .node(InvalidKeyParentNode, {})

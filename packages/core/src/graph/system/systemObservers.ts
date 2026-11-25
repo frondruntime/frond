@@ -47,6 +47,8 @@ export interface GraphSystemObservers {
   readonly notifyLiveDemandChanged: GraphLiveDemandObserver;
   readonly notifyLiveFailures: GraphLiveFailureObserver;
   readonly notifyReadinessFailed: GraphReadinessFailureObserver;
+  /** Reports a reader's failure the graph observed outside an observer channel. */
+  readonly reportObserverFailure: GraphObserverFailureObserver;
   readonly notifyCleanupFailures: GraphCleanupFailureObserver;
   readonly notifyOperationStarted: GraphOperationStartObserver;
   readonly notifyActionCompleted: GraphActionCompletionObserver;
@@ -131,6 +133,7 @@ export function makeGraphSystemObservers(): GraphSystemObservers {
     notifyLiveDemandChanged: liveDemandChanges.notifyAll,
     notifyLiveFailures: liveFailures.notifyAll,
     notifyReadinessFailed: readinessFailures.notifyAll,
+    reportObserverFailure,
     notifyCleanupFailures: cleanupFailures.notifyAll,
     notifyOperationStarted: operationStarts.notifyAll,
     notifyActionCompleted: actionCompletions.notifyAll,

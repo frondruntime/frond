@@ -2,7 +2,7 @@
 // different args under the same key aligns the node to its args; the last mount wins.
 // Each test file registers its own cleanup; see setup.ts.
 import { afterEach, describe, expect, test } from "bun:test";
-import "global-jsdom/register";
+import "./setup";
 import {
   createRuntime,
   Driver,
@@ -15,12 +15,9 @@ import {
 } from "@frondruntime/core";
 import { act, cleanup, render } from "@testing-library/react";
 import { Effect } from "effect";
+import { observer } from "mobx-react-lite";
 import { Activity, createElement, type ReactNode, StrictMode, Suspense } from "react";
 import { FrondProvider, useNode, useNodeRead, useNodeState, useNodes } from "../src";
-
-(
-  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
-).IS_REACT_ACT_ENVIRONMENT = true;
 
 afterEach(() => {
   cleanup();
@@ -161,7 +158,7 @@ const label = (prefix: string, node: PageNodeInstance): string =>
   `${prefix}${node.args.page}:${node.result}`;
 
 async function startedRuntime(): Promise<RuntimeInstance> {
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   await runtime.submit({ _tag: "RuntimeStart" });
   return runtime;
 }
@@ -215,10 +212,10 @@ function readers(spec: object): ReadonlyArray<readonly [string, PageReader]> {
     ],
     [
       "useNode",
-      ({ page, name = "" }) => {
+      observer(({ page, name = "" }) => {
         const node = useNode(Spec, { page } as never) as unknown as PageNodeInstance;
         return createElement("output", undefined, label(name, node));
-      },
+      }),
     ],
     [
       "useNodeState",
@@ -231,12 +228,12 @@ function readers(spec: object): ReadonlyArray<readonly [string, PageReader]> {
     ],
     [
       "useNodes",
-      ({ page, name = "" }) => {
+      observer(({ page, name = "" }) => {
         const nodes = useNodes({ only: [Spec, { page }] } as never) as unknown as {
           readonly only: PageNodeInstance;
         };
         return createElement("output", undefined, label(name, nodes.only));
-      },
+      }),
     ],
   ];
 }
@@ -249,7 +246,7 @@ describe("React readers align a ready node's args on mount", () => {
       const runtime = await startedRuntime();
       await runtime.client.node<PageArgs, string>(PageNode, { page: 1 }).ensureReady();
 
-      const view = render(tree(runtime, createElement(Reader, { page: 2 })));
+      const view = await act(async () => render(tree(runtime, createElement(Reader, { page: 2 }))));
 
       expect(await view.findByText("2:page-2")).toBeTruthy();
       expect(storedArgs(runtime, PageNode, { page: 2 })).toEqual({ page: 2 });
@@ -265,7 +262,9 @@ describe("React readers align a ready node's args on mount", () => {
     const runtime = await startedRuntime();
     await runtime.client.node<PageArgs, string>(PageNode, { page: 1 }).ensureReady();
 
-    const view = render(tree(runtime, createElement(Reader, { page: 2 }), true));
+    const view = await act(async () =>
+      render(tree(runtime, createElement(Reader, { page: 2 }), true))
+    );
 
     expect(await view.findByText("2:page-2")).toBeTruthy();
     await flush();
@@ -278,12 +277,12 @@ describe("React readers align a ready node's args on mount", () => {
     const Reader = new Map(readers(PageNode)).get("useNodeState") as PageReader;
     const runtime = await startedRuntime();
 
-    const view = render(tree(runtime, createElement(Reader, { page: 1 })));
+    const view = await act(async () => render(tree(runtime, createElement(Reader, { page: 1 }))));
     expect(await view.findByText("1:page-1")).toBeTruthy();
     await flush();
     expect(counts.refreshes).toBe(0);
 
-    view.rerender(tree(runtime, createElement(Reader, { page: 2 })));
+    await act(async () => view.rerender(tree(runtime, createElement(Reader, { page: 2 }))));
 
     expect(await view.findByText("2:page-2")).toBeTruthy();
     await flush();
@@ -309,10 +308,10 @@ describe("React readers align a ready node's args on mount", () => {
         )
       );
 
-    const view = render(both(false));
+    const view = await act(async () => render(both(false)));
     expect(await view.findByText("A:1:page-1")).toBeTruthy();
 
-    view.rerender(both(true));
+    await act(async () => view.rerender(both(true)));
 
     expect(await view.findByText("A:2:page-2")).toBeTruthy();
     expect(await view.findByText("B:2:page-2")).toBeTruthy();
@@ -323,7 +322,7 @@ describe("React readers align a ready node's args on mount", () => {
     expect(settledUpdates).toBe(1);
 
     for (let round = 0; round < 3; round += 1) {
-      view.rerender(both(true));
+      await act(async () => view.rerender(both(true)));
       await flush();
     }
 
@@ -342,14 +341,16 @@ describe("React readers align a ready node's args on mount", () => {
     const runtime = await startedRuntime();
     await runtime.client.node<PageArgs, string>(PageNode, { page: 1 }).ensureReady();
 
-    const view = render(
-      tree(
-        runtime,
-        createElement(
-          "div",
-          undefined,
-          createElement(ReaderA, { page: 2, name: "A:" }),
-          createElement(ReaderB, { page: 2, name: "B:" })
+    const view = await act(async () =>
+      render(
+        tree(
+          runtime,
+          createElement(
+            "div",
+            undefined,
+            createElement(ReaderA, { page: 2, name: "A:" }),
+            createElement(ReaderB, { page: 2, name: "B:" })
+          )
         )
       )
     );
@@ -374,16 +375,18 @@ describe("React readers align a ready node's args on mount", () => {
       const runtime = await startedRuntime();
       await runtime.client.node<PageArgs, string>(PageNode, { page: 1 }).ensureReady();
 
-      const view = render(
-        tree(
-          runtime,
-          createElement(
-            "div",
-            undefined,
-            createElement(ReaderB, { page: 2, name: "B:" }),
-            createElement(ReaderA, { page: 1, name: "A:" })
-          ),
-          strict
+      const view = await act(async () =>
+        render(
+          tree(
+            runtime,
+            createElement(
+              "div",
+              undefined,
+              createElement(ReaderB, { page: 2, name: "B:" }),
+              createElement(ReaderA, { page: 1, name: "A:" })
+            ),
+            strict
+          )
         )
       );
       await flush();
@@ -418,8 +421,13 @@ describe("React readers align a ready node's args on mount", () => {
     const runtime = await startedRuntime();
     await runtime.client.node<PageArgs, string>(PageNode, { page: 1 }).ensureReady();
 
-    const view = render(
-      tree(runtime, createElement(Parent, undefined, createElement(Child, { page: 2, name: "C:" })))
+    const view = await act(async () =>
+      render(
+        tree(
+          runtime,
+          createElement(Parent, undefined, createElement(Child, { page: 2, name: "C:" }))
+        )
+      )
     );
     await flush();
 
@@ -435,13 +443,13 @@ describe("React readers align a ready node's args on mount", () => {
     const runtime = await startedRuntime();
     await runtime.client.node<PageArgs, string>(PageNode, { page: 1 }).ensureReady();
 
-    const view = render(tree(runtime, createElement(Reader, { page: 2 })));
+    const view = await act(async () => render(tree(runtime, createElement(Reader, { page: 2 }))));
     await flush();
     expect(counts.refreshes).toBe(1);
     expect(await view.findByText("1:page-1")).toBeTruthy();
     expect(storedArgs(runtime, PageNode, { page: 2 })).toEqual({ page: 1 });
 
-    view.rerender(tree(runtime, createElement(Reader, { page: 1 })));
+    await act(async () => view.rerender(tree(runtime, createElement(Reader, { page: 1 }))));
     await flush();
 
     expect(counts.refreshes).toBe(1);
@@ -458,19 +466,19 @@ describe("React readers align a ready node's args on mount", () => {
     const shown = (mode: "visible" | "hidden") =>
       tree(runtime, createElement(Activity, { mode }, createElement(Reader, { page: 2 })));
 
-    const view = render(shown("visible"));
+    const view = await act(async () => render(shown("visible")));
     expect(await view.findByText("2:page-2")).toBeTruthy();
     await flush();
     expect(counts.refreshes).toBe(1);
 
-    view.rerender(shown("hidden"));
+    await act(async () => view.rerender(shown("hidden")));
     await flush();
     await act(async () => {
       await handle.updateArgs({ page: 3 });
     });
     expect(counts.refreshes).toBe(2);
 
-    view.rerender(shown("visible"));
+    await act(async () => view.rerender(shown("visible")));
     await flush();
 
     expect(counts.refreshes).toBe(2);
@@ -488,18 +496,18 @@ describe("React readers align a ready node's args on mount", () => {
       const shown = (mode: "visible" | "hidden", page: number) =>
         tree(runtime, createElement(Activity, { mode }, createElement(Reader, { page })));
 
-      const view = render(shown("visible", 1));
+      const view = await act(async () => render(shown("visible", 1)));
       expect(await view.findByText("1:page-1")).toBeTruthy();
       await flush();
       expect(counts.refreshes).toBe(0);
 
-      view.rerender(shown("hidden", 1));
+      await act(async () => view.rerender(shown("hidden", 1)));
       await flush();
-      view.rerender(shown("hidden", 2));
+      await act(async () => view.rerender(shown("hidden", 2)));
       await flush();
       expect(counts.refreshes).toBe(0);
 
-      view.rerender(shown("visible", 2));
+      await act(async () => view.rerender(shown("visible", 2)));
       await flush();
 
       expect(counts.refreshes).toBe(1);
@@ -519,9 +527,9 @@ describe("React readers align a ready node's args on mount", () => {
       const shown = (mode: "visible" | "hidden", page: number) =>
         tree(runtime, createElement(Activity, { mode }, createElement(Reader, { page })));
 
-      const view = render(shown("visible", 1));
+      const view = await act(async () => render(shown("visible", 1)));
       expect(await view.findByText("1:page-1")).toBeTruthy();
-      view.rerender(shown("visible", 2));
+      await act(async () => view.rerender(shown("visible", 2)));
       await flush();
       expect(counts.refreshes).toBe(1);
       expect(storedArgs(runtime, PageNode, { page: 1 })).toEqual({ page: 1 });
@@ -531,13 +539,13 @@ describe("React readers align a ready node's args on mount", () => {
       control.holdPage(3);
       const outside = handle.updateArgs({ page: 3 });
       await flush();
-      view.rerender(shown("visible", 3));
+      await act(async () => view.rerender(shown("visible", 3)));
       await flush();
       expect(counts.refreshes).toBe(2);
 
       // While the reader is hidden, that update succeeds and another writer
       // moves the node on to page 4.
-      view.rerender(shown("hidden", 3));
+      await act(async () => view.rerender(shown("hidden", 3)));
       await flush();
       await act(async () => {
         control.releasePage(3);
@@ -548,7 +556,7 @@ describe("React readers align a ready node's args on mount", () => {
       });
       expect(counts.refreshes).toBe(3);
 
-      view.rerender(shown("visible", 3));
+      await act(async () => view.rerender(shown("visible", 3)));
       await flush();
 
       expect(counts.refreshes).toBe(3);
@@ -567,20 +575,24 @@ describe("React readers align a ready node's args on mount", () => {
         const Reader: PageReader =
           hook === "useNodeRead"
             ? (new Map(readers(PageNode)).get(hook) as PageReader)
-            : ({ page }) => {
+            : observer(({ page }) => {
                 useNodes({ only: [PageNode, { page }] } as never);
                 return createElement("output", undefined, "nodes");
-              };
+              });
         // A fixed clock gives the operations of both incarnations one start time.
-        const runtime = createRuntime({ syncClock: { now: () => 0 } });
+        const runtime = createRuntime({
+          development: true,
+          eventBufferSize: 512,
+          syncClock: { now: () => 0 },
+        });
         await runtime.submit({ _tag: "RuntimeStart" });
         const handle = runtime.client.node<PageArgs, string>(PageNode, { page: 1 });
         const shown = (mode: "visible" | "hidden", page: number) =>
           tree(runtime, createElement(Activity, { mode }, createElement(Reader, { page })));
 
-        const view = render(shown("visible", 1));
+        const view = await act(async () => render(shown("visible", 1)));
         expect(await view.findByText(hook === "useNodeRead" ? "1:page-1" : "nodes")).toBeTruthy();
-        view.rerender(shown("visible", 2));
+        await act(async () => view.rerender(shown("visible", 2)));
         await flush();
         expect(storedArgs(runtime, PageNode, { page: 1 })).toEqual({ page: 1 });
 
@@ -590,9 +602,9 @@ describe("React readers align a ready node's args on mount", () => {
         control.holdPage(3);
         const outside = handle.updateArgs({ page: 3 });
         await flush();
-        view.rerender(shown("visible", 3));
+        await act(async () => view.rerender(shown("visible", 3)));
         await flush();
-        view.rerender(shown("hidden", 3));
+        await act(async () => view.rerender(shown("hidden", 3)));
         await flush();
         await act(async () => {
           control.releasePage(3);
@@ -622,7 +634,7 @@ describe("React readers align a ready node's args on mount", () => {
         }
         const started = await argsUpdatesStarted(runtime);
 
-        view.rerender(shown("visible", 3));
+        await act(async () => view.rerender(shown("visible", 3)));
         await flush();
 
         expect(await argsUpdatesStarted(runtime)).toBe(started);
@@ -645,7 +657,7 @@ describe("React readers align a ready node's args on mount", () => {
 
     for (const [, Reader] of readers(PageNode)) {
       // A fresh literal each mount: the comparison is by value, not by reference.
-      const view = render(tree(runtime, createElement(Reader, { page: 1 })));
+      const view = await act(async () => render(tree(runtime, createElement(Reader, { page: 1 }))));
       expect(await view.findByText("1:page-1")).toBeTruthy();
       await flush();
       view.unmount();
@@ -670,15 +682,15 @@ describe("after a failed update a reader compares its next args with the node's"
       if (path === "mount") {
         await runtime.client.node<PageArgs, string>(PageNode, { page: 1 }).ensureReady();
         control.hold();
-        view = render(show(2));
+        view = await act(async () => render(show(2)));
       } else {
-        view = render(show(1));
+        view = await act(async () => render(show(1)));
         expect(await view.findByText("1:page-1")).toBeTruthy();
         control.hold();
-        view.rerender(show(2));
+        await act(async () => view.rerender(show(2)));
       }
       await flush();
-      view.rerender(show(3));
+      await act(async () => view.rerender(show(3)));
       await flush();
       await act(async () => {
         control.release();
@@ -690,7 +702,7 @@ describe("after a failed update a reader compares its next args with the node's"
       expect(await argsUpdatesStarted(runtime)).toBe(2);
 
       control.failing = false;
-      view.rerender(show(2));
+      await act(async () => view.rerender(show(2)));
       await flush();
 
       expect(await argsUpdatesStarted(runtime)).toBe(3);
@@ -705,11 +717,11 @@ describe("after a failed update a reader compares its next args with the node's"
     const runtime = await startedRuntime();
     const show = (page: number) => tree(runtime, createElement(Reader, { page }));
 
-    const view = render(show(1));
+    const view = await act(async () => render(show(1)));
     expect(await view.findByText("1:page-1")).toBeTruthy();
     control.holdPage(2);
     control.holdPage(3);
-    view.rerender(show(2));
+    await act(async () => view.rerender(show(2)));
     await flush();
     const outside = runtime.client.node<PageArgs, string>(PageNode, { page: 3 }).updateArgs({
       page: 3,
@@ -732,7 +744,7 @@ describe("after a failed update a reader compares its next args with the node's"
     expect(counts.refreshes).toBe(2);
 
     control.failing = false;
-    view.rerender(show(3));
+    await act(async () => view.rerender(show(3)));
     await flush();
 
     expect(counts.refreshes).toBe(3);
@@ -750,10 +762,10 @@ describe("a reader moved to another runtime aligns the node there", () => {
       const second = await startedRuntime();
       await second.client.node<PageArgs, string>(PageNode, { page: 1 }).ensureReady();
 
-      const view = render(tree(first, createElement(Reader, { page: 2 })));
+      const view = await act(async () => render(tree(first, createElement(Reader, { page: 2 }))));
       expect(await view.findByText("2:page-2")).toBeTruthy();
 
-      view.rerender(tree(second, createElement(Reader, { page: 2 })));
+      await act(async () => view.rerender(tree(second, createElement(Reader, { page: 2 }))));
       await flush();
 
       expect(await view.findByText("2:page-2")).toBeTruthy();
@@ -767,7 +779,7 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
     const left = makeSingletonPageNode("react-mount-args/nodes-left");
     const right = makeSingletonPageNode("react-mount-args/nodes-right");
     const runtime = await startedRuntime();
-    const Pair = ({ leftPage }: { readonly leftPage: number }) => {
+    const Pair = observer(({ leftPage }: { readonly leftPage: number }) => {
       const nodes = useNodes({
         left: [left.PageNode, { page: leftPage }],
         right: [right.PageNode, { page: 1 }],
@@ -777,9 +789,9 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
         undefined,
         `${label("", nodes.left)}|${label("", nodes.right)}`
       );
-    };
+    });
 
-    const view = render(tree(runtime, createElement(Pair, { leftPage: 1 })));
+    const view = await act(async () => render(tree(runtime, createElement(Pair, { leftPage: 1 }))));
     expect(await view.findByText("1:page-1|1:page-1")).toBeTruthy();
 
     // Another request moves the sibling; the useNodes reader keeps its old args.
@@ -791,7 +803,7 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
     expect(await view.findByText("1:page-1|3:page-3")).toBeTruthy();
     expect(right.counts.refreshes).toBe(1);
 
-    view.rerender(tree(runtime, createElement(Pair, { leftPage: 2 })));
+    await act(async () => view.rerender(tree(runtime, createElement(Pair, { leftPage: 2 }))));
 
     expect(await view.findByText("2:page-2|3:page-3")).toBeTruthy();
     await flush();
@@ -804,7 +816,7 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
     const left = makeKeyedPageNode("react-mount-args/nodes-rebuild-left");
     const right = makeSingletonPageNode("react-mount-args/nodes-rebuild-right");
     const runtime = await startedRuntime();
-    const Pair = ({ page }: { readonly page: number }) => {
+    const Pair = observer(({ page }: { readonly page: number }) => {
       const nodes = useNodes({
         left: [left.PageNode, { page }],
         right: [right.PageNode, { page }],
@@ -814,12 +826,12 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
         undefined,
         `${label("", nodes.left)}|${label("", nodes.right)}`
       );
-    };
+    });
 
-    const view = render(tree(runtime, createElement(Pair, { page: 1 })));
+    const view = await act(async () => render(tree(runtime, createElement(Pair, { page: 1 }))));
     expect(await view.findByText("1:page-1|1:page-1")).toBeTruthy();
 
-    view.rerender(tree(runtime, createElement(Pair, { page: 2 })));
+    await act(async () => view.rerender(tree(runtime, createElement(Pair, { page: 2 }))));
 
     expect(await view.findByText("2:page-2|2:page-2")).toBeTruthy();
     await flush();
@@ -831,36 +843,32 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
     const left = makeSingletonPageNode("react-mount-args/nodes-retry-left");
     const right = makeGatedPageNode("react-mount-args/nodes-retry-right");
     const runtime = await startedRuntime();
-    const Pair = ({
-      leftPage,
-      rightPage,
-    }: {
-      readonly leftPage: number;
-      readonly rightPage: number;
-    }) => {
-      const nodes = useNodes({
-        left: [left.PageNode, { page: leftPage }],
-        right: [right.PageNode, { page: rightPage }],
-      }) as unknown as { readonly left: PageNodeInstance; readonly right: PageNodeInstance };
-      return createElement(
-        "output",
-        undefined,
-        `${label("", nodes.left)}|${label("", nodes.right)}`
-      );
-    };
+    const Pair = observer(
+      ({ leftPage, rightPage }: { readonly leftPage: number; readonly rightPage: number }) => {
+        const nodes = useNodes({
+          left: [left.PageNode, { page: leftPage }],
+          right: [right.PageNode, { page: rightPage }],
+        }) as unknown as { readonly left: PageNodeInstance; readonly right: PageNodeInstance };
+        return createElement(
+          "output",
+          undefined,
+          `${label("", nodes.left)}|${label("", nodes.right)}`
+        );
+      }
+    );
     const show = (leftPage: number, rightPage: number) =>
       tree(runtime, createElement(Pair, { leftPage, rightPage }));
 
-    const view = render(show(1, 1));
+    const view = await act(async () => render(show(1, 1)));
     expect(await view.findByText("1:page-1|1:page-1")).toBeTruthy();
 
-    view.rerender(show(1, 2));
+    await act(async () => view.rerender(show(1, 2)));
     await flush();
     expect(right.counts.refreshes).toBe(1);
     expect(storedArgs(runtime, right.PageNode, { page: 1 })).toEqual({ page: 1 });
 
     right.control.failing = false;
-    view.rerender(show(2, 2));
+    await act(async () => view.rerender(show(2, 2)));
 
     expect(await view.findByText("2:page-2|2:page-2")).toBeTruthy();
     await flush();
@@ -872,36 +880,32 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
     const left = makeKeyedPageNode("react-mount-args/nodes-no-retry-left");
     const right = makeGatedPageNode("react-mount-args/nodes-no-retry-right");
     const runtime = await startedRuntime();
-    const Pair = ({
-      leftPage,
-      rightPage,
-    }: {
-      readonly leftPage: number;
-      readonly rightPage: number;
-    }) => {
-      const nodes = useNodes({
-        left: [left.PageNode, { page: leftPage }],
-        right: [right.PageNode, { page: rightPage }],
-      }) as unknown as { readonly left: PageNodeInstance; readonly right: PageNodeInstance };
-      return createElement(
-        "output",
-        undefined,
-        `${label("", nodes.left)}|${label("", nodes.right)}`
-      );
-    };
+    const Pair = observer(
+      ({ leftPage, rightPage }: { readonly leftPage: number; readonly rightPage: number }) => {
+        const nodes = useNodes({
+          left: [left.PageNode, { page: leftPage }],
+          right: [right.PageNode, { page: rightPage }],
+        }) as unknown as { readonly left: PageNodeInstance; readonly right: PageNodeInstance };
+        return createElement(
+          "output",
+          undefined,
+          `${label("", nodes.left)}|${label("", nodes.right)}`
+        );
+      }
+    );
     const show = (leftPage: number, rightPage: number) =>
       tree(runtime, createElement(Pair, { leftPage, rightPage }));
 
-    const view = render(show(1, 1));
+    const view = await act(async () => render(show(1, 1)));
     expect(await view.findByText("1:page-1|1:page-1")).toBeTruthy();
 
-    view.rerender(show(1, 2));
+    await act(async () => view.rerender(show(1, 2)));
     await flush();
     expect(right.counts.refreshes).toBe(1);
     expect(storedArgs(runtime, right.PageNode, { page: 1 })).toEqual({ page: 1 });
 
     right.control.failing = false;
-    view.rerender(show(2, 2));
+    await act(async () => view.rerender(show(2, 2)));
 
     // A new left key rebuilds every child store; the rebuilt right store
     // starts on its own page 2 and has nothing to retry.
@@ -917,23 +921,19 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
       const right = makeGatedPageNode(`react-mount-args/nodes-shared-retry-right-${writer}`);
       const Reader = new Map(readers(right.PageNode)).get("useNodeRead") as PageReader;
       const runtime = await startedRuntime();
-      const Pair = ({
-        leftPage,
-        rightPage,
-      }: {
-        readonly leftPage: number;
-        readonly rightPage: number;
-      }) => {
-        const nodes = useNodes({
-          left: [left.PageNode, { page: leftPage }],
-          right: [right.PageNode, { page: rightPage }],
-        }) as unknown as { readonly left: PageNodeInstance; readonly right: PageNodeInstance };
-        return createElement(
-          "output",
-          undefined,
-          `${label("", nodes.left)}|${label("", nodes.right)}`
-        );
-      };
+      const Pair = observer(
+        ({ leftPage, rightPage }: { readonly leftPage: number; readonly rightPage: number }) => {
+          const nodes = useNodes({
+            left: [left.PageNode, { page: leftPage }],
+            right: [right.PageNode, { page: rightPage }],
+          }) as unknown as { readonly left: PageNodeInstance; readonly right: PageNodeInstance };
+          return createElement(
+            "output",
+            undefined,
+            `${label("", nodes.left)}|${label("", nodes.right)}`
+          );
+        }
+      );
       const show = (leftPage: number, rightPage: number, writerPage?: number) =>
         tree(runtime, [
           createElement(Pair, { key: "pair", leftPage, rightPage }),
@@ -942,10 +942,10 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
             : createElement(Reader, { key: "writer", page: writerPage }),
         ]);
 
-      const view = render(show(1, 1));
+      const view = await act(async () => render(show(1, 1)));
       expect(await view.findByText("1:page-1|1:page-1")).toBeTruthy();
 
-      view.rerender(show(1, 2));
+      await act(async () => view.rerender(show(1, 2)));
       await flush();
       expect(right.counts.refreshes).toBe(1);
       expect(storedArgs(runtime, right.PageNode, { page: 1 })).toEqual({ page: 1 });
@@ -959,12 +959,12 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
               page: 2,
             })
           : undefined;
-      view.rerender(show(1, 2, writerPage));
+      await act(async () => view.rerender(show(1, 2, writerPage)));
       await flush();
       expect(right.counts.refreshes).toBe(2);
 
       // The sibling changes while that request runs, then the request fails.
-      view.rerender(show(2, 2, writerPage));
+      await act(async () => view.rerender(show(2, 2, writerPage)));
       await flush();
       expect(left.counts.refreshes).toBe(1);
       await act(async () => {
@@ -976,7 +976,7 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
       expect(storedArgs(runtime, right.PageNode, { page: 1 })).toEqual({ page: 1 });
 
       right.control.failing = false;
-      view.rerender(show(3, 2, writerPage));
+      await act(async () => view.rerender(show(3, 2, writerPage)));
       await flush();
 
       expect(right.counts.refreshes).toBe(3);
@@ -988,34 +988,30 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
     const left = makeSingletonPageNode("react-mount-args/nodes-ownership-left");
     const right = makeGatedPageNode("react-mount-args/nodes-ownership-right");
     const runtime = await startedRuntime();
-    const Pair = ({
-      leftPage,
-      rightPage,
-    }: {
-      readonly leftPage: number;
-      readonly rightPage: number;
-    }) => {
-      const nodes = useNodes({
-        left: [left.PageNode, { page: leftPage }],
-        right: [right.PageNode, { page: rightPage }],
-      }) as unknown as { readonly left: PageNodeInstance; readonly right: PageNodeInstance };
-      return createElement(
-        "output",
-        undefined,
-        `${label("", nodes.left)}|${label("", nodes.right)}`
-      );
-    };
+    const Pair = observer(
+      ({ leftPage, rightPage }: { readonly leftPage: number; readonly rightPage: number }) => {
+        const nodes = useNodes({
+          left: [left.PageNode, { page: leftPage }],
+          right: [right.PageNode, { page: rightPage }],
+        }) as unknown as { readonly left: PageNodeInstance; readonly right: PageNodeInstance };
+        return createElement(
+          "output",
+          undefined,
+          `${label("", nodes.left)}|${label("", nodes.right)}`
+        );
+      }
+    );
     const show = (leftPage: number, rightPage: number) =>
       tree(runtime, createElement(Pair, { leftPage, rightPage }));
 
-    const view = render(show(1, 1));
+    const view = await act(async () => render(show(1, 1)));
     expect(await view.findByText("1:page-1|1:page-1")).toBeTruthy();
 
     // Queue page 2, page 3, then page 2 again behind the first.
     right.control.holdPage(2);
     right.control.holdPage(3);
     for (const page of [2, 3, 2]) {
-      view.rerender(show(1, page));
+      await act(async () => view.rerender(show(1, page)));
       await flush();
     }
     expect(right.counts.refreshes).toBe(1);
@@ -1042,7 +1038,7 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
     expect(right.counts.refreshes).toBe(4);
 
     // The right entry's own args have not changed since its last request.
-    view.rerender(show(2, 2));
+    await act(async () => view.rerender(show(2, 2)));
     await flush();
 
     expect(left.counts.refreshes).toBe(1);
@@ -1056,7 +1052,7 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
     const Reader = new Map(readers(right.PageNode)).get("useNodeRead") as PageReader;
     const runtime = await startedRuntime();
     await runtime.client.node<PageArgs, string>(right.PageNode, { page: 1 }).ensureReady();
-    const Pair = ({ leftPage }: { readonly leftPage: number }) => {
+    const Pair = observer(({ leftPage }: { readonly leftPage: number }) => {
       const nodes = useNodes({
         left: [left.PageNode, { page: leftPage }],
         right: [right.PageNode, { page: 2 }],
@@ -1066,7 +1062,7 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
         undefined,
         `${label("", nodes.left)}|${label("", nodes.right)}`
       );
-    };
+    });
     // The reader's effect runs first and submits page 2; the entry mounts onto it.
     const show = (leftPage: number) =>
       tree(runtime, [
@@ -1074,7 +1070,7 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
         createElement(Pair, { key: "pair", leftPage }),
       ]);
 
-    const view = render(show(1));
+    const view = await act(async () => render(show(1)));
     await flush();
     expect(right.counts.refreshes).toBe(1);
     expect(storedArgs(runtime, right.PageNode, { page: 2 })).toEqual({ page: 2 });
@@ -1086,7 +1082,7 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
     });
     expect(right.counts.refreshes).toBe(2);
 
-    view.rerender(show(2));
+    await act(async () => view.rerender(show(2)));
     await flush();
 
     expect(left.counts.refreshes).toBe(1);
@@ -1098,30 +1094,26 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
     const left = makeSingletonPageNode("react-mount-args/nodes-busy-refresh-left");
     const right = makeGatedPageNode("react-mount-args/nodes-busy-refresh-right");
     const runtime = await startedRuntime();
-    const Pair = ({
-      leftPage,
-      rightPage,
-    }: {
-      readonly leftPage: number;
-      readonly rightPage: number;
-    }) => {
-      const nodes = useNodes({
-        left: [left.PageNode, { page: leftPage }],
-        right: [right.PageNode, { page: rightPage }],
-      }) as unknown as { readonly left: PageNodeInstance; readonly right: PageNodeInstance };
-      return createElement(
-        "output",
-        undefined,
-        `${label("", nodes.left)}|${label("", nodes.right)}`
-      );
-    };
+    const Pair = observer(
+      ({ leftPage, rightPage }: { readonly leftPage: number; readonly rightPage: number }) => {
+        const nodes = useNodes({
+          left: [left.PageNode, { page: leftPage }],
+          right: [right.PageNode, { page: rightPage }],
+        }) as unknown as { readonly left: PageNodeInstance; readonly right: PageNodeInstance };
+        return createElement(
+          "output",
+          undefined,
+          `${label("", nodes.left)}|${label("", nodes.right)}`
+        );
+      }
+    );
     const show = (leftPage: number, rightPage: number) =>
       tree(runtime, createElement(Pair, { leftPage, rightPage }));
     const handle = runtime.client.node<PageArgs, string>(right.PageNode, { page: 1 });
 
-    const view = render(show(1, 1));
+    const view = await act(async () => render(show(1, 1)));
     expect(await view.findByText("1:page-1|1:page-1")).toBeTruthy();
-    view.rerender(show(1, 2));
+    await act(async () => view.rerender(show(1, 2)));
     await flush();
     expect(right.counts.refreshes).toBe(1);
     expect(storedArgs(runtime, right.PageNode, { page: 1 })).toEqual({ page: 1 });
@@ -1132,7 +1124,7 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
     const refresh = handle.refresh();
     await flush();
     expect(right.counts.refreshes).toBe(2);
-    view.rerender(show(1, 1));
+    await act(async () => view.rerender(show(1, 1)));
     await flush();
     await act(async () => {
       right.control.releasePage(1);
@@ -1146,7 +1138,7 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
     });
     expect(right.counts.refreshes).toBe(3);
 
-    view.rerender(show(2, 1));
+    await act(async () => view.rerender(show(2, 1)));
     await flush();
 
     expect(left.counts.refreshes).toBe(1);
@@ -1160,23 +1152,19 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
       const right = makeGatedPageNode(`react-mount-args/nodes-shared-success-right-${writer}`);
       const Reader = new Map(readers(right.PageNode)).get("useNodeRead") as PageReader;
       const runtime = await startedRuntime();
-      const Pair = ({
-        leftPage,
-        rightPage,
-      }: {
-        readonly leftPage: number;
-        readonly rightPage: number;
-      }) => {
-        const nodes = useNodes({
-          left: [left.PageNode, { page: leftPage }],
-          right: [right.PageNode, { page: rightPage }],
-        }) as unknown as { readonly left: PageNodeInstance; readonly right: PageNodeInstance };
-        return createElement(
-          "output",
-          undefined,
-          `${label("", nodes.left)}|${label("", nodes.right)}`
-        );
-      };
+      const Pair = observer(
+        ({ leftPage, rightPage }: { readonly leftPage: number; readonly rightPage: number }) => {
+          const nodes = useNodes({
+            left: [left.PageNode, { page: leftPage }],
+            right: [right.PageNode, { page: rightPage }],
+          }) as unknown as { readonly left: PageNodeInstance; readonly right: PageNodeInstance };
+          return createElement(
+            "output",
+            undefined,
+            `${label("", nodes.left)}|${label("", nodes.right)}`
+          );
+        }
+      );
       const show = (leftPage: number, rightPage: number, writerPage?: number) =>
         tree(runtime, [
           createElement(Pair, { key: "pair", leftPage, rightPage }),
@@ -1186,9 +1174,9 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
         ]);
       const handle = runtime.client.node<PageArgs, string>(right.PageNode, { page: 1 });
 
-      const view = render(show(1, 1));
+      const view = await act(async () => render(show(1, 1)));
       expect(await view.findByText("1:page-1|1:page-1")).toBeTruthy();
-      view.rerender(show(1, 2));
+      await act(async () => view.rerender(show(1, 2)));
       await flush();
       expect(right.counts.refreshes).toBe(1);
       expect(storedArgs(runtime, right.PageNode, { page: 1 })).toEqual({ page: 1 });
@@ -1198,12 +1186,12 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
       right.control.holdPage(2);
       const writerPage = writer === "useNodeRead" ? 2 : undefined;
       const outside = writer === "updateArgs" ? handle.updateArgs({ page: 2 }) : undefined;
-      view.rerender(show(1, 2, writerPage));
+      await act(async () => view.rerender(show(1, 2, writerPage)));
       await flush();
       expect(right.counts.refreshes).toBe(2);
 
       // The sibling changes while that request runs, then the request succeeds.
-      view.rerender(show(2, 2, writerPage));
+      await act(async () => view.rerender(show(2, 2, writerPage)));
       await flush();
       await act(async () => {
         right.control.releasePage(2);
@@ -1215,7 +1203,7 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
 
       // The writer moves the node on to page 4.
       if (writer === "useNodeRead") {
-        view.rerender(show(2, 2, 4));
+        await act(async () => view.rerender(show(2, 2, 4)));
         await flush();
       } else {
         await act(async () => {
@@ -1224,7 +1212,7 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
       }
       expect(right.counts.refreshes).toBe(3);
 
-      view.rerender(show(3, 2, writer === "useNodeRead" ? 4 : undefined));
+      await act(async () => view.rerender(show(3, 2, writer === "useNodeRead" ? 4 : undefined)));
       await flush();
 
       expect(left.counts.refreshes).toBe(2);
@@ -1237,30 +1225,26 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
     const left = makeSingletonPageNode("react-mount-args/nodes-evicted-match-left");
     const right = makeGatedPageNode("react-mount-args/nodes-evicted-match-right");
     const runtime = await startedRuntime();
-    const Pair = ({
-      leftPage,
-      rightPage,
-    }: {
-      readonly leftPage: number;
-      readonly rightPage: number;
-    }) => {
-      const nodes = useNodes({
-        left: [left.PageNode, { page: leftPage }],
-        right: [right.PageNode, { page: rightPage }],
-      }) as unknown as { readonly left: PageNodeInstance; readonly right: PageNodeInstance };
-      return createElement(
-        "output",
-        undefined,
-        `${label("", nodes.left)}|${label("", nodes.right)}`
-      );
-    };
+    const Pair = observer(
+      ({ leftPage, rightPage }: { readonly leftPage: number; readonly rightPage: number }) => {
+        const nodes = useNodes({
+          left: [left.PageNode, { page: leftPage }],
+          right: [right.PageNode, { page: rightPage }],
+        }) as unknown as { readonly left: PageNodeInstance; readonly right: PageNodeInstance };
+        return createElement(
+          "output",
+          undefined,
+          `${label("", nodes.left)}|${label("", nodes.right)}`
+        );
+      }
+    );
     const show = (leftPage: number, rightPage: number) =>
       tree(runtime, createElement(Pair, { leftPage, rightPage }));
     const handle = runtime.client.node<PageArgs, string>(right.PageNode, { page: 1 });
 
-    const view = render(show(1, 1));
+    const view = await act(async () => render(show(1, 1)));
     expect(await view.findByText("1:page-1|1:page-1")).toBeTruthy();
-    view.rerender(show(1, 2));
+    await act(async () => view.rerender(show(1, 2)));
     await flush();
     expect(right.counts.refreshes).toBe(1);
     expect(storedArgs(runtime, right.PageNode, { page: 1 })).toEqual({ page: 1 });
@@ -1270,7 +1254,7 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
     right.control.holdPage(3);
     const outside = handle.updateArgs({ page: 3 });
     await flush();
-    view.rerender(show(1, 3));
+    await act(async () => view.rerender(show(1, 3)));
     await flush();
     expect(right.counts.refreshes).toBe(2);
 
@@ -1283,7 +1267,7 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
     await flush();
     expect(storedArgs(runtime, right.PageNode, { page: 1 })).toEqual({ page: 1 });
 
-    view.rerender(show(2, 3));
+    await act(async () => view.rerender(show(2, 3)));
     await flush();
 
     expect(storedArgs(runtime, right.PageNode, { page: 3 })).toEqual({ page: 3 });
@@ -1293,7 +1277,7 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
     const left = makeKeyedPageNode("react-mount-args/nodes-keyed-left");
     const right = makeSingletonPageNode("react-mount-args/nodes-keyed-right");
     const runtime = await startedRuntime();
-    const Pair = ({ leftPage }: { readonly leftPage: number }) => {
+    const Pair = observer(({ leftPage }: { readonly leftPage: number }) => {
       const nodes = useNodes({
         left: [left.PageNode, { page: leftPage }],
         right: [right.PageNode, { page: 1 }],
@@ -1303,9 +1287,9 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
         undefined,
         `${label("", nodes.left)}|${label("", nodes.right)}`
       );
-    };
+    });
 
-    const view = render(tree(runtime, createElement(Pair, { leftPage: 1 })));
+    const view = await act(async () => render(tree(runtime, createElement(Pair, { leftPage: 1 }))));
     expect(await view.findByText("1:page-1|1:page-1")).toBeTruthy();
 
     await act(async () => {
@@ -1317,7 +1301,7 @@ describe("useNodes reconciles only the entries whose own args changed", () => {
     expect(right.counts.refreshes).toBe(1);
 
     // A new left key rebuilds the composite store; the unchanged right entry stays put.
-    view.rerender(tree(runtime, createElement(Pair, { leftPage: 2 })));
+    await act(async () => view.rerender(tree(runtime, createElement(Pair, { leftPage: 2 }))));
 
     expect(await view.findByText("2:page-2|3:page-3")).toBeTruthy();
     await flush();

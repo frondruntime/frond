@@ -1,5 +1,8 @@
 # Migrating from 0.5 to 0.6
 
+> 0.7 replaces §1 and §2 below: results are frozen and `node.result` is the
+> committed snapshot, shared between commits. See [MIGRATION-0.7.md](./MIGRATION-0.7.md).
+
 0.6 keeps the 0.5 public API: `createRuntime`, MobX nodes, `Driver.*`, the
 Effect client, and `@frondruntime/react`. Inside, a synchronous job queue
 replaces the per-node Effect actors, so actions, reads, and boot run faster

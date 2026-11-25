@@ -42,7 +42,7 @@ async function screen(): Promise<{
   readonly press: (sequence: string) => Promise<void>;
   readonly dashboard: DashboardNode;
 }> {
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   await runtime.submit({ _tag: "RuntimeStart" });
 
   teardown.push(async () => {

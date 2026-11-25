@@ -36,6 +36,8 @@ describe("usePublish", () => {
     const identities = new Set<unknown>();
 
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       channels: [Checkout],
       signalSubscribers: [
         Checkout.subscriber({
@@ -139,8 +141,8 @@ describe("usePublish", () => {
    * publishing to a live-but-orphaned runtime resolves normally.
    */
   test("swapping the runtime repoints the publisher instead of holding the old one", async () => {
-    const first = createRuntime({ channels: [Checkout] });
-    const second = createRuntime({ channels: [Checkout] });
+    const first = createRuntime({ development: true, eventBufferSize: 512, channels: [Checkout] });
+    const second = createRuntime({ development: true, eventBufferSize: 512, channels: [Checkout] });
 
     function Publisher(): ReturnType<typeof createElement> {
       const publish = usePublish(Checkout);

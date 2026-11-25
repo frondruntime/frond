@@ -98,7 +98,7 @@ for (const event of ["GraphActionStarted", "GraphNodeChanged"] as const) {
       driverRuns += 1;
     });
     const gate = parkingSink(event);
-    const runtime = createRuntime({ sinks: [gate.sink] });
+    const runtime = createRuntime({ development: true, eventBufferSize: 512, sinks: [gate.sink] });
     try {
       const handle = runtime.client.node(Resource, {});
       await handle.ensureReadyNode();
@@ -146,7 +146,7 @@ test("an action aborted during a start sink whose finalizer dies rejects with an
     driverRuns += 1;
   });
   const gate = parkingSink("GraphActionStarted", true);
-  const runtime = createRuntime({ sinks: [gate.sink] });
+  const runtime = createRuntime({ development: true, eventBufferSize: 512, sinks: [gate.sink] });
   try {
     const handle = runtime.client.node(Resource, {});
     await handle.ensureReadyNode();

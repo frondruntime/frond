@@ -34,7 +34,7 @@ type Harness = {
  * would only add timing to a set of assertions that are otherwise exact.
  */
 async function harness(): Promise<Harness> {
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   await runtime.submit({ _tag: "RuntimeStart" });
 
   teardown.push(async () => {

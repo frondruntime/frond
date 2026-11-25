@@ -17,22 +17,10 @@ export function projectNodeSnapshot(
   const projection = projectCellPhase(state.phase);
 
   switch (projection._tag) {
-    case "Idle": {
-      const projected = projection;
-      return projectedNodeSnapshot(cell, projected, state, context.now);
-    }
-    case "Pending": {
-      const projected = projection;
-      return projectedNodeSnapshot(cell, projected, state, context.now);
-    }
-    case "ReadinessError": {
-      const projected = projection;
-      return projectedNodeSnapshot(cell, projected, state, context.now);
-    }
-    case "Ready": {
-      const projected = projection;
-      return projectedNodeSnapshot(cell, projected, state, context.now);
-    }
+    case "Idle":
+    case "Pending":
+    case "ReadinessError":
+    case "Ready":
     case "Invalid": {
       const projected = projection;
       return projectedNodeSnapshot(cell, projected, state, context.now);

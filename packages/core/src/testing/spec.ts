@@ -20,6 +20,7 @@ import type {
 } from "@frondruntime/core";
 import { Effect } from "effect";
 import { createEffectDriver } from "../driver/effectDefinition";
+import { resultCommit } from "../graph/types/resultValidity";
 import { dependencies, FrondNodeSpecError } from "../node";
 import { makeSpecOverrideClass } from "../node/specOverride";
 
@@ -72,9 +73,16 @@ export function mockSpec<
   return specWithOverrides(original, overrides);
 }
 
+/**
+ * Replaces a spec's driver with one that is ready at once and severs its
+ * dependencies. `result` is the value to hold, or a function that returns it:
+ * the function runs on every acquire and every refresh, so a test can change
+ * what the next refresh commits. A result that is itself a function is passed
+ * wrapped: `readySpec(Spec, () => fn)`.
+ */
 export function readySpec<TSpec extends NodeSpecLike>(
   original: TSpec,
-  result: NodeSpecResult<TSpec>
+  result: NodeSpecResult<TSpec> | (() => NodeSpecResult<TSpec>)
 ): NodeSpecClass<
   NodeSpec<{
     readonly mode: NodeSpecMode<TSpec>;
@@ -98,9 +106,18 @@ export function readySpec<TSpec extends NodeSpecLike>(
       NodeSpecResult<TSpec>,
       NodeSpecArgs<TSpec>,
       Record<string, never>
-    >({
-      acquire: () => Effect.succeed(result),
-    }) as unknown as Frond.Driver.Driver<
+    >(
+      typeof result === "function"
+        ? {
+            acquire: () => Effect.sync(result as () => NodeSpecResult<TSpec>),
+            refresh: (context) =>
+              Effect.suspend(() => {
+                const next = (result as () => NodeSpecResult<TSpec>)();
+                return context.setResult(resultCommit(next));
+              }),
+          }
+        : { acquire: () => Effect.succeed(result) }
+    ) as unknown as Frond.Driver.Driver<
       FrondNode<
         NodeSpecArgs<TSpec>,
         ResolvedDeps<Record<string, never>>,

@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import "global-jsdom/register";
+import "../setup";
 import {
   type Dep,
   Driver,
@@ -15,11 +15,8 @@ import {
 import { createFrondTestHarness } from "@frondruntime/core/testing";
 import { FrondProvider, useNode, useNodeRead, useNodes } from "@frondruntime/react";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { observer } from "mobx-react-lite";
 import { StrictMode, Suspense } from "react";
-
-(
-  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
-).IS_REACT_ACT_ENVIRONMENT = true;
 
 const harnesses: Array<ReturnType<typeof createFrondTestHarness>> = [];
 const observers: MutationObserver[] = [];
@@ -66,16 +63,18 @@ test("useNode shows the Suspense fallback before the boot result", async () => {
       acquire: Driver.Acquire(() => boot.promise),
     });
   }
-  function Content() {
+  const Content = observer(function Content() {
     return <output data-state>{useNode(BootNode, {}).result}</output>;
-  }
+  });
   const harness = await startHarness();
-  const view = render(
-    <FrondProvider runtime={harness.runtime}>
-      <Suspense fallback={<output data-state>booting</output>}>
-        <Content />
-      </Suspense>
-    </FrondProvider>
+  const view = await act(async () =>
+    render(
+      <FrondProvider runtime={harness.runtime}>
+        <Suspense fallback={<output data-state>booting</output>}>
+          <Content />
+        </Suspense>
+      </FrondProvider>
+    )
   );
   expect(view.getByText("booting")).toBeTruthy();
   const states = observeStates(view.container);
@@ -109,10 +108,12 @@ test.each([
     );
   }
   const harness = await startHarness();
-  const view = render(
-    <FrondProvider runtime={harness.runtime}>
-      <Content />
-    </FrondProvider>
+  const view = await act(async () =>
+    render(
+      <FrondProvider runtime={harness.runtime}>
+        <Content />
+      </FrondProvider>
+    )
   );
   expect(await view.findByText("Pending")).toBeTruthy();
   const states = observeStates(view.container);
@@ -144,9 +145,9 @@ test("useNode switches a mounted reader to the new keyed arguments", async () =>
       ),
     });
   }
-  function Content({ identity }: { readonly identity: string }) {
+  const Content = observer(function Content({ identity }: { readonly identity: string }) {
     return <output>{useNode(KeyedNode, { identity }).result}</output>;
-  }
+  });
   const harness = await startHarness();
   const tree = (identity: string) => (
     <FrondProvider runtime={harness.runtime}>
@@ -155,9 +156,9 @@ test("useNode switches a mounted reader to the new keyed arguments", async () =>
       </Suspense>
     </FrondProvider>
   );
-  const view = render(tree("first"));
+  const view = await act(async () => render(tree("first")));
   expect(await view.findByText("first result")).toBeTruthy();
-  view.rerender(tree("second"));
+  await act(async () => view.rerender(tree("second")));
   expect(await view.findByText("switching")).toBeTruthy();
   await act(async () => secondBoot.resolve("second result"));
   expect(await view.findByText("second result")).toBeTruthy();
@@ -195,22 +196,26 @@ test.each([
       acquire: Driver.Acquire(async () => "sibling"),
     });
   }
-  function SingularContent({ filter }: { readonly filter: string }) {
+  const SingularContent = observer(function SingularContent({
+    filter,
+  }: {
+    readonly filter: string;
+  }) {
     const node = useNode(FilterNode, { filter });
     return (
       <output data-state>
         {node.result}:{node.args.filter}
       </output>
     );
-  }
-  function PluralContent({ filter }: { readonly filter: string }) {
+  });
+  const PluralContent = observer(function PluralContent({ filter }: { readonly filter: string }) {
     const nodes = useNodes({ filtered: [FilterNode, { filter }], sibling: [SiblingNode, {}] });
     return (
       <output data-state>
         {nodes.filtered.result}:{nodes.filtered.args.filter}/{nodes.sibling.result}
       </output>
     );
-  }
+  });
   const harness = await startHarness();
   const tree = (filter: string) => (
     <FrondProvider runtime={harness.runtime}>
@@ -224,10 +229,10 @@ test.each([
     </FrondProvider>
   );
   const suffix = hook === "useNodes" ? "/sibling" : "";
-  const view = render(tree("all"));
+  const view = await act(async () => render(tree("all")));
   expect(await view.findByText(`all:all${suffix}`)).toBeTruthy();
   const states = observeStates(view.container);
-  view.rerender(tree("active"));
+  await act(async () => view.rerender(tree("active")));
   await act(async () => entered.promise);
   expect(await view.findByText(`all:active${suffix}`)).toBeTruthy();
   expect(view.queryByText("booting")).toBeNull();
@@ -236,7 +241,7 @@ test.each([
   expect(states).toEqual([`all:all${suffix}`, `all:active${suffix}`, `active:active${suffix}`]);
 });
 
-test("a parent reader displays a child refresh only after the parent also refreshes", async () => {
+test("an observer parent reader displays a child refresh as the child commits", async () => {
   let childResult = "initial child";
   class ChildNode extends NodeBase<TextSpec> {
     static readonly spec = resourceSpec.async<TextSpec>({
@@ -266,17 +271,19 @@ test("a parent reader displays a child refresh only after the parent also refres
       }),
     });
   }
-  function Content() {
+  const Content = observer(function Content() {
     const parent = useNode(ParentNode, {});
     return <output data-state>{parent.deps.child.result}</output>;
-  }
+  });
   const harness = await startHarness();
-  const view = render(
-    <FrondProvider runtime={harness.runtime}>
-      <Suspense fallback="booting">
-        <Content />
-      </Suspense>
-    </FrondProvider>
+  const view = await act(async () =>
+    render(
+      <FrondProvider runtime={harness.runtime}>
+        <Suspense fallback="booting">
+          <Content />
+        </Suspense>
+      </FrondProvider>
+    )
   );
   expect(await view.findByText("initial child")).toBeTruthy();
   const states = observeStates(view.container);
@@ -284,24 +291,21 @@ test("a parent reader displays a child refresh only after the parent also refres
   await act(async () => {
     await harness.node(ChildNode, {}).refresh();
   });
-  // 0.5 behavior: useNode tracks the parent identity, so a plain React reader
-  // does not observe a dependency's MobX result without an observer wrapper.
-  expect(view.getByText("initial child")).toBeTruthy();
+  // 0.7 intended change: result writes reach observer readers through MobX, so
+  // a reader of a dependency's result sees the child's commit. 0.5 and 0.6
+  // showed it only after the parent refreshed; a plain reader now never does.
+  expect(view.getByText("updated child")).toBeTruthy();
   await act(async () => {
     await harness.node(ParentNode, {}).refresh();
   });
-  expect(await view.findByText("updated child")).toBeTruthy();
+  expect(view.getByText("updated child")).toBeTruthy();
   childResult = "latest child";
   await act(async () => {
     await harness.node(ChildNode, {}).refresh();
     await harness.node(ParentNode, {}).refresh();
   });
-  // 0.6 intended change (docs/v06-architecture.md, "React store and result identity"): the
-  // second parent refresh commits an equal result, a status-only notification, so a plain
-  // useNode(parent) reader does not re-render. 0.5 showed "latest child" here. Readers of a
-  // dependency's result use useNode(ChildNode) or a MobX observer.
-  expect(view.getByText("updated child")).toBeTruthy();
-  expect(states).toEqual(["initial child", "updated child"]);
+  expect(view.getByText("latest child")).toBeTruthy();
+  expect(states).toEqual(["initial child", "updated child", "latest child"]);
 });
 
 test("StrictMode can unmount a pending boot and remount its ready result without warnings", async () => {
@@ -317,9 +321,9 @@ test("StrictMode can unmount a pending boot and remount its ready result without
       }),
     });
   }
-  function Content() {
+  const Content = observer(function Content() {
     return <output>{useNode(StrictNode, {}).result}</output>;
-  }
+  });
   const harness = await startHarness();
   const errors = spyOn(console, "error").mockImplementation(() => {});
   const warnings = spyOn(console, "warn").mockImplementation(() => {});
@@ -333,7 +337,7 @@ test("StrictMode can unmount a pending boot and remount its ready result without
         </FrondProvider>
       </StrictMode>
     );
-    const first = render(tree);
+    const first = await act(async () => render(tree));
     expect(first.getByText("booting")).toBeTruthy();
     await act(async () => entered.promise);
     first.unmount();
@@ -341,10 +345,10 @@ test("StrictMode can unmount a pending boot and remount its ready result without
       boot.resolve("remounted content");
       await harness.node(StrictNode, {}).ensureReady();
     });
-    const second = render(tree);
+    const second = await act(async () => render(tree));
     expect(await second.findByText("remounted content")).toBeTruthy();
     second.unmount();
-    const third = render(tree);
+    const third = await act(async () => render(tree));
     expect(await third.findByText("remounted content")).toBeTruthy();
     expect(errors.mock.calls).toEqual([]);
     expect(warnings.mock.calls).toEqual([]);
@@ -365,19 +369,21 @@ test("twelve components reading one node all display its refreshed result", asyn
       }),
     });
   }
-  function Content({ identity }: { readonly identity: number }) {
+  const Content = observer(function Content({ identity }: { readonly identity: number }) {
     return <output data-testid={`reader-${identity}`}>{useNode(SharedNode, {}).result}</output>;
-  }
+  });
   const identities = Array.from({ length: 12 }, (_, identity) => identity);
   const harness = await startHarness();
-  const view = render(
-    <FrondProvider runtime={harness.runtime}>
-      <Suspense fallback="booting">
-        {identities.map((identity) => (
-          <Content key={identity} identity={identity} />
-        ))}
-      </Suspense>
-    </FrondProvider>
+  const view = await act(async () =>
+    render(
+      <FrondProvider runtime={harness.runtime}>
+        <Suspense fallback="booting">
+          {identities.map((identity) => (
+            <Content key={identity} identity={identity} />
+          ))}
+        </Suspense>
+      </FrondProvider>
+    )
   );
   await waitFor(() => {
     for (const identity of identities)

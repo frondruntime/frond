@@ -8,19 +8,12 @@ import {
   type NodeSpec,
   serviceSpec,
 } from "../src/index";
-
-function gate() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((complete) => {
-    resolve = complete;
-  });
-  return { promise, resolve };
-}
+import { createDeferred } from "../src/testing";
 
 describe("public graph queue", () => {
   test("same-turn boot and ensureReady reserve one keyed acquire without synchronous listeners", async () => {
-    const acquired = gate();
-    const started = gate();
+    const acquired = createDeferred<void>();
+    const started = createDeferred<void>();
     let runs = 0;
     type Spec = NodeSpec<{
       readonly mode: "async";
@@ -42,7 +35,7 @@ describe("public graph queue", () => {
         }),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const first = runtime.client.node(Resource, { id: "same" });
     let notifications = 0;
     const unsubscribe = first.subscribe(() => {
@@ -72,8 +65,8 @@ describe("public graph queue", () => {
   });
 
   test("readiness posted during eviction waits for release and acquires a fresh cell", async () => {
-    const releasing = gate();
-    const release = gate();
+    const releasing = createDeferred<void>();
+    const release = createDeferred<void>();
     let runs = 0;
     type Spec = NodeSpec<{
       readonly mode: "async";
@@ -94,7 +87,7 @@ describe("public graph queue", () => {
         }),
       });
     }
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const handle = runtime.client.node(Resource, {});
     const old = await handle.ensureReadyNode();
     const evicted = runtime.submit({
@@ -114,8 +107,8 @@ describe("public graph queue", () => {
 });
 
 test("a same-turn readiness call stays behind a previously submitted release", async () => {
-  const released = gate();
-  const finishRelease = gate();
+  const released = createDeferred<void>();
+  const finishRelease = createDeferred<void>();
   let acquires = 0;
   type Spec = NodeSpec<{
     readonly mode: "async";
@@ -136,7 +129,7 @@ test("a same-turn readiness call stays behind a previously submitted release", a
       }),
     });
   }
-  const runtime = createRuntime();
+  const runtime = createRuntime({ development: true, eventBufferSize: 512 });
   const handle = runtime.client.node(Resource, {});
   await handle.ensureReady();
   const releasing = handle.releaseResources();

@@ -70,11 +70,13 @@ describe("specWithDriver", () => {
     expect(OverriddenTransport.spec.key).toBe(TransportNode.spec.key);
     expect(OverriddenTransport.spec.dependencies).toBe(TransportNode.spec.dependencies);
 
-    const baseline = createRuntime();
+    const baseline = createRuntime({ development: true, eventBufferSize: 512 });
     const baselineReady = await baseline.client.node(TransportNode, Args.none).ensureReady();
     expect(baselineReady.node.transport).toBe("real");
 
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       specOverrides: [{ from: TransportNode, to: OverriddenTransport }],
     });
     const ready = await runtime.client.node(TransportNode, Args.none).ensureReady();
@@ -87,6 +89,8 @@ describe("specWithDriver", () => {
   test("a dependent node still resolves through the overridden spec (deps preserved)", async () => {
     const OverriddenTransport = specWithDriver(TransportNode, replacementDriver());
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       specOverrides: [{ from: TransportNode, to: OverriddenTransport }],
     });
 
@@ -111,6 +115,8 @@ describe("specWithDriver", () => {
     expect(OverriddenConsumer.spec.dependencies).toBe(ConsumerNode.spec.dependencies);
 
     const runtime = createRuntime({
+      development: true,
+      eventBufferSize: 512,
       specOverrides: [{ from: ConsumerNode, to: OverriddenConsumer }],
     });
     const ready = await runtime.client.node(ConsumerNode, Args.none).ensureReady();
@@ -175,7 +181,7 @@ describe("branded dependency resolvers round-trip", () => {
       static readonly spec = rebuilt;
     }
 
-    const runtime = createRuntime();
+    const runtime = createRuntime({ development: true, eventBufferSize: 512 });
     const ready = await runtime.client.node(RebuiltConsumerNode, Args.none).ensureReady();
     expect(ready.node.result.seen).toBe("rebuilt:real");
   });
